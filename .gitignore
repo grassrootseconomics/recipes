@@ -1,0 +1,28 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+*.log
+npm-debug.log*
+.DS_Store
+.~lock.*#
+
+# Godot local/editor state
+.godot/
+client/.godot/
+client/android/build/
+client/android/.gradle/
+client/build/
+client/web/*.wasm
+client/web/*.pck
+client/web/*.js
+client/web/*.html
+client/web/*.png
+client/web/*.ico
+client/web/*.worker.js
+client/web/*.service.worker.js
+
+# Local scratch
+tmp/
+.cache/

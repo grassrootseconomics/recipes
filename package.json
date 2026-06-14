@@ -1,0 +1,20 @@
+{
+  "name": "recipes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Authoritative multiplayer recipe trading MVP.",
+  "workspaces": [
+    "server"
+  ],
+  "scripts": {
+    "dev": "npm --workspace server run dev",
+    "build": "npm --workspace server run build",
+    "generate:recipes": "npm --workspace server run generate:recipes",
+    "test": "npm --workspace server run test",
+    "test:run": "npm --workspace server run test:run",
+    "typecheck": "npm --workspace server run typecheck"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
