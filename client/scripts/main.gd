@@ -3,7 +3,6 @@ extends Control
 const TRANSACTION_VISIBLE_ROWS := 20
 const TRANSACTION_ROW_HEIGHT := 30
 const TRANSACTION_ROW_GAP := 6
-const MAX_PLAYER_BITES_PER_DISH := 3
 
 var _status_label: Label
 var _server_input: LineEdit
@@ -45,6 +44,8 @@ var _csv_export_status_label: Label
 
 var _selected_hand_voucher_id := ""
 var _selected_platter_voucher_id := ""
+var _selected_give_asset_key := ""
+var _selected_take_asset_key := ""
 var _selected_offer_target_id := ""
 var _selected_offer_card_id := ""
 var _selected_participant_id := ""
@@ -71,7 +72,6 @@ func _build_ui() -> void:
 
 	var margin := MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	margin.clip_contents = true
 	margin.add_theme_constant_override("margin_left", 20)
 	margin.add_theme_constant_override("margin_top", 16)
 	margin.add_theme_constant_override("margin_right", 20)
@@ -81,7 +81,6 @@ func _build_ui() -> void:
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 12)
 	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	root.clip_contents = true
 	margin.add_child(root)
 
 	var title := Label.new()
@@ -234,6 +233,7 @@ func _line_edit(placeholder: String, value: String) -> LineEdit:
 	input.text = value
 	input.custom_minimum_size = Vector2(0, 44)
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	input.add_theme_stylebox_override("focus", _control_focus_style())
 	return input
 
 
@@ -243,12 +243,12 @@ func _button(label: String, callback: Callable) -> Button:
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	button.custom_minimum_size = Vector2(112, 44)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	button.add_theme_stylebox_override("focus", _button_focus_style())
+	button.add_theme_stylebox_override("focus", _control_focus_style())
 	button.pressed.connect(callback)
 	return button
 
 
-func _button_focus_style() -> StyleBoxFlat:
+func _control_focus_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0, 0, 0, 0)
 	style.border_color = Color(0.88, 0.88, 0.88)
@@ -260,10 +260,10 @@ func _button_focus_style() -> StyleBoxFlat:
 	style.corner_radius_top_right = 4
 	style.corner_radius_bottom_left = 4
 	style.corner_radius_bottom_right = 4
-	style.content_margin_left = 0
-	style.content_margin_top = 0
-	style.content_margin_right = 0
-	style.content_margin_bottom = 0
+	style.content_margin_left = 2
+	style.content_margin_top = 2
+	style.content_margin_right = 2
+	style.content_margin_bottom = 2
 	return style
 
 
@@ -272,6 +272,7 @@ func _option_button() -> OptionButton:
 	option.custom_minimum_size = Vector2(0, 44)
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	option.fit_to_longest_item = false
+	option.add_theme_stylebox_override("focus", _control_focus_style())
 	return option
 
 
@@ -282,6 +283,27 @@ func _wrapped_label(text: String) -> Label:
 	label.custom_minimum_size = Vector2(0, 0)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return label
+
+
+func _colored_label(text: String, background: Color, foreground := Color(1, 1, 1)) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var style := StyleBoxFlat.new()
+	style.bg_color = background
+	style.corner_radius_top_left = 4
+	style.corner_radius_top_right = 4
+	style.corner_radius_bottom_left = 4
+	style.corner_radius_bottom_right = 4
+	style.content_margin_left = 8
+	style.content_margin_right = 8
+	style.content_margin_top = 4
+	style.content_margin_bottom = 4
+	panel.add_theme_stylebox_override("panel", style)
+
+	var label := _wrapped_label(text)
+	label.add_theme_color_override("font_color", foreground)
+	panel.add_child(label)
+	return panel
 
 
 func _transaction_header_row() -> HBoxContainer:
@@ -353,10 +375,16 @@ func _action_color(action: String) -> Color:
 			return Color(0.45, 0.24, 0.74)
 		"Swap":
 			return Color(0.12, 0.55, 0.28)
+		"Settlement Swap":
+			return Color(0.14, 0.58, 0.42)
 		"Exchange":
 			return Color(0.95, 0.78, 0.22)
 		"Deposit":
 			return Color(0.18, 0.40, 0.82)
+		"Prepare":
+			return Color(0.63, 0.34, 0.12)
+		"Eat":
+			return Color(0.70, 0.26, 0.42)
 		_:
 			return Color(0.32, 0.32, 0.32)
 
@@ -582,8 +610,8 @@ func _on_snapshot_received(snapshot: Dictionary) -> void:
 		_winners_label(snapshot.get("winners", []))
 	]
 	_refresh_participants(snapshot)
-	_platter_label.text = "Central platter:\n%s" % _format_vouchers(snapshot.get("platter", []))
-	_hand_label.text = "Your hand:\n%s" % _format_vouchers(snapshot.get("ownHand", []))
+	_platter_label.text = "%s:\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]
+	_hand_label.text = "Your inventory:\n%s" % _format_inventory_assets(snapshot)
 	_refresh_controls(snapshot)
 
 
@@ -725,6 +753,7 @@ func _refresh_controls(snapshot: Dictionary) -> void:
 	if bool(viewer.get("isHost", false)):
 		_add_host_admin_controls(snapshot)
 	if _game_started(snapshot):
+		_phase_controls.add_child(_wrapped_label(_stock_accounting_label(snapshot)))
 		_add_dish_summary_controls(snapshot)
 		_add_transaction_history_controls(snapshot)
 	if bool(snapshot.get("paused", false)):
@@ -741,7 +770,9 @@ func _refresh_controls(snapshot: Dictionary) -> void:
 		_add_deposit_controls(snapshot)
 	elif phase == "playing":
 		_add_playing_controls(snapshot)
-	elif phase == "winner_bite" or phase == "eating" or phase == "complete":
+	elif phase == "settlement":
+		_add_settlement_controls(snapshot)
+	elif phase == "eating" or phase == "complete":
 		_add_eating_controls(snapshot)
 
 
@@ -798,6 +829,10 @@ func _add_lobby_controls(snapshot: Dictionary) -> void:
 		RecipesClient.send_intent({"type": "start"})
 	)
 	start_button.disabled = active_count < 7 or active_count > 20
+	if active_count < 7:
+		start_button.text = "Waiting for %s Players" % (7 - active_count)
+	else:
+		start_button.text = "Start Game"
 	_phase_controls.add_child(start_button)
 
 
@@ -826,6 +861,14 @@ func _add_playing_controls(snapshot: Dictionary) -> void:
 	_add_hand_place_controls(snapshot)
 	_add_platter_swap_controls(snapshot)
 	_add_offer_controls(snapshot)
+
+
+func _add_settlement_controls(snapshot: Dictionary) -> void:
+	_phase_controls.add_child(_wrapped_label("Settlement: clear the central platter before eating."))
+	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
+	_hand_controls.add_child(_wrapped_label("Your inventory\n%s" % _format_inventory_assets(snapshot)))
+	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
+	_add_platter_asset_swap_controls(snapshot)
 
 
 func _add_host_admin_controls(snapshot: Dictionary) -> void:
@@ -862,17 +905,20 @@ func _add_witness_overview(snapshot: Dictionary) -> void:
 	_phase_controls.add_child(_wrapped_label("Witness overview. Select an active participant to view their board without actions."))
 	_hand_controls.add_child(_wrapped_label(_all_hands_label(snapshot)))
 	_hand_controls.add_child(_wrapped_label(_all_card_locations_label(snapshot)))
+	_hand_controls.add_child(_wrapped_label(_all_food_part_locations_label(snapshot)))
 	_recipe_controls.add_child(_wrapped_label("Select an active participant to view their current recipe."))
-	_platter_controls.add_child(_wrapped_label("Central Platter Contents\n%s" % _format_vouchers(snapshot.get("platter", []))))
+	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
+	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
 	_offer_controls.add_child(_wrapped_label(_open_offers_label(snapshot)))
 
 
 func _add_witness_player_view(snapshot: Dictionary, participant: Dictionary) -> void:
 	var participant_id := str(participant.get("id", ""))
 	_phase_controls.add_child(_wrapped_label("Viewing %s as a read-only witness." % _participant_name(snapshot, participant_id)))
-	_hand_controls.add_child(_wrapped_label("Current Hand\n%s" % _format_vouchers(_hand_for_participant(snapshot, participant_id))))
-	_recipe_controls.add_child(_wrapped_label(_format_recipe(snapshot, _recipe_for_participant(snapshot, participant_id))))
-	_platter_controls.add_child(_wrapped_label("Central Platter\n%s" % _format_vouchers(snapshot.get("platter", []))))
+	_hand_controls.add_child(_wrapped_label("Current Inventory\n%s" % _format_participant_inventory(snapshot, participant_id)))
+	_add_recipe_view(_recipe_controls, snapshot, _recipe_for_participant(snapshot, participant_id))
+	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
+	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
 	_offer_controls.add_child(_wrapped_label(_open_offers_label(snapshot, participant_id)))
 
 
@@ -881,7 +927,7 @@ func _add_prepare_control(snapshot: Dictionary) -> void:
 	if recipe.is_empty():
 		_recipe_controls.add_child(_wrapped_label("No recipe yet."))
 		return
-	_recipe_controls.add_child(_wrapped_label(_format_recipe(snapshot, recipe)))
+	_add_recipe_view(_recipe_controls, snapshot, recipe)
 	_recipe_controls.add_child(_wrapped_label(_recipe_progress_label(recipe)))
 	var prepare_button := _button("Prepare Dish", func() -> void:
 		RecipesClient.send_intent({"type": "prepare"})
@@ -891,25 +937,31 @@ func _add_prepare_control(snapshot: Dictionary) -> void:
 
 
 func _add_eating_controls(snapshot: Dictionary) -> void:
+	_recipe_controls.add_child(_wrapped_label("Dish goal reached."))
+	_hand_controls.add_child(_wrapped_label("Your inventory\n%s" % _format_inventory_assets(snapshot)))
+	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
+	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
+	_offer_controls.add_child(_wrapped_label("Offers are closed during eating."))
 	if snapshot.get("phase", "") == "complete":
-		_dish_controls.add_child(_wrapped_label("All prepared dishes have been eaten."))
-	var viewer_id := str(snapshot.get("viewerParticipantId", ""))
-	var winners: Array = snapshot.get("winners", [])
-	var winner_first_bite := str(snapshot.get("phase", "")) == "winner_bite"
-	if winner_first_bite and not winners.has(viewer_id):
-		_dish_controls.add_child(_wrapped_label("Waiting for a winner to take the first bite."))
+		_dish_controls.add_child(_wrapped_label("All food parts have been eaten."))
+		return
+	var viewer := _participant_by_id(snapshot, str(snapshot.get("viewerParticipantId", "")))
+	if not bool(viewer.get("cleared", false)):
+		_dish_controls.add_child(_wrapped_label("Clear your central platter account before eating."))
+		_dish_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
 	for raw_dish in snapshot.get("dishes", []):
 		var dish: Dictionary = raw_dish
-		var bites := int(dish.get("bitesRemaining", 0))
-		var label := "%s: %s bites left" % [dish.get("name", "Dish"), bites]
-		if bites > 0:
+		var parts := int(dish.get("partsRemaining", dish.get("bitesRemaining", 0)))
+		var unit := _unit_for_count(dish, parts)
+		var label := "%s: %s %s left" % [dish.get("name", "Dish"), parts, unit]
+		if parts > 0:
 			var can_bite := _viewer_can_bite_dish(snapshot, dish)
-			var bite_button := _button("Bite %s" % label, func(d: Dictionary = dish) -> void:
+			var bite_button := _button("Eat %s" % label, func(d: Dictionary = dish) -> void:
 				RecipesClient.send_intent({"type": "bite", "dishId": d.get("id", "")})
 			)
 			bite_button.disabled = not can_bite
-			if not can_bite and not winner_first_bite:
-				bite_button.text = "Bite limit reached: %s" % label
+			if not can_bite:
+				bite_button.text = "Cannot eat yet: %s" % label
 			_dish_controls.add_child(bite_button)
 		else:
 			_dish_controls.add_child(_wrapped_label(label))
@@ -935,7 +987,7 @@ func _add_transaction_history_controls(snapshot: Dictionary) -> void:
 		_transaction_controls.add_child(_wrapped_label("Transaction history is not available from this server. Rebuild and restart the server, then create a new table."))
 		return
 	if transactions.is_empty():
-		_transaction_controls.add_child(_wrapped_label("No successful transactions yet. Deposits, swaps, accepted exchanges, and redemptions will appear here."))
+		_transaction_controls.add_child(_wrapped_label("No successful transactions yet. Deposits, swaps, exchanges, redemptions, preparation, settlement, and eating will appear here."))
 		return
 	_transaction_controls.add_child(_transaction_header_row())
 	var scroller := ScrollContainer.new()
@@ -955,6 +1007,9 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 	var recipe: Dictionary = snapshot.get("ownRecipe", {})
 	var requirements: Array = recipe.get("requirements", [])
 	var hand: Array = snapshot.get("ownHand", [])
+	var food_parts: Array = snapshot.get("ownFoodParts", [])
+	if not food_parts.is_empty():
+		_hand_controls.add_child(_wrapped_label("Food parts you hold\n%s" % _format_food_parts(food_parts)))
 	if hand.is_empty():
 		_hand_controls.add_child(_wrapped_label("Your hand is empty."))
 		return
@@ -974,14 +1029,15 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 				continue
 			needed_requirement = requirement
 			break
-		var card_button := _button("%s Card" % ingredient_label, func(req: Dictionary = needed_requirement, id: String = voucher_id, label: String = ingredient_label) -> void:
+		var voucher_label := _voucher_label(voucher)
+		var card_button := _button(voucher_label, func(req: Dictionary = needed_requirement, id: String = voucher_id, label: String = ingredient_label, card_label: String = voucher_label) -> void:
 			RecipesClient.send_intent({"type": "redeem_from_hand", "voucherId": id, "requirementId": req.get("id", "")})
-			_status_label.text = "Redeeming %s Card for %s." % [label, label]
+			_status_label.text = "Redeeming %s for %s." % [card_label, label]
 		)
 		if needed_requirement.is_empty():
 			card_button.disabled = true
 		else:
-			card_button.text = "Redeem %s Card for %s" % [ingredient_label, ingredient_label]
+			card_button.text = "Redeem %s for %s" % [voucher_label, ingredient_label]
 		_hand_controls.add_child(card_button)
 
 
@@ -1041,6 +1097,67 @@ func _add_platter_swap_controls(snapshot: Dictionary) -> void:
 	swap_button.disabled = _selected_hand_voucher_id == "" or _selected_platter_voucher_id == ""
 	if swap_button.disabled:
 		swap_button.text = "Choose Cards To Swap"
+	_platter_controls.add_child(swap_button)
+
+
+func _add_platter_asset_swap_controls(snapshot: Dictionary) -> void:
+	var give_assets := _inventory_asset_options(snapshot)
+	var take_assets := _platter_asset_options(snapshot)
+	_prune_asset_selection(give_assets, take_assets)
+	if give_assets.is_empty() or take_assets.is_empty():
+		_platter_controls.add_child(_wrapped_label("Settlement swaps need one held card or food part and one platter card or food part."))
+		return
+
+	_platter_controls.add_child(_wrapped_label("Giving: %s\nTaking: %s" % [
+		_asset_label_by_key(give_assets, _selected_give_asset_key),
+		_asset_label_by_key(take_assets, _selected_take_asset_key)
+	]))
+
+	var give_option := _option_button()
+	give_option.add_item("Select asset to give")
+	give_option.set_item_metadata(0, "")
+	for asset in give_assets:
+		var asset_key := str(asset.get("key", ""))
+		var item_index := give_option.item_count
+		give_option.add_item(str(asset.get("label", asset_key)))
+		give_option.set_item_metadata(item_index, asset_key)
+		if asset_key == _selected_give_asset_key:
+			give_option.select(item_index)
+	give_option.item_selected.connect(func(index: int) -> void:
+		_selected_give_asset_key = str(give_option.get_item_metadata(index))
+		_refresh_controls(RecipesClient.latest_snapshot)
+	)
+	_platter_controls.add_child(_wrapped_label("Give"))
+	_platter_controls.add_child(give_option)
+
+	var take_option := _option_button()
+	take_option.add_item("Select asset to take")
+	take_option.set_item_metadata(0, "")
+	for asset in take_assets:
+		var asset_key := str(asset.get("key", ""))
+		var item_index := take_option.item_count
+		take_option.add_item(str(asset.get("label", asset_key)))
+		take_option.set_item_metadata(item_index, asset_key)
+		if asset_key == _selected_take_asset_key:
+			take_option.select(item_index)
+	take_option.item_selected.connect(func(index: int) -> void:
+		_selected_take_asset_key = str(take_option.get_item_metadata(index))
+		_refresh_controls(RecipesClient.latest_snapshot)
+	)
+	_platter_controls.add_child(_wrapped_label("Take"))
+	_platter_controls.add_child(take_option)
+
+	var swap_button := _button("Swap Selected", func() -> void:
+		var give_ref := _asset_ref_from_key(_selected_give_asset_key)
+		var take_ref := _asset_ref_from_key(_selected_take_asset_key)
+		if give_ref.is_empty() or take_ref.is_empty():
+			_on_error_received({"description": "Select one held asset and one platter asset."})
+			return
+		RecipesClient.send_intent({"type": "platter_asset_swap", "give": give_ref, "take": take_ref})
+	)
+	swap_button.disabled = _selected_give_asset_key == "" or _selected_take_asset_key == ""
+	if swap_button.disabled:
+		swap_button.text = "Choose Assets To Swap"
 	_platter_controls.add_child(swap_button)
 
 
@@ -1227,36 +1344,18 @@ func _viewer_is_witness(snapshot: Dictionary) -> bool:
 
 
 func _viewer_can_bite_dish(snapshot: Dictionary, dish: Dictionary) -> bool:
-	if int(dish.get("bitesRemaining", 0)) <= 0:
+	if str(snapshot.get("phase", "")) != "eating":
 		return false
 	var viewer_id := str(snapshot.get("viewerParticipantId", ""))
-	if str(snapshot.get("phase", "")) == "winner_bite":
-		var winners: Array = snapshot.get("winners", [])
-		if not winners.has(viewer_id):
-			return false
 	var viewer := _participant_by_id(snapshot, viewer_id)
-	if bool(viewer.get("isHost", false)):
-		return true
-	var bite_counts: Dictionary = dish.get("biteCounts", {})
-	if int(bite_counts.get(viewer_id, 0)) < MAX_PLAYER_BITES_PER_DISH:
-		return true
-	return _viewer_is_last_non_host_biter(snapshot, dish, viewer_id)
-
-
-func _viewer_is_last_non_host_biter(snapshot: Dictionary, dish: Dictionary, viewer_id: String) -> bool:
-	var bite_counts: Dictionary = dish.get("biteCounts", {})
-	var found_viewer := false
-	for raw_participant in snapshot.get("participants", []):
-		var participant: Dictionary = raw_participant
-		if str(participant.get("role", "")) != "active" or bool(participant.get("isHost", false)):
-			continue
-		var participant_id := str(participant.get("id", ""))
-		if participant_id == viewer_id:
-			found_viewer = true
-			continue
-		if int(bite_counts.get(participant_id, 0)) < MAX_PLAYER_BITES_PER_DISH:
-			return false
-	return found_viewer
+	if not bool(viewer.get("cleared", false)):
+		return false
+	var dish_id := str(dish.get("id", ""))
+	for raw_part in snapshot.get("ownFoodParts", []):
+		var part: Dictionary = raw_part
+		if str(part.get("dishId", "")) == dish_id:
+			return true
+	return false
 
 
 func _can_switch_to_bot(snapshot: Dictionary, participant: Dictionary) -> bool:
@@ -1321,7 +1420,7 @@ func _all_hands_label(snapshot: Dictionary) -> String:
 			_participant_name(snapshot, participant_id),
 			_participant_ingredient_label(snapshot, participant)
 		])
-		lines.append(_format_vouchers(_hand_for_participant(snapshot, participant_id)))
+		lines.append(_format_participant_inventory(snapshot, participant_id))
 	if count == 0:
 		lines.append("No active player hands.")
 	return "\n".join(lines)
@@ -1471,7 +1570,7 @@ func _transaction_history_label(snapshot: Dictionary) -> String:
 		return "Transaction history is not available from this server. Rebuild and restart the server, then create a new table."
 	var transactions: Array = snapshot.get("transactionHistory", [])
 	if transactions.is_empty():
-		return "No successful transactions yet. Deposits, swaps, accepted exchanges, and redemptions will appear here."
+		return "No successful transactions yet. Deposits, swaps, exchanges, redemptions, preparation, settlement, and eating will appear here."
 	var lines: Array[String] = ["Name | Action | Counterparty | Item out | Item back"]
 	for raw_transaction in transactions:
 		var transaction: Dictionary = raw_transaction
@@ -1494,11 +1593,14 @@ func _finished_plates_label(snapshot: Dictionary) -> String:
 	for raw_dish in dishes:
 		var dish: Dictionary = raw_dish
 		var owner_id := str(dish.get("ownerParticipantId", ""))
-		lines.append("%s by %s, %s/%s bites left" % [
+		var remaining := int(dish.get("partsRemaining", dish.get("bitesRemaining", 0)))
+		var total := int(dish.get("totalParts", dish.get("totalBites", 0)))
+		lines.append("%s by %s, %s/%s %s left" % [
 			dish.get("name", "Dish"),
 			_participant_name(snapshot, owner_id),
-			int(dish.get("bitesRemaining", 0)),
-			int(dish.get("totalBites", 0))
+			remaining,
+			total,
+			_unit_for_count(dish, remaining)
 		])
 	return "\n".join(lines)
 
@@ -1617,14 +1719,19 @@ func _participant_dropdown_label(snapshot: Dictionary, participant: Dictionary) 
 func _participant_detail_text(snapshot: Dictionary, participant: Dictionary) -> String:
 	var ingredient := _participant_ingredient_label(snapshot, participant)
 	var connected := "online" if bool(participant.get("connected", false)) else "offline"
-	return "%s\n%s %s, %s dishes, ingredient: %s%s, %s" % [
+	var account := "cleared" if bool(participant.get("cleared", false)) else "debt %s, shortfall %s" % [
+		int(participant.get("platterDebt", 0)),
+		int(participant.get("platterShortfall", 0))
+	]
+	return "%s\n%s %s, %s dishes, ingredient: %s%s, %s, %s" % [
 		participant.get("name", "?"),
 		participant.get("role", "?"),
 		_participant_kind_label(participant),
 		int(participant.get("dishCount", 0)),
 		ingredient,
 		_participant_stock_label(participant),
-		connected
+		connected,
+		account
 	]
 
 
@@ -1652,6 +1759,239 @@ func _format_vouchers(vouchers: Array) -> String:
 	for voucher in vouchers:
 		labels.append(_voucher_label(voucher))
 	return "\n".join(labels)
+
+
+func _format_food_parts(parts: Array) -> String:
+	if parts.is_empty():
+		return "-"
+	var labels: Array[String] = []
+	for raw_part in parts:
+		var part: Dictionary = raw_part
+		labels.append(_food_part_label(part))
+	return "\n".join(labels)
+
+
+func _format_platter_assets(snapshot: Dictionary) -> String:
+	var labels: Array[String] = []
+	for raw_voucher in snapshot.get("platter", []):
+		var voucher: Dictionary = raw_voucher
+		labels.append(_voucher_label(voucher))
+	for raw_part in snapshot.get("platterFoodParts", []):
+		var part: Dictionary = raw_part
+		labels.append(_food_part_label(part))
+	if labels.is_empty():
+		return "-"
+	return "\n".join(labels)
+
+
+func _platter_title(snapshot: Dictionary) -> String:
+	var platter_vouchers: Array = snapshot.get("platter", [])
+	var platter_food_parts: Array = snapshot.get("platterFoodParts", [])
+	var voucher_count := platter_vouchers.size()
+	var food_part_count := platter_food_parts.size()
+	var total := int(voucher_count + food_part_count)
+	if total == 1:
+		return "Central platter (1 asset)"
+	return "Central platter (%s assets)" % total
+
+
+func _format_inventory_assets(snapshot: Dictionary) -> String:
+	var labels: Array[String] = []
+	for raw_voucher in snapshot.get("ownHand", []):
+		var voucher: Dictionary = raw_voucher
+		labels.append(_voucher_label(voucher))
+	for raw_part in snapshot.get("ownFoodParts", []):
+		var part: Dictionary = raw_part
+		labels.append(_food_part_label(part))
+	if labels.is_empty():
+		return "-"
+	return "\n".join(labels)
+
+
+func _format_participant_inventory(snapshot: Dictionary, participant_id: String) -> String:
+	var labels: Array[String] = []
+	for raw_voucher in _hand_for_participant(snapshot, participant_id):
+		var voucher: Dictionary = raw_voucher
+		labels.append(_voucher_label(voucher))
+	for raw_part in _food_parts_for_participant(snapshot, participant_id):
+		var part: Dictionary = raw_part
+		labels.append(_food_part_label(part))
+	if labels.is_empty():
+		return "-"
+	return "\n".join(labels)
+
+
+func _inventory_asset_options(snapshot: Dictionary) -> Array:
+	var assets: Array = []
+	for raw_voucher in snapshot.get("ownHand", []):
+		var voucher: Dictionary = raw_voucher
+		assets.append(_asset_option("voucher", str(voucher.get("id", "")), _voucher_label(voucher)))
+	for raw_part in snapshot.get("ownFoodParts", []):
+		var part: Dictionary = raw_part
+		assets.append(_asset_option("dish_part", str(part.get("id", "")), _food_part_label(part)))
+	return assets
+
+
+func _platter_asset_options(snapshot: Dictionary) -> Array:
+	var assets: Array = []
+	for raw_voucher in snapshot.get("platter", []):
+		var voucher: Dictionary = raw_voucher
+		assets.append(_asset_option("voucher", str(voucher.get("id", "")), _voucher_label(voucher)))
+	for raw_part in snapshot.get("platterFoodParts", []):
+		var part: Dictionary = raw_part
+		assets.append(_asset_option("dish_part", str(part.get("id", "")), _food_part_label(part)))
+	return assets
+
+
+func _asset_option(kind: String, id: String, label: String) -> Dictionary:
+	return {"kind": kind, "id": id, "key": "%s:%s" % [kind, id], "label": label}
+
+
+func _asset_ref_from_key(key: String) -> Dictionary:
+	var separator := key.find(":")
+	if separator <= 0:
+		return {}
+	return {"kind": key.substr(0, separator), "id": key.substr(separator + 1)}
+
+
+func _asset_label_by_key(assets: Array, key: String) -> String:
+	if key == "":
+		return "nothing selected"
+	for raw_asset in assets:
+		var asset: Dictionary = raw_asset
+		if str(asset.get("key", "")) == key:
+			return str(asset.get("label", "nothing selected"))
+	return "nothing selected"
+
+
+func _prune_asset_selection(give_assets: Array, take_assets: Array) -> void:
+	if _selected_give_asset_key != "" and not _contains_asset_key(give_assets, _selected_give_asset_key):
+		_selected_give_asset_key = ""
+	if _selected_take_asset_key != "" and not _contains_asset_key(take_assets, _selected_take_asset_key):
+		_selected_take_asset_key = ""
+
+
+func _contains_asset_key(assets: Array, key: String) -> bool:
+	for raw_asset in assets:
+		var asset: Dictionary = raw_asset
+		if str(asset.get("key", "")) == key:
+			return true
+	return false
+
+
+func _food_part_label(part: Dictionary) -> String:
+	var dish_name := str(part.get("dishName", "Dish"))
+	var unit := str(part.get("unitSingular", "part"))
+	var part_id := str(part.get("id", ""))
+	var pieces := part_id.split("_")
+	var number := ""
+	if pieces.size() > 0:
+		number = str(pieces[pieces.size() - 1])
+	if number == "":
+		return "%s %s" % [dish_name, unit]
+	return "%s %s %s" % [dish_name, unit, number]
+
+
+func _food_parts_for_participant(snapshot: Dictionary, participant_id: String) -> Array:
+	var result: Array = []
+	var all_parts: Array = snapshot.get("allFoodParts", [])
+	if not all_parts.is_empty():
+		for raw_part in all_parts:
+			var part: Dictionary = raw_part
+			var location: Dictionary = part.get("location", {})
+			if str(location.get("type", "")) == "inventory" and str(location.get("participantId", "")) == participant_id:
+				result.append(part)
+		return result
+	if participant_id == str(snapshot.get("viewerParticipantId", "")):
+		return snapshot.get("ownFoodParts", [])
+	return result
+
+
+func _all_food_part_locations_label(snapshot: Dictionary) -> String:
+	var all_parts: Array = snapshot.get("allFoodParts", [])
+	var lines: Array[String] = ["Dish Part Locations"]
+	if all_parts.is_empty():
+		lines.append("No dish parts yet, or this audit is only available to witnesses.")
+		return "\n".join(lines)
+	for raw_part in all_parts:
+		var part: Dictionary = raw_part
+		var location: Dictionary = part.get("location", {})
+		var holder := "unknown"
+		match str(location.get("type", "")):
+			"inventory":
+				holder = _participant_name(snapshot, str(location.get("participantId", "")))
+			"platter":
+				holder = "Central Platter"
+			"eaten":
+				holder = "Eaten by %s" % _participant_name(snapshot, str(location.get("participantId", "")))
+			_:
+				holder = str(location.get("type", "unknown"))
+		lines.append("%s: %s" % [_food_part_label(part), holder])
+	return "\n".join(lines)
+
+
+func _stock_accounting_label(snapshot: Dictionary) -> String:
+	var lines: Array[String] = ["Stock Accounting"]
+	var starting_stock := int(snapshot.get("stockPerIngredient", 0))
+	var participants: Array = snapshot.get("participants", [])
+	if participants.is_empty() or starting_stock <= 0:
+		lines.append("Stock accounting starts when the game starts.")
+		return "\n".join(lines)
+	for raw_participant in participants:
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		var participant_id := str(participant.get("id", ""))
+		var remaining := int(participant.get("realIngredientStock", starting_stock))
+		var issued := starting_stock - remaining
+		var redeem_log_count := _redeem_count_for_counterparty(snapshot, participant_id)
+		var status := "OK" if redeem_log_count == issued else "check log"
+		lines.append("%s (%s): started %s, issued %s, remaining %s, redeem rows %s - %s" % [
+			_participant_name(snapshot, participant_id),
+			_participant_ingredient_label(snapshot, participant),
+			starting_stock,
+			issued,
+			remaining,
+			redeem_log_count,
+			status
+		])
+	if lines.size() == 1:
+		lines.append("No active player stock yet.")
+	return "\n".join(lines)
+
+
+func _redeem_count_for_counterparty(snapshot: Dictionary, participant_id: String) -> int:
+	var count := 0
+	for raw_transaction in snapshot.get("transactionHistory", []):
+		var transaction: Dictionary = raw_transaction
+		if str(transaction.get("action", "")) == "Redeem" and str(transaction.get("counterpartyParticipantId", "")) == participant_id:
+			count += 1
+	return count
+
+
+func _accountability_label(snapshot: Dictionary) -> String:
+	var lines: Array[String] = ["Central Platter Accounts"]
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		var status := "cleared" if bool(participant.get("cleared", false)) else "not cleared"
+		lines.append("%s: target 1 own card, current %s, debt %s, shortfall %s - %s" % [
+			participant.get("name", "?"),
+			int(participant.get("ownCardsInPlatter", 0)),
+			int(participant.get("platterDebt", 0)),
+			int(participant.get("platterShortfall", 0)),
+			status
+		])
+	if lines.size() == 1:
+		lines.append("No active player accounts yet.")
+	return "\n".join(lines)
+
+
+func _unit_for_count(dish: Dictionary, count: int) -> String:
+	if count == 1:
+		return str(dish.get("unitSingular", "part"))
+	return str(dish.get("unitPlural", "parts"))
 
 
 func _prune_swap_selection(hand: Array, platter: Array) -> void:
@@ -1688,7 +2028,7 @@ func _voucher_label(voucher: Dictionary) -> String:
 		card_number = str(parts[parts.size() - 1])
 	if card_number == "" or card_number == "?":
 		return "%s card" % ingredient_id.capitalize()
-	return "%s card %s" % [ingredient_id.capitalize(), card_number]
+	return "%s card #%s" % [ingredient_id.capitalize(), card_number]
 
 
 func _format_recipe(snapshot: Dictionary, recipe: Dictionary) -> String:
@@ -1708,6 +2048,39 @@ func _format_recipe(snapshot: Dictionary, recipe: Dictionary) -> String:
 	return "\n".join(lines)
 
 
+func _add_recipe_view(root: VBoxContainer, snapshot: Dictionary, recipe: Dictionary) -> void:
+	if recipe.is_empty():
+		root.add_child(_wrapped_label("-"))
+		return
+	root.add_child(_wrapped_label(str(recipe.get("name", "Recipe"))))
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		root.add_child(_recipe_requirement_row(snapshot, requirement))
+
+
+func _recipe_requirement_row(snapshot: Dictionary, requirement: Dictionary) -> Control:
+	var text := _recipe_requirement_text(snapshot, requirement)
+	var required_qty := int(requirement.get("requiredQty", 0))
+	var redeemed_qty := int(requirement.get("redeemedQty", 0))
+	var placed_ids: Array = requirement.get("placedVoucherIds", [])
+	var placed_qty := placed_ids.size()
+	if required_qty > 0 and redeemed_qty >= required_qty:
+		return _colored_label(text, Color(0.14, 0.52, 0.25))
+	if redeemed_qty > 0 or placed_qty > 0:
+		return _colored_label(text, Color(0.88, 0.45, 0.10), Color(0.08, 0.08, 0.08))
+	return _wrapped_label(text)
+
+
+func _recipe_requirement_text(snapshot: Dictionary, requirement: Dictionary) -> String:
+	var placed_ids: Array = requirement.get("placedVoucherIds", [])
+	return "%s: %s/%s redeemed, %s placed" % [
+		_ingredient_display(snapshot, str(requirement.get("ingredientId", ""))),
+		requirement.get("redeemedQty", 0),
+		requirement.get("requiredQty", 0),
+		placed_ids.size()
+	]
+
+
 func _ingredient_list_label(snapshot: Dictionary, ingredient_ids: Array) -> String:
 	var labels: Array[String] = []
 	for raw_ingredient_id in ingredient_ids:
@@ -1723,8 +2096,8 @@ func _phase_label(phase: String) -> String:
 			return "Deposit round"
 		"playing":
 			return "Cooking and trading"
-		"winner_bite":
-			return "Winner's first bite"
+		"settlement":
+			return "Settlement"
 		"eating":
 			return "Eating"
 		"complete":

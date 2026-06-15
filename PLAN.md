@@ -28,7 +28,7 @@
 - [x] Add recipe generation tooling for 7-20 active participants with committed ingredient sets and four recipes per ingredient.
 - [ ] Add polished visual assets and table layout inspired by potluck dinners and cooking apps.
 - [x] Add structured offer creation/acceptance flows.
-- [ ] Add mobile touch UX for card placement, platter swaps, and bites.
+- [ ] Add mobile touch UX for card placement, platter swaps, settlement swaps, and eating food parts.
 - [ ] Add local/manual QA scripts for Web and Android exports.
 
 ## Phase 4 - Hardening

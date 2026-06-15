@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { decideBotIntent, runBots } from "../src/bots.js";
-import { DISH_BITES, INGREDIENTS, MAX_PLAYER_BITES_PER_DISH, REAL_UNITS_PER_INGREDIENT, VOUCHERS_PER_INGREDIENT } from "../src/constants.js";
+import { DISH_PARTS_PER_DISH, INGREDIENTS, REAL_UNITS_PER_INGREDIENT, VOUCHERS_PER_INGREDIENT } from "../src/constants.js";
 import {
   activeParticipants,
   applyIntent,
   GameError,
   handVoucherIds,
+  inventoryDishPartIds,
   invariantVoucherCounts,
+  platterAccountForParticipant,
+  platterDishPartIds,
   platterVoucherIds,
   vouchersForIngredientOwner
 } from "../src/game.js";
@@ -307,7 +310,9 @@ describe("recipe catalog generator", () => {
       catalog.dishTemplates.every(
         (dish) =>
           dish.realIngredientIds.length >= MIN_TEMPLATE_INGREDIENTS &&
-          dish.realIngredientIds.length <= MAX_TEMPLATE_INGREDIENTS
+          dish.realIngredientIds.length <= MAX_TEMPLATE_INGREDIENTS &&
+          dish.partUnitSingular.length > 0 &&
+          dish.partUnitPlural.length > 0
       )
     ).toBe(true);
 
@@ -357,6 +362,8 @@ describe("recipe catalog generator", () => {
           requirementIngredientIds.every((ingredientId) => templateIngredientSet.has(ingredientId));
 
         expect(recipe.dishName.length).toBeGreaterThan(0);
+        expect(recipe.partUnitSingular.length).toBeGreaterThan(0);
+        expect(recipe.partUnitPlural.length).toBeGreaterThan(0);
         expect(recipe.realIngredientIds).toContain(recipe.ownerIngredientId);
         expect(recipe.matchedRealIngredientIds.length).toBeGreaterThan(0);
         expect(recipe.realIngredientIds).toEqual(requirementIngredientIds);
@@ -500,6 +507,8 @@ describe("recipes and voucher lifecycle", () => {
       throw new Error("Missing own recipe.");
     }
     expect(recipe.templateId).toBeTruthy();
+    expect(recipe.unitSingular.length).toBeGreaterThan(0);
+    expect(recipe.unitPlural.length).toBeGreaterThan(0);
     expect(recipe.realIngredientIds).toContain(participant.ingredientId);
     expect(recipe.matchedRealIngredientIds.length).toBeGreaterThan(0);
     expect(
@@ -525,6 +534,29 @@ describe("recipes and voucher lifecycle", () => {
     expect(totalRequiredQty).toBe(RECIPE_REQUIRED_ITEMS);
     expect(validQuantityShape(nextRecipe.requirements.map((requirement) => requirement.requiredQty))).toBe(true);
     expect(nextRecipe.requirements.every((requirement) => activeIngredientIds.has(requirement.ingredientId))).toBe(true);
+  });
+
+  it("preparing a dish creates 10 named food parts in the maker inventory", () => {
+    const { table } = startAndDeposit(7, "dish-parts");
+    const participant = activeParticipants(table)[0] as Participant;
+    const recipe = table.recipes[participant.id];
+
+    completeRecipeBySetup(table, participant.id);
+    applyIntent(table, participant.id, { type: "prepare" });
+
+    const dish = Object.values(table.dishes).find((candidate) => candidate.ownerParticipantId === participant.id);
+    expect(dish).toMatchObject({
+      name: recipe.name,
+      unitSingular: recipe.unitSingular,
+      unitPlural: recipe.unitPlural,
+      totalParts: DISH_PARTS_PER_DISH,
+      partsRemaining: DISH_PARTS_PER_DISH,
+      partsEaten: 0
+    });
+    const parts = Object.values(table.dishParts).filter((part) => part.dishId === dish?.id);
+    expect(parts).toHaveLength(DISH_PARTS_PER_DISH);
+    expect(parts.every((part) => part.location.type === "inventory" && part.location.participantId === participant.id)).toBe(true);
+    expect(table.transactionHistory.at(-1)).toMatchObject({ name: participant.name, action: "Prepare" });
   });
 
   it("requires all quantities to be redeemed before preparation", () => {
@@ -601,6 +633,34 @@ describe("recipes and voucher lifecycle", () => {
 
     expect(owner.realIngredientStock).toBe((beforeStock ?? REAL_UNITS_PER_INGREDIENT) - 1);
     expect(table.vouchers[voucher.id].location).toEqual({ type: "hand", participantId: owner.id });
+  });
+
+  it("reconciles stock with redemption transactions, not deposits or swaps", () => {
+    const { table } = startAndDeposit(7, "stock-reconciliation");
+    const participant = activeParticipants(table)[0] as Participant;
+    const beforeStock = participant.realIngredientStock;
+    const giveVoucherId = handVoucherIds(table, participant.id)[0] as string;
+    const takeVoucherId = platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId !== participant.id) as string;
+
+    applyIntent(table, participant.id, { type: "platter_swap", giveVoucherId, takeVoucherId });
+
+    expect(participant.realIngredientStock).toBe(beforeStock);
+
+    const recipe = table.recipes[participant.id];
+    const ownRequirement = recipe.requirements.find((requirement) => requirement.ingredientId === participant.ingredientId);
+    if (!ownRequirement) {
+      throw new Error("Missing own ingredient requirement");
+    }
+    const ownVoucher = handVoucherIds(table, participant.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === participant.id
+    ) as string;
+
+    applyIntent(table, participant.id, { type: "redeem_from_hand", voucherId: ownVoucher, requirementId: ownRequirement.id });
+
+    const redeemRowsForParticipant = table.transactionHistory.filter(
+      (transaction) => transaction.action === "Redeem" && transaction.counterpartyParticipantId === participant.id
+    );
+    expect(participant.realIngredientStock).toBe((beforeStock ?? REAL_UNITS_PER_INGREDIENT) - redeemRowsForParticipant.length);
   });
 
   it("does not depend on owner preparation to make redeemed cards reusable", () => {
@@ -872,13 +932,109 @@ describe("platter, offers, and visibility", () => {
     expect(table.vouchers[offeredVoucherId].location).toEqual({ type: "hand", participantId: from.id });
   });
 
+  it("automatically cancels incoming offers when requested cards leave the recipient hand", () => {
+    const { table } = startAndDeposit(7);
+    const recipient = activeParticipants(table)[0] as Participant;
+    const sender = firstOtherActive(table, recipient.id);
+    const recipientOwnHand = handVoucherIds(table, recipient.id).filter(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === recipient.id
+    );
+    const lastAvailableVoucherId = recipientOwnHand[0] as string;
+    for (const voucherId of recipientOwnHand.slice(1)) {
+      table.vouchers[voucherId].location = { type: "hand", participantId: sender.id };
+    }
+    const offeredVoucherId = handVoucherIds(table, sender.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === sender.id
+    ) as string;
+
+    applyIntent(table, sender.id, {
+      type: "create_offer",
+      toParticipantId: recipient.id,
+      offeredVoucherIds: [offeredVoucherId],
+      requested: { ingredientId: recipient.ingredientId as string, quantity: 1 }
+    });
+    const offer = Object.values(table.offers)[0];
+    expect(offer).toBeDefined();
+
+    const takeVoucherId = platterVoucherIds(table).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId !== recipient.id
+    ) as string;
+    applyIntent(table, recipient.id, {
+      type: "platter_swap",
+      giveVoucherId: lastAvailableVoucherId,
+      takeVoucherId
+    });
+
+    expect(table.offers[offer.id]).toBeUndefined();
+    expect(table.vouchers[offeredVoucherId].location).toEqual({ type: "hand", participantId: sender.id });
+    expect(buildSnapshot(table, sender.id).offers).toHaveLength(0);
+    expect(buildSnapshot(table, recipient.id).offers).toHaveLength(0);
+  });
+
+  it("reserves requested cards across pending incoming offers", () => {
+    const { table } = startAndDeposit(7);
+    const [recipient, senderOne, senderTwo] = activeParticipants(table) as [Participant, Participant, Participant];
+    const recipientOwnHand = handVoucherIds(table, recipient.id).filter(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === recipient.id
+    );
+    for (const voucherId of recipientOwnHand.slice(1)) {
+      table.vouchers[voucherId].location = { type: "hand", participantId: senderOne.id };
+    }
+    const firstOfferedVoucherId = handVoucherIds(table, senderOne.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === senderOne.id
+    ) as string;
+    const secondOfferedVoucherId = handVoucherIds(table, senderTwo.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === senderTwo.id
+    ) as string;
+
+    applyIntent(table, senderOne.id, {
+      type: "create_offer",
+      toParticipantId: recipient.id,
+      offeredVoucherIds: [firstOfferedVoucherId],
+      requested: { ingredientId: recipient.ingredientId as string, quantity: 1 }
+    });
+
+    expect(buildSnapshot(table, senderTwo.id).participants.find((participant) => participant.id === recipient.id)?.offerableOwnIngredientQty).toBe(0);
+    expect(() =>
+      applyIntent(table, senderTwo.id, {
+        type: "create_offer",
+        toParticipantId: recipient.id,
+        offeredVoucherIds: [secondOfferedVoucherId],
+        requested: { ingredientId: recipient.ingredientId as string, quantity: 1 }
+      })
+    ).toThrow(GameError);
+    expect(Object.values(table.offers)).toHaveLength(1);
+    expect(table.vouchers[secondOfferedVoucherId].location).toEqual({ type: "hand", participantId: senderTwo.id });
+  });
+
   it("keeps other active hands hidden from active players", () => {
     const { table } = startAndDeposit(7);
     const participant = activeParticipants(table)[0] as Participant;
     const snapshot = buildSnapshot(table, participant.id);
 
     expect(snapshot.allHands).toBeUndefined();
+    expect(snapshot.allFoodParts).toBeUndefined();
     expect(snapshot.ownHand.every((voucher) => voucher.location.participantId === participant.id)).toBe(true);
+  });
+
+  it("filters food-part inventories while allowing witness audits", () => {
+    const { store, table } = startAndDeposit(7, "food-part-visibility");
+    const [owner, other] = activeParticipants(table);
+
+    completeRecipeBySetup(table, owner.id);
+    applyIntent(table, owner.id, { type: "prepare" });
+    const partId = inventoryDishPartIds(table, owner.id)[0] as string;
+
+    const ownerSnapshot = buildSnapshot(table, owner.id);
+    const otherSnapshot = buildSnapshot(table, other.id);
+    const witness = store.joinTable(table.code, "Observer");
+    const witnessSnapshot = buildSnapshot(table, witness.participant.id);
+
+    expect(ownerSnapshot.ownFoodParts.map((part) => part.id)).toContain(partId);
+    expect(ownerSnapshot.dishParts.map((part) => part.id)).toContain(partId);
+    expect(otherSnapshot.ownFoodParts.map((part) => part.id)).not.toContain(partId);
+    expect(otherSnapshot.dishParts.map((part) => part.id)).not.toContain(partId);
+    expect(witnessSnapshot.allFoodParts?.map((part) => part.id)).toContain(partId);
   });
 
   it("defaults missing transaction history to an empty snapshot list", () => {
@@ -910,6 +1066,7 @@ describe("platter, offers, and visibility", () => {
 
     expect(witness.participant.role).toBe("witness");
     expect(snapshot.allHands).toBeDefined();
+    expect(snapshot.allFoodParts).toBeDefined();
     expect(Object.keys(snapshot.allHands ?? {})).toHaveLength(table.participantOrder.length);
   });
 
@@ -1095,7 +1252,7 @@ describe("winning and eating", () => {
     }
   });
 
-  it("enters winner-first-bite only after everyone reaches the configured dish goal", () => {
+  it("enters eating after everyone reaches the configured dish goal when accounts are clear", () => {
     const harness = makeHarness(7, "one-dish-goal");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
@@ -1114,10 +1271,11 @@ describe("winning and eating", () => {
     completeRecipeBySetup(harness.table, finalParticipant.id);
     applyIntent(harness.table, finalParticipant.id, { type: "prepare" });
 
-    expect(harness.table.phase).toBe("winner_bite");
+    expect(harness.table.phase).toBe("eating");
     expect(harness.table.winnerParticipantIds).toHaveLength(7);
     for (const participant of participants) {
       expect(harness.table.recipes[participant.id]).toBeUndefined();
+      expect(platterAccountForParticipant(harness.table, participant.id).cleared).toBe(true);
     }
   });
 
@@ -1168,154 +1326,175 @@ describe("winning and eating", () => {
     expect(table.phase).toBe("playing");
   });
 
-  it("requires winner first bite, then lets everyone eat 10 bites per dish", () => {
-    const { table } = startAndDeposit(7);
-    const [winner, other] = activeParticipants(table);
-    const witness = { ...table.participants[other.id], id: "witness", role: "witness" as const };
-    table.participants[witness.id] = witness;
-    table.participantOrder.push(witness.id);
-    winner.dishCount = 2;
-    other.dishCount = 1;
-    table.dishes.dish_test = {
-      id: "dish_test",
-      ownerParticipantId: winner.id,
-      name: "Winner Stew",
-      totalBites: DISH_BITES,
-      bitesRemaining: DISH_BITES,
-      biteCounts: {}
-    };
-
-    applyIntent(table, table.hostParticipantId, { type: "stop" });
-    expect(table.phase).toBe("winner_bite");
-    expect(table.winnerParticipantIds).toEqual([winner.id]);
-    expect(() => applyIntent(table, other.id, { type: "bite", dishId: "dish_test" })).toThrow(GameError);
-
-    applyIntent(table, winner.id, { type: "bite", dishId: "dish_test" });
-    expect(table.phase).toBe("eating");
-    expect(table.dishes.dish_test.bitesRemaining).toBe(9);
-
-    for (let index = 0; index < MAX_PLAYER_BITES_PER_DISH; index += 1) {
-      applyIntent(table, other.id, { type: "bite", dishId: "dish_test" });
-      applyIntent(table, witness.id, { type: "bite", dishId: "dish_test" });
+  it("settles platter debt and shortfall with 1:1 card and food-part swaps", () => {
+    const harness = makeHarness(7, "settlement-swaps");
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
+    for (const participant of activeParticipants(harness.table)) {
+      applyIntent(harness.table, participant.id, { type: "deposit", voucherId: handVoucherIds(harness.table, participant.id)[0] as string });
     }
-    while (table.dishes.dish_test.bitesRemaining > 0) {
-      applyIntent(table, winner.id, { type: "bite", dishId: "dish_test" });
+
+    const [debtor, shortfall] = activeParticipants(harness.table);
+    const extraDebtorVoucher = handVoucherIds(harness.table, debtor.id).find(
+      (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === debtor.id
+    ) as string;
+    const shortfallVoucher = platterVoucherIds(harness.table).find(
+      (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === shortfall.id
+    ) as string;
+    harness.table.vouchers[extraDebtorVoucher].location = { type: "platter" };
+    harness.table.vouchers[shortfallVoucher].location = { type: "hand", participantId: shortfall.id };
+
+    for (const participant of activeParticipants(harness.table)) {
+      completeRecipeBySetup(harness.table, participant.id);
+      applyIntent(harness.table, participant.id, { type: "prepare" });
     }
-    expect(table.dishes.dish_test.bitesRemaining).toBe(0);
-    expect(table.phase).toBe("complete");
+
+    expect(harness.table.phase).toBe("settlement");
+    expect(platterAccountForParticipant(harness.table, debtor.id)).toMatchObject({ ownCardsInPlatter: 2, platterDebt: 1, cleared: false });
+    expect(platterAccountForParticipant(harness.table, shortfall.id)).toMatchObject({
+      ownCardsInPlatter: 0,
+      platterShortfall: 1,
+      cleared: false
+    });
+
+    const debtorPartId = inventoryDishPartIds(harness.table, debtor.id)[0] as string;
+    const debtorOwnPlatterVoucher = platterVoucherIds(harness.table).find(
+      (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === debtor.id
+    ) as string;
+    applyIntent(harness.table, debtor.id, {
+      type: "platter_asset_swap",
+      give: { kind: "dish_part", id: debtorPartId },
+      take: { kind: "voucher", id: debtorOwnPlatterVoucher }
+    });
+
+    expect(platterAccountForParticipant(harness.table, debtor.id).cleared).toBe(true);
+    expect(platterDishPartIds(harness.table)).toEqual([debtorPartId]);
+    expect(harness.table.transactionHistory.at(-1)).toMatchObject({ name: debtor.name, action: "Settlement Swap" });
+
+    applyIntent(harness.table, shortfall.id, {
+      type: "platter_asset_swap",
+      give: { kind: "voucher", id: shortfallVoucher },
+      take: { kind: "dish_part", id: debtorPartId }
+    });
+
+    expect(platterAccountForParticipant(harness.table, shortfall.id).cleared).toBe(true);
+    expect(platterDishPartIds(harness.table)).toHaveLength(0);
+    expect(harness.table.phase).toBe("eating");
+    expect(harness.table.dishParts[debtorPartId].location).toEqual({ type: "inventory", participantId: shortfall.id });
   });
 
-  it("limits non-host players to 3 bites per dish and lets the host clear leftovers", () => {
-    const { table } = startAndDeposit(7, "bite-limit");
-    const host = table.participants[table.hostParticipantId];
-    const nonHost = activeParticipants(table).find((participant) => participant.id !== host.id) as Participant;
-    table.phase = "eating";
-    table.dishes.dish_limit = {
-      id: "dish_limit",
-      ownerParticipantId: host.id,
-      name: "Limit Stew",
-      totalBites: DISH_BITES,
-      bitesRemaining: DISH_BITES,
-      biteCounts: {}
-    };
+  it("blocks invalid settlement swaps without mutation", () => {
+    const { table } = startAndDeposit(7, "invalid-settlement");
+    const [participant] = activeParticipants(table);
+    completeRecipeBySetup(table, participant.id);
+    applyIntent(table, participant.id, { type: "prepare" });
+    table.phase = "settlement";
+    const partId = inventoryDishPartIds(table, participant.id)[0] as string;
+    const platterVoucherId = platterVoucherIds(table)[0] as string;
+    const before = structuredClone(table);
 
-    for (let index = 0; index < MAX_PLAYER_BITES_PER_DISH; index += 1) {
-      applyIntent(table, nonHost.id, { type: "bite", dishId: "dish_limit" });
-    }
-    expect(table.dishes.dish_limit.biteCounts[nonHost.id]).toBe(MAX_PLAYER_BITES_PER_DISH);
-    expect(() => applyIntent(table, nonHost.id, { type: "bite", dishId: "dish_limit" })).toThrow(GameError);
+    expect(() =>
+      applyIntent(table, participant.id, {
+        type: "platter_asset_swap",
+        give: { kind: "dish_part", id: partId },
+        take: { kind: "dish_part", id: partId }
+      })
+    ).toThrow(GameError);
+    expect(table).toEqual(before);
 
-    while (table.dishes.dish_limit.bitesRemaining > 0) {
-      applyIntent(table, host.id, { type: "bite", dishId: "dish_limit" });
-    }
-
-    expect(table.dishes.dish_limit.bitesRemaining).toBe(0);
-    expect(table.phase).toBe("complete");
+    expect(() =>
+      applyIntent(table, participant.id, {
+        type: "platter_asset_swap",
+        give: { kind: "voucher", id: platterVoucherId },
+        take: { kind: "dish_part", id: partId }
+      })
+    ).toThrow(GameError);
   });
 
-  it("lets the final non-host biter clear remaining bites after everyone else reaches the bite limit", () => {
-    const { table } = startAndDeposit(7, "last-biter");
-    const host = table.participants[table.hostParticipantId];
-    const nonHosts = activeParticipants(table).filter((participant) => participant.id !== host.id);
-    const finalBiter = nonHosts[0] as Participant;
-    const otherNonHosts = nonHosts.slice(1);
-    table.phase = "eating";
-    table.dishes.dish_last = {
-      id: "dish_last",
-      ownerParticipantId: host.id,
-      name: "Last Bite Pot",
-      totalBites: DISH_BITES,
-      bitesRemaining: 4,
-      biteCounts: Object.fromEntries([
-        [finalBiter.id, MAX_PLAYER_BITES_PER_DISH],
-        ...otherNonHosts.map((participant) => [participant.id, MAX_PLAYER_BITES_PER_DISH])
-      ])
-    };
+  it("allows any held voucher card to be swapped for a platter food part", () => {
+    const { table } = startAndDeposit(7, "any-card-for-food-part");
+    const [participant, other] = activeParticipants(table);
+    completeRecipeBySetup(table, participant.id);
+    applyIntent(table, participant.id, { type: "prepare" });
+    table.phase = "settlement";
+    const partId = inventoryDishPartIds(table, participant.id)[0] as string;
+    table.dishParts[partId].location = { type: "platter" };
+    const nonOwnVoucher = moveVoucherToHand(table, participant.id, other.ingredientId as string);
 
-    while (table.dishes.dish_last.bitesRemaining > 0) {
-      applyIntent(table, finalBiter.id, { type: "bite", dishId: "dish_last" });
-    }
+    applyIntent(table, participant.id, {
+      type: "platter_asset_swap",
+      give: { kind: "voucher", id: nonOwnVoucher.id },
+      take: { kind: "dish_part", id: partId }
+    });
 
-    expect(table.dishes.dish_last.biteCounts[finalBiter.id]).toBe(MAX_PLAYER_BITES_PER_DISH + 4);
-    expect(table.phase).toBe("complete");
+    expect(table.vouchers[nonOwnVoucher.id].location).toEqual({ type: "platter" });
+    expect(table.dishParts[partId].location).toEqual({ type: "inventory", participantId: participant.id });
+    expect(table.transactionHistory.at(-1)).toMatchObject({ name: participant.name, action: "Settlement Swap" });
   });
 
-  it("has bots take legal bites from available dishes during eating", () => {
-    const { table } = makeHarness(1, "bot-bites");
-    addBots(table, table.hostParticipantId, ["mixed", "mixed", "mixed", "mixed", "mixed", "mixed"]);
-    applyIntent(table, table.hostParticipantId, { type: "start" });
-    for (const participant of activeParticipants(table)) {
-      applyIntent(table, participant.id, { type: "deposit", voucherId: handVoucherIds(table, participant.id)[0] as string });
+  it("only lets cleared players eat food parts they hold", () => {
+    const harness = makeHarness(7, "eat-owned-parts");
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
+    for (const participant of activeParticipants(harness.table)) {
+      applyIntent(harness.table, participant.id, { type: "deposit", voucherId: handVoucherIds(harness.table, participant.id)[0] as string });
     }
-    const host = table.participants[table.hostParticipantId];
-    table.phase = "eating";
-    table.dishes.dish_a = {
-      id: "dish_a",
-      ownerParticipantId: host.id,
-      name: "First Dish",
-      totalBites: DISH_BITES,
-      bitesRemaining: DISH_BITES,
-      biteCounts: {}
-    };
-    table.dishes.dish_b = {
-      id: "dish_b",
-      ownerParticipantId: host.id,
-      name: "Second Dish",
-      totalBites: DISH_BITES,
-      bitesRemaining: DISH_BITES,
-      biteCounts: {}
-    };
+    for (const participant of activeParticipants(harness.table)) {
+      completeRecipeBySetup(harness.table, participant.id);
+      applyIntent(harness.table, participant.id, { type: "prepare" });
+    }
 
-    const decisions = runBots(table, 40).filter((decision) => decision.intent.type === "bite");
+    const [owner, other] = activeParticipants(harness.table);
+    const ownerDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === owner.id);
+    if (!ownerDish) {
+      throw new Error("Missing owner dish");
+    }
+    expect(() => applyIntent(harness.table, other.id, { type: "bite", dishId: ownerDish.id })).toThrow(GameError);
 
+    applyIntent(harness.table, owner.id, { type: "bite", dishId: ownerDish.id });
+
+    const updatedDish = harness.table.dishes[ownerDish.id];
+    expect(updatedDish.partsRemaining).toBe(DISH_PARTS_PER_DISH - 1);
+    expect(updatedDish.bitesRemaining).toBe(DISH_PARTS_PER_DISH - 1);
+    expect(updatedDish.biteCounts[owner.id]).toBe(1);
+    expect(harness.table.transactionHistory.at(-1)).toMatchObject({ name: owner.name, action: "Eat" });
+  });
+
+  it("has bots settle accounts and eat held food parts deterministically", () => {
+    const harness = makeHarness(1, "bot-settlement-eating");
+    addBots(harness.table, harness.table.hostParticipantId, ["mixed", "mixed", "mixed", "mixed", "mixed", "mixed"]);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
+    for (const participant of activeParticipants(harness.table)) {
+      applyIntent(harness.table, participant.id, { type: "deposit", voucherId: handVoucherIds(harness.table, participant.id)[0] as string });
+    }
+    for (const participant of activeParticipants(harness.table)) {
+      completeRecipeBySetup(harness.table, participant.id);
+      applyIntent(harness.table, participant.id, { type: "prepare" });
+    }
+
+    const decisions = runBots(harness.table, 40).filter((decision) => decision.intent.type === "bite");
+
+    expect(harness.table.phase).toBe("eating");
     expect(decisions.length).toBeGreaterThan(0);
-    expect(table.dishes.dish_a.bitesRemaining + table.dishes.dish_b.bitesRemaining).toBeLessThan(DISH_BITES * 2);
-    for (const dish of Object.values(table.dishes)) {
-      for (const participant of activeParticipants(table).filter((candidate) => !candidate.isHost)) {
-        expect(dish.biteCounts[participant.id] ?? 0).toBeLessThanOrEqual(MAX_PLAYER_BITES_PER_DISH);
-      }
-    }
+    expect(Object.values(harness.table.dishes).some((dish) => dish.partsRemaining < DISH_PARTS_PER_DISH)).toBe(true);
   });
 
-  it("expires a configured timer into winner-first-bite phase", () => {
+  it("expires a configured timer into settlement instead of bypassing accountability", () => {
     const { store, table, hostToken } = makeHarness(7);
     store.handleIntent(table.code, hostToken, { type: "set_timer", seconds: 1 }, false);
     store.handleIntent(table.code, hostToken, { type: "start" }, false);
     const winner = activeParticipants(table)[0] as Participant;
-    winner.dishCount = 1;
-    table.dishes.dish_timer = {
-      id: "dish_timer",
-      ownerParticipantId: winner.id,
-      name: "Timer Dish",
-      totalBites: DISH_BITES,
-      bitesRemaining: DISH_BITES,
-      biteCounts: {}
-    };
+    for (const participant of activeParticipants(table)) {
+      applyIntent(table, participant.id, { type: "deposit", voucherId: handVoucherIds(table, participant.id)[0] as string });
+    }
+    completeRecipeBySetup(table, winner.id);
+    applyIntent(table, winner.id, { type: "prepare" });
 
     const expired = store.expireTimer(table.code, (table.timer?.endsAtMs ?? Date.now()) + 1);
 
     expect(expired).toBe(true);
-    expect(table.phase).toBe("winner_bite");
+    expect(table.phase).toBe("eating");
     expect(table.winnerParticipantIds).toEqual([winner.id]);
     expect(table.timer?.expiredAtMs).toBeDefined();
   });

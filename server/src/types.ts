@@ -1,9 +1,11 @@
 export type ParticipantRole = "active" | "witness";
 export type ParticipantKind = "human" | "bot";
 export type BotType = "pool_only" | "barter_only" | "mixed";
-export type TablePhase = "lobby" | "deposit" | "playing" | "winner_bite" | "eating" | "complete";
+export type TablePhase = "lobby" | "deposit" | "playing" | "settlement" | "eating" | "complete";
 export type VoucherLocationType = "hand" | "platter" | "placed" | "holding" | "offer_lock";
+export type DishPartLocationType = "inventory" | "platter" | "eaten";
 export type OfferStatus = "pending" | "accepted" | "refused" | "cancelled";
+export type PlatterAssetKind = "voucher" | "dish_part";
 
 export interface Ingredient {
   id: string;
@@ -39,6 +41,8 @@ export interface Recipe {
   name: string;
   templateId: string;
   dishFamily: string;
+  unitSingular: string;
+  unitPlural: string;
   realIngredientIds: string[];
   matchedRealIngredientIds: string[];
   fallbackIngredientIds: string[];
@@ -85,12 +89,32 @@ export interface Dish {
   id: string;
   ownerParticipantId: string;
   name: string;
+  unitSingular: string;
+  unitPlural: string;
+  totalParts: number;
+  partsRemaining: number;
+  partsEaten: number;
   totalBites: number;
   bitesRemaining: number;
   biteCounts: Record<string, number>;
 }
 
-export type TransactionAction = "Deposit" | "Swap" | "Exchange" | "Redeem";
+export interface DishPartLocation {
+  type: DishPartLocationType;
+  participantId?: string;
+}
+
+export interface DishPart {
+  id: string;
+  dishId: string;
+  dishName: string;
+  makerParticipantId: string;
+  unitSingular: string;
+  unitPlural: string;
+  location: DishPartLocation;
+}
+
+export type TransactionAction = "Deposit" | "Swap" | "Settlement Swap" | "Exchange" | "Redeem" | "Prepare" | "Eat";
 
 export interface TransactionRecord {
   id: string;
@@ -125,6 +149,7 @@ export interface Table {
   recipes: Record<string, Recipe>;
   offers: Record<string, Offer>;
   dishes: Record<string, Dish>;
+  dishParts: Record<string, DishPart>;
   transactionHistory: TransactionRecord[];
   winnerParticipantIds: string[];
   targetDishCount: number;
@@ -144,6 +169,10 @@ export interface PublicParticipant {
   ingredientId?: string;
   realIngredientStock?: number;
   offerableOwnIngredientQty: number;
+  ownCardsInPlatter: number;
+  platterDebt: number;
+  platterShortfall: number;
+  cleared: boolean;
   dishCount: number;
   depositedInitial: boolean;
   connected: boolean;
@@ -161,7 +190,9 @@ export interface Snapshot {
   participants: PublicParticipant[];
   ingredients: Ingredient[];
   platter: Voucher[];
+  platterFoodParts: DishPart[];
   dishes: Dish[];
+  dishParts: DishPart[];
   transactionHistory: TransactionRecord[];
   dishCounts: Record<string, number>;
   winners: string[];
@@ -169,11 +200,18 @@ export interface Snapshot {
   stockPerIngredient: number;
   timer?: TableTimer;
   ownHand: Voucher[];
+  ownFoodParts: DishPart[];
   ownRecipe?: Recipe;
   offers: OfferSnapshot[];
   allHands?: Record<string, Voucher[]>;
+  allFoodParts?: DishPart[];
   allRecipes?: Record<string, Recipe>;
   allVouchers?: Voucher[];
+}
+
+export interface PlatterAssetRef {
+  kind: PlatterAssetKind;
+  id: string;
 }
 
 export type Intent =
@@ -191,6 +229,7 @@ export type Intent =
   | { type: "stop" }
   | { type: "deposit"; voucherId: string }
   | { type: "platter_swap"; giveVoucherId: string; takeVoucherId: string }
+  | { type: "platter_asset_swap"; give: PlatterAssetRef; take: PlatterAssetRef }
   | { type: "create_offer"; toParticipantId: string; offeredVoucherIds: string[]; requested: OfferRequest }
   | { type: "respond_offer"; offerId: string; response: "accept" | "refuse"; voucherIds?: string[] }
   | { type: "cancel_offer"; offerId: string }

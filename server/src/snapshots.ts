@@ -1,6 +1,14 @@
 import { INGREDIENTS } from "./constants.js";
-import { activeParticipants, handVoucherIds, platterVoucherIds } from "./game.js";
-import type { Dish, Offer, OfferSnapshot, Participant, PublicParticipant, Recipe, Snapshot, Table, TableTimer, TransactionRecord, Voucher } from "./types.js";
+import {
+  activeParticipants,
+  handVoucherIds,
+  inventoryDishPartIds,
+  offerableUnreservedIngredientQty,
+  platterAccountForParticipant,
+  platterDishPartIds,
+  platterVoucherIds
+} from "./game.js";
+import type { Dish, DishPart, Offer, OfferSnapshot, Participant, PublicParticipant, Recipe, Snapshot, Table, TableTimer, TransactionRecord, Voucher } from "./types.js";
 
 export function buildSnapshot(table: Table, viewerParticipantId?: string): Snapshot {
   const viewer = viewerParticipantId ? table.participants[viewerParticipantId] : undefined;
@@ -13,6 +21,13 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string): Snaps
     .map((participant) => publicParticipant(table, participant));
 
   const ownHand = isKnownViewer ? handVoucherIds(table, viewerParticipantId as string).map((id) => cloneVoucher(table.vouchers[id])) : [];
+  const ownFoodParts = isKnownViewer
+    ? inventoryDishPartIds(table, viewerParticipantId as string).map((id) => cloneDishPart(table.dishParts[id]))
+    : [];
+  const platterFoodParts = platterDishPartIds(table).map((id) => cloneDishPart(table.dishParts[id]));
+  const visibleDishParts = isWitness
+    ? Object.values(table.dishParts ?? {}).map(cloneDishPart)
+    : [...ownFoodParts, ...platterFoodParts];
   const ownRecipe = isKnownViewer ? cloneRecipe(table.recipes[viewerParticipantId as string]) : undefined;
   const offers = Object.values(table.offers)
     .filter((offer) => offer.status === "pending")
@@ -31,7 +46,9 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string): Snaps
     participants,
     ingredients: INGREDIENTS,
     platter: platterVoucherIds(table).map((id) => cloneVoucher(table.vouchers[id])),
+    platterFoodParts,
     dishes: Object.values(table.dishes).map(cloneDish),
+    dishParts: visibleDishParts,
     transactionHistory: (table.transactionHistory ?? []).map(cloneTransaction),
     dishCounts: Object.fromEntries(activeParticipants(table).map((participant) => [participant.id, participant.dishCount])),
     winners: [...table.winnerParticipantIds],
@@ -39,6 +56,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string): Snaps
     stockPerIngredient: table.stockPerIngredient,
     timer: cloneTimer(table.timer),
     ownHand,
+    ownFoodParts,
     ownRecipe,
     offers
   };
@@ -47,6 +65,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string): Snaps
     snapshot.allHands = Object.fromEntries(
       table.participantOrder.map((participantId) => [participantId, handVoucherIds(table, participantId).map((id) => cloneVoucher(table.vouchers[id]))])
     );
+    snapshot.allFoodParts = Object.values(table.dishParts ?? {}).map(cloneDishPart);
     snapshot.allRecipes = Object.fromEntries(
       Object.entries(table.recipes).map(([participantId, recipe]) => [participantId, cloneRecipe(recipe) as Recipe])
     );
@@ -57,6 +76,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string): Snaps
 }
 
 function publicParticipant(table: Table, participant: Participant): PublicParticipant {
+  const account = platterAccountForParticipant(table, participant.id);
   return {
     id: participant.id,
     name: participant.name,
@@ -66,21 +86,15 @@ function publicParticipant(table: Table, participant: Participant): PublicPartic
     botType: participant.botType,
     ingredientId: participant.ingredientId,
     realIngredientStock: participant.realIngredientStock,
-    offerableOwnIngredientQty: participant.ingredientId ? offerableIngredientQty(table, participant.id, participant.ingredientId) : 0,
+    offerableOwnIngredientQty: participant.ingredientId ? offerableUnreservedIngredientQty(table, participant.id, participant.ingredientId) : 0,
+    ownCardsInPlatter: account.ownCardsInPlatter,
+    platterDebt: account.platterDebt,
+    platterShortfall: account.platterShortfall,
+    cleared: account.cleared,
     dishCount: participant.dishCount,
     depositedInitial: participant.depositedInitial,
     connected: participant.connected
   };
-}
-
-function offerableIngredientQty(table: Table, participantId: string, ingredientId: string): number {
-  const participant = table.participants[participantId];
-  if ((participant?.realIngredientStock ?? 0) <= 0) {
-    return 0;
-  }
-  return Object.values(table.vouchers).filter(
-    (voucher) => voucher.ingredientId === ingredientId && voucher.location.type === "hand" && voucher.location.participantId === participantId
-  ).length;
 }
 
 function cloneVoucher(voucher: Voucher): Voucher {
@@ -96,6 +110,8 @@ function cloneRecipe(recipe?: Recipe): Recipe | undefined {
   }
   return {
     ...recipe,
+    unitSingular: recipe.unitSingular,
+    unitPlural: recipe.unitPlural,
     realIngredientIds: [...recipe.realIngredientIds],
     matchedRealIngredientIds: [...recipe.matchedRealIngredientIds],
     fallbackIngredientIds: [...recipe.fallbackIngredientIds],
@@ -121,6 +137,13 @@ function cloneOffer(table: Table, offer: Offer): OfferSnapshot {
 
 function cloneDish(dish: Dish): Dish {
   return { ...dish, biteCounts: { ...dish.biteCounts } };
+}
+
+function cloneDishPart(part: DishPart): DishPart {
+  return {
+    ...part,
+    location: { ...part.location }
+  };
 }
 
 function cloneTransaction(transaction: TransactionRecord): TransactionRecord {

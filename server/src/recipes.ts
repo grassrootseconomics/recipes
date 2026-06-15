@@ -35,6 +35,8 @@ export function generateRecipe(table: Table, ownerParticipantId: string): Recipe
     name: catalogRecipe.dishName,
     templateId: catalogRecipe.templateId,
     dishFamily: catalogRecipe.dishFamily,
+    unitSingular: catalogRecipe.partUnitSingular,
+    unitPlural: catalogRecipe.partUnitPlural,
     realIngredientIds: [...catalogRecipe.realIngredientIds],
     matchedRealIngredientIds: [...catalogRecipe.matchedRealIngredientIds],
     fallbackIngredientIds: [...catalogRecipe.fallbackIngredientIds],

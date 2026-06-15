@@ -42,6 +42,11 @@ interface DishTemplate {
   ingredientIds: string[];
 }
 
+interface ServingUnit {
+  singular: string;
+  plural: string;
+}
+
 export interface CatalogConfiguration {
   configurationId: string;
   playerCount: number;
@@ -67,6 +72,8 @@ export interface CatalogDishTemplate {
   slot: RecipeSlot;
   dishName: string;
   dishFamily: string;
+  partUnitSingular: string;
+  partUnitPlural: string;
   realIngredientIds: string[];
 }
 
@@ -80,6 +87,8 @@ export interface CatalogRecipe {
   ownerIngredientName: string;
   dishName: string;
   dishFamily: string;
+  partUnitSingular: string;
+  partUnitPlural: string;
   totalRequiredQty: number;
   distinctIngredientCount: number;
   quantityShape: RecipeQuantityShape;
@@ -395,6 +404,7 @@ function recipeForOwner(
     ? template.name
     : generatedDishName(ownerIngredient, slot, requirements, usedDishNames);
   usedDishNames.add(dishName);
+  const servingUnit = servingUnitForTemplate(template);
 
   return {
     recipeId,
@@ -406,6 +416,8 @@ function recipeForOwner(
     ownerIngredientName: ownerIngredient.name,
     dishName,
     dishFamily: template.family,
+    partUnitSingular: servingUnit.singular,
+    partUnitPlural: servingUnit.plural,
     totalRequiredQty,
     distinctIngredientCount: requirements.length,
     quantityShape: quantityShapeForDistinctCount(requirements.length),
@@ -777,6 +789,7 @@ function catalogDishTemplates(): CatalogDishTemplate[] {
   return INGREDIENTS.flatMap((ingredient) =>
     RECIPE_SLOTS.map((slot, slotIndex) => {
       const template = templateForIngredient(ingredient.id, slotIndex);
+      const servingUnit = servingUnitForTemplate(template);
       return {
         templateId: templateIdFor(ingredient.id, slot),
         ingredientId: ingredient.id,
@@ -784,10 +797,40 @@ function catalogDishTemplates(): CatalogDishTemplate[] {
         slot,
         dishName: template.name,
         dishFamily: template.family,
+        partUnitSingular: servingUnit.singular,
+        partUnitPlural: servingUnit.plural,
         realIngredientIds: playableTemplateIngredientIds(template.ingredientIds)
       };
     })
   );
+}
+
+function servingUnitForTemplate(template: DishTemplate): ServingUnit {
+  const name = template.name.toLowerCase();
+  const family = template.family.toLowerCase();
+  if (
+    name.includes("soup") ||
+    name.includes("stew") ||
+    name.includes("curry") ||
+    name.includes("dal") ||
+    name.includes("chili") ||
+    name.includes("porridge") ||
+    name.includes("chowder") ||
+    name.includes("pottage") ||
+    name.includes("tagine")
+  ) {
+    return { singular: "cup", plural: "cups" };
+  }
+  if (name.includes("rice") || name.includes("biryani") || name.includes("pilaf") || family.includes("rice")) {
+    return { singular: "scoop", plural: "scoops" };
+  }
+  if (name.includes("arepa") || name.includes("bhaji") || name.includes("mofongo") || name.includes("plantain")) {
+    return { singular: "piece", plural: "pieces" };
+  }
+  if (name.includes("plate") || name.includes("bowl")) {
+    return { singular: "portion", plural: "portions" };
+  }
+  return { singular: "serving", plural: "servings" };
 }
 
 function templateIdFor(ownerIngredientId: string, slot: RecipeSlot): string {

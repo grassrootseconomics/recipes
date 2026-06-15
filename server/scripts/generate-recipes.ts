@@ -89,6 +89,8 @@ function buildSpreadsheetTables(): string {
     owner_ingredient_name: recipe.ownerIngredientName,
     dish_name: recipe.dishName,
     dish_family: recipe.dishFamily,
+    part_unit_singular: recipe.partUnitSingular,
+    part_unit_plural: recipe.partUnitPlural,
     total_required_qty: recipe.totalRequiredQty,
     distinct_ingredient_count: recipe.distinctIngredientCount,
     quantity_shape: recipe.quantityShape,
@@ -123,7 +125,8 @@ function buildSpreadsheetTables(): string {
     unique_name_ok: yesNo(nameCounts.get(`${recipe.configurationId}:${recipe.dishName}`) === 1),
     catalog_demand_within_stock_ok: yesNo((configurationDemand.get(recipe.configurationId)?.maxDemand ?? 0) <= REAL_UNITS_PER_INGREDIENT),
     fallback_free_ok: yesNo(recipe.fallbackIngredientIds.length === 0),
-    accurate_name_ok: yesNo(recipe.dishName.trim().length > 0)
+    accurate_name_ok: yesNo(recipe.dishName.trim().length > 0),
+    serving_unit_ok: yesNo(recipe.partUnitSingular.trim().length > 0 && recipe.partUnitPlural.trim().length > 0)
   }));
 
   return [

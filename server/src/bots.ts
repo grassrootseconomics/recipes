@@ -1,8 +1,7 @@
 import { applyIntent, getUsefulRequirementIds, handVoucherIds, platterVoucherIds } from "./game.js";
-import { MAX_PLAYER_BITES_PER_DISH } from "./constants.js";
 import { hashString } from "./rng.js";
 import { buildSnapshot } from "./snapshots.js";
-import type { Dish, Intent, PublicParticipant, Snapshot, Table, Voucher } from "./types.js";
+import type { Intent, PlatterAssetRef, PublicParticipant, Snapshot, Table, Voucher } from "./types.js";
 
 export interface BotDecision {
   intent: Intent;
@@ -30,7 +29,11 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
     return firstVoucher ? { intent: { type: "deposit", voucherId: firstVoucher.id }, reason: "required initial deposit" } : undefined;
   }
 
-  if (snapshot.phase === "winner_bite" || snapshot.phase === "eating") {
+  if (snapshot.phase === "settlement") {
+    return decideSettlementSwap(table, botParticipantId, snapshot);
+  }
+
+  if (snapshot.phase === "eating") {
     return decideBite(table, botParticipantId, snapshot);
   }
 
@@ -106,12 +109,94 @@ function decidePrepare(snapshot: Snapshot): BotDecision | undefined {
   return complete ? { intent: { type: "prepare" }, reason: "recipe complete" } : undefined;
 }
 
-function decideBite(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
+function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
   const bot = snapshot.participants.find((participant) => participant.id === botParticipantId);
   if (!bot) {
     return undefined;
   }
-  const legalDishes = snapshot.dishes.filter((dish) => canBotBiteDish(snapshot, bot, dish));
+
+  if (bot.platterDebt > 0) {
+    const ownVoucher = snapshot.platter.find((voucher) => voucher.ownerParticipantId === botParticipantId);
+    const give = preferredSettlementGive(snapshot, botParticipantId, false);
+    if (ownVoucher && give) {
+      return {
+        intent: {
+          type: "platter_asset_swap",
+          give,
+          take: { kind: "voucher", id: ownVoucher.id }
+        },
+        reason: "settle platter debt"
+      };
+    }
+  }
+
+  if (bot.platterShortfall > 0) {
+    const ownVoucher = snapshot.ownHand.find((voucher) => voucher.ownerParticipantId === botParticipantId);
+    const take = preferredSettlementTake(snapshot, botParticipantId);
+    if (ownVoucher && take) {
+      return {
+        intent: {
+          type: "platter_asset_swap",
+          give: { kind: "voucher", id: ownVoucher.id },
+          take
+        },
+        reason: "settle platter shortfall"
+      };
+    }
+  }
+
+  if (bot.cleared && snapshot.platterFoodParts.length > 0) {
+    const give = snapshot.ownHand.find((voucher) => voucher.ownerParticipantId !== botParticipantId);
+    const take = deterministicFoodPartRef(table, botParticipantId, snapshot.platterFoodParts.map((part) => part.id));
+    if (give && take) {
+      return {
+        intent: {
+          type: "platter_asset_swap",
+          give: { kind: "voucher", id: give.id },
+          take
+        },
+        reason: "clear food part from platter"
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function preferredSettlementGive(snapshot: Snapshot, botParticipantId: string, allowOwnVoucher: boolean): PlatterAssetRef | undefined {
+  const foodPart = snapshot.ownFoodParts[0];
+  if (foodPart) {
+    return { kind: "dish_part", id: foodPart.id };
+  }
+  const voucher = snapshot.ownHand.find((candidate) => allowOwnVoucher || candidate.ownerParticipantId !== botParticipantId);
+  return voucher ? { kind: "voucher", id: voucher.id } : undefined;
+}
+
+function preferredSettlementTake(snapshot: Snapshot, botParticipantId: string): PlatterAssetRef | undefined {
+  const foodPart = snapshot.platterFoodParts[0];
+  if (foodPart) {
+    return { kind: "dish_part", id: foodPart.id };
+  }
+  const voucher = snapshot.platter.find((candidate) => candidate.ownerParticipantId !== botParticipantId);
+  return voucher ? { kind: "voucher", id: voucher.id } : undefined;
+}
+
+function deterministicFoodPartRef(table: Table, botParticipantId: string, partIds: string[]): PlatterAssetRef | undefined {
+  const [id] = [...partIds].sort(
+    (left, right) =>
+      hashString(`${table.seed}:settlement:${table.turn}:${botParticipantId}:${left}`) -
+      hashString(`${table.seed}:settlement:${table.turn}:${botParticipantId}:${right}`)
+  );
+  return id ? { kind: "dish_part", id } : undefined;
+}
+
+function decideBite(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
+  const bot = snapshot.participants.find((participant) => participant.id === botParticipantId);
+  if (!bot?.cleared) {
+    return undefined;
+  }
+  const heldDishIds = new Set(snapshot.ownFoodParts.map((part) => part.dishId));
+  const legalDishes = snapshot.dishes.filter((dish) => heldDishIds.has(dish.id));
   if (legalDishes.length === 0) {
     return undefined;
   }
@@ -121,32 +206,6 @@ function decideBite(table: Table, botParticipantId: string, snapshot: Snapshot):
       hashString(`${table.seed}:bite:${table.turn}:${botParticipantId}:${right.id}`)
   );
   return { intent: { type: "bite", dishId: dish.id }, reason: "take a legal dish bite" };
-}
-
-function canBotBiteDish(snapshot: Snapshot, bot: PublicParticipant, dish: Dish): boolean {
-  if (dish.bitesRemaining <= 0) {
-    return false;
-  }
-  if (snapshot.phase === "winner_bite" && !snapshot.winners.includes(bot.id)) {
-    return false;
-  }
-  if (bot.isHost) {
-    return true;
-  }
-  const biteCounts = dish.biteCounts ?? {};
-  const botBites = biteCounts[bot.id] ?? 0;
-  if (botBites < MAX_PLAYER_BITES_PER_DISH) {
-    return true;
-  }
-  const nonHostActiveIds = snapshot.participants
-    .filter((participant) => participant.role === "active" && !participant.isHost)
-    .map((participant) => participant.id);
-  return nonHostActiveIds.includes(bot.id) && nonHostActiveIds.every((participantId) => {
-    if (participantId === bot.id) {
-      return true;
-    }
-    return (biteCounts[participantId] ?? 0) >= MAX_PLAYER_BITES_PER_DISH;
-  });
 }
 
 function decideRedeem(snapshot: Snapshot): BotDecision | undefined {

@@ -33,6 +33,11 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("deposit"), voucherId: z.string() }),
   z.object({ type: z.literal("platter_swap"), giveVoucherId: z.string(), takeVoucherId: z.string() }),
   z.object({
+    type: z.literal("platter_asset_swap"),
+    give: z.object({ kind: z.enum(["voucher", "dish_part"]), id: z.string() }),
+    take: z.object({ kind: z.enum(["voucher", "dish_part"]), id: z.string() })
+  }),
+  z.object({
     type: z.literal("create_offer"),
     toParticipantId: z.string(),
     offeredVoucherIds: z.array(z.string()).min(1),
@@ -83,7 +88,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     ok: true,
     result: {
       service: "recipes-server",
-      features: ["pause", "manual_bot_conversion", "transaction_history"]
+      features: ["pause", "manual_bot_conversion", "transaction_history", "dish_part_settlement"]
     }
   }));
 

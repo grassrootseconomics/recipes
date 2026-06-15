@@ -16,7 +16,7 @@ The player’s own ingredient must appear in each of their recipes. Every requir
 
 A player places matching vouchers into recipe requirements. Placed vouchers are locked. The player then redeems placed vouchers one by one. Redeeming a voucher closes one needed unit of that recipe requirement, decrements the voucher issuer's real ingredient stock by one, and returns the voucher card to the issuer's hand while stock remains. A requirement group is complete when its delivered quantity equals its required quantity.
 
-When every requirement group is complete, the player can click `Prepare`. The ingredients on their final plate transform into a finished dish. The dish moves to the center of the table, and the player’s dish count increases by one. The player then receives a new recipe while keeping the same ingredient identity.
+When every requirement group is complete, the player can click `Prepare`. The ingredients on their final plate transform into a finished dish with exactly 10 food parts. The part name comes from the recipe catalog, such as slices, cups, scoops, pieces, portions, or servings. These parts begin in the maker's inventory, and the player’s dish count increases by one. The player then receives a new recipe while keeping the same ingredient identity.
 
 The table should show each active player’s finished dish count and the names of the dishes they have prepared.
 
@@ -30,7 +30,9 @@ Players can also trade directly with each other. A player zooms out to see the f
 
 Players can only be asked for their own ingredient while they still have at least one available voucher for that ingredient in hand and at least one real unit of stock remaining. If a pending offer asks for an ingredient that the recipient no longer has available, the server automatically refuses that offer and returns the offered card to the sender. Clients should not show players with zero available own-ingredient vouchers or zero real stock as offer targets.
 
-Successful table transactions are public history entries with: player name, action, counterparty, item out, and item back. MVP transaction actions are `Deposit`, `Swap`, `Exchange`, and `Redeem`.
+After all active players reach the dish goal, the table enters settlement unless everyone is already clear. During settlement, voucher cards and finished dish parts are both 1:1 value assets. A player may give any held card or food part to the platter and take any visible card or food part from the platter. Final clearance requires each active player to have exactly one of their own voucher cards in the central platter. A player with more than one own card in the platter has platter debt; a player with zero own cards in the platter has platter shortfall. Only own cards in the platter count toward clearance.
+
+Successful table transactions are public history entries with: player name, action, counterparty, item out, and item back. MVP transaction actions are `Deposit`, `Swap`, `Settlement Swap`, `Exchange`, `Redeem`, `Prepare`, and `Eat`.
 
 ## Bots
 
@@ -79,7 +81,7 @@ The host can set a dish goal from 1 to 4 before the game starts; the default goa
 
 The host can set a timer and pause or resume the game for everyone. While paused, gameplay actions and bot turns stop, and a running timer is paused rather than expiring in the background. Only the host can stop the game for everyone. When the timer ends, or when the host stops the game, the player with the most prepared dishes wins.
 
-Winning can also mean that all active players have reached the configured dish goal. Players that have made an equal number of dishes can tie as winners. The winner gets the first bite. After the first bite, everyone can click prepared dishes in the center of the table to eat. Each click removes a bite. Each player can take up to 3 bites from each dish. The host can take any remaining bites, and the final non-host player still biting a dish can clear that dish once all other active non-host players have reached their 3-bite limit. Bots should take legal bites from deterministic pseudo-random available dishes during the eating phase. The game is fully complete when all prepared dishes have been eaten.
+Winning can also mean that all active players have reached the configured dish goal. Players that have made an equal number of dishes can tie as winners. Before eating, the table must settle the central platter accounts. Eating begins only when every active player has exactly one own card in the platter and no food parts remain in the platter. A cleared player may eat food parts they hold in their own inventory. Bots should settle accounts and eat held food parts deterministically. The game is fully complete when all prepared food parts have been eaten.
 
 ## Visibility Rules
 
@@ -157,4 +159,7 @@ The server should include focused unit and integration tests for:
 - only the host can stop the game for everyone.
 - disconnected active humans stay reclaimable until the host manually converts them to `mixed` bots.
 - host pause blocks gameplay actions and bot turns, and pauses running timers.
-- winner(s) take first bite, then everyone can eat. (click to bite) say 10 bites per dish finish them
+- prepared dishes create exactly 10 named food parts from the recipe catalog.
+- settlement swaps allow any held card or food part to be swapped 1:1 with any platter card or food part.
+- platter clearance requires exactly one own card in the platter for every active player.
+- players cannot eat until cleared, and can only eat food parts they hold.
