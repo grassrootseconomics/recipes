@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "generate:recipes": "node --import tsx scripts/generate-recipes.ts",
+    "simulate:game": "node --import tsx scripts/simulate-game.ts",
     "test": "vitest",
     "test:run": "vitest run"
   },

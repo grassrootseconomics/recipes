@@ -42,7 +42,9 @@ var _confirm_close_dialog: ConfirmationDialog
 var _csv_file_dialog: FileDialog
 var _csv_export_status_label: Label
 var _select_popup: PopupPanel
+var _select_popup_scroller: ScrollContainer
 var _select_popup_list: VBoxContainer
+var _csv_http_request: HTTPRequest
 
 var _selected_hand_voucher_id := ""
 var _selected_platter_voucher_id := ""
@@ -54,12 +56,16 @@ var _selected_participant_id := ""
 var _pending_bot_participant_id := ""
 var _pending_csv := ""
 var _pending_csv_filename := ""
+var _csv_download_filename := ""
 var _last_csv_export_status := ""
 var _left_table_codes := {}
 var _active_select_key := ""
 
 
 func _ready() -> void:
+	_csv_http_request = HTTPRequest.new()
+	add_child(_csv_http_request)
+	_csv_http_request.request_completed.connect(_on_csv_download_completed)
 	_build_ui()
 	RecipesClient.snapshot_received.connect(_on_snapshot_received)
 	RecipesClient.error_received.connect(_on_error_received)
@@ -182,10 +188,16 @@ func _build_ui() -> void:
 	add_child(_csv_file_dialog)
 
 	_select_popup = PopupPanel.new()
+	_select_popup.add_theme_stylebox_override("panel", _select_popup_style())
+	_select_popup_scroller = ScrollContainer.new()
+	_select_popup_scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_select_popup_scroller.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_select_popup_scroller.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_select_popup_list = VBoxContainer.new()
 	_select_popup_list.add_theme_constant_override("separation", 6)
 	_select_popup_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_select_popup.add_child(_select_popup_list)
+	_select_popup_scroller.add_child(_select_popup_list)
+	_select_popup.add_child(_select_popup_scroller)
 	_select_popup.popup_hide.connect(func() -> void:
 		_active_select_key = ""
 	)
@@ -277,6 +289,25 @@ func _control_focus_style() -> StyleBoxFlat:
 	style.content_margin_top = 2
 	style.content_margin_right = 2
 	style.content_margin_bottom = 2
+	return style
+
+
+func _select_popup_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.13, 0.13, 0.13, 1.0)
+	style.border_color = Color(0.78, 0.78, 0.78, 1.0)
+	style.border_width_left = 1
+	style.border_width_top = 1
+	style.border_width_right = 1
+	style.border_width_bottom = 1
+	style.corner_radius_top_left = 4
+	style.corner_radius_top_right = 4
+	style.corner_radius_bottom_left = 4
+	style.corner_radius_bottom_right = 4
+	style.content_margin_left = 8
+	style.content_margin_top = 8
+	style.content_margin_right = 8
+	style.content_margin_bottom = 8
 	return style
 
 
@@ -479,7 +510,41 @@ func _download_transactions_csv() -> void:
 		return
 	var table_code := str(snapshot.get("tableCode", "table")).to_lower()
 	var filename := "recipes-transactions-%s.csv" % table_code
+	if RecipesClient.table_code != "" and RecipesClient.seat_token != "":
+		var endpoint := "%s/tables/%s/transactions.csv?seatToken=%s" % [
+			RecipesClient.server_url,
+			RecipesClient.table_code.uri_encode(),
+			RecipesClient.seat_token.uri_encode()
+		]
+		_csv_download_filename = filename
+		var err := _csv_http_request.request(endpoint)
+		if err == OK:
+			_set_csv_export_status("Requesting full transaction CSV...")
+			return
+		_set_csv_export_status("Could not request full CSV, using visible history: %s" % err)
 	var csv := _transactions_csv(transactions)
+	if _download_csv_in_browser(filename, csv):
+		_set_csv_export_status("Transaction CSV save/download started.")
+		return
+	_pending_csv = csv
+	_pending_csv_filename = filename
+	_open_csv_save_dialog(filename)
+
+
+func _on_csv_download_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if _csv_download_filename == "":
+		return
+	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		_set_csv_export_status("Full CSV download failed. Using visible transaction history.")
+		var transactions: Array = RecipesClient.latest_snapshot.get("transactionHistory", [])
+		_pending_csv = _transactions_csv(transactions)
+		_pending_csv_filename = _csv_download_filename
+		_open_csv_save_dialog(_csv_download_filename)
+		_csv_download_filename = ""
+		return
+	var csv := body.get_string_from_utf8()
+	var filename := _csv_download_filename
+	_csv_download_filename = ""
 	if _download_csv_in_browser(filename, csv):
 		_set_csv_export_status("Transaction CSV save/download started.")
 		return
@@ -676,6 +741,15 @@ func _on_connection_changed(status: String) -> void:
 			_set_lobby_ui_visible(false)
 			_set_gameplay_ui_visible(false)
 			_refresh_connection_buttons({})
+	elif status == "reconnecting":
+		var close_detail := RecipesClient.last_close_description
+		var detail := "" if close_detail == "" else " (%s)" % close_detail
+		_status_label.text = "Connection lost%s. Reconnecting, attempt %s..." % [detail, RecipesClient.reconnect_attempt()]
+		var snapshot := RecipesClient.latest_snapshot
+		if _table_exists(snapshot):
+			_refresh_connection_buttons(snapshot)
+			_set_lobby_ui_visible(true)
+			_set_gameplay_ui_visible(_game_started(snapshot))
 	else:
 		_status_label.text = "Connection: %s" % status
 
@@ -1025,7 +1099,8 @@ func _add_transaction_history_controls(snapshot: Dictionary) -> void:
 	var transactions: Array = []
 	if has_history:
 		transactions = snapshot.get("transactionHistory", [])
-	var export_button := _button("Download CSV", _download_transactions_csv)
+	var history_complete := bool(snapshot.get("transactionHistoryComplete", true))
+	var export_button := _button("Download CSV" if history_complete else "Download Visible CSV", _download_transactions_csv)
 	export_button.disabled = not has_history or transactions.is_empty()
 	_transaction_controls.add_child(export_button)
 	_csv_export_status_label = _wrapped_label(_last_csv_export_status)
@@ -1038,6 +1113,11 @@ func _add_transaction_history_controls(snapshot: Dictionary) -> void:
 	if transactions.is_empty():
 		_transaction_controls.add_child(_wrapped_label("No successful transactions yet. Deposits, swaps, exchanges, redemptions, preparation, settlement, and eating will appear here."))
 		return
+	if not history_complete:
+		_transaction_controls.add_child(_wrapped_label("Showing latest %s of %s transactions in this live witness view." % [
+			transactions.size(),
+			int(snapshot.get("transactionHistoryTotal", transactions.size()))
+		]))
 	_transaction_controls.add_child(_transaction_header_row())
 	var scroller := ScrollContainer.new()
 	scroller.custom_minimum_size = Vector2(0, (TRANSACTION_ROW_HEIGHT + TRANSACTION_ROW_GAP) * TRANSACTION_VISIBLE_ROWS)
@@ -1057,7 +1137,10 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 	var requirements: Array = recipe.get("requirements", [])
 	var hand: Array = snapshot.get("ownHand", [])
 	var food_parts: Array = snapshot.get("ownFoodParts", [])
-	if not food_parts.is_empty():
+	var food_part_group_labels := _food_part_group_labels(snapshot.get("ownFoodPartGroups", []))
+	if not food_part_group_labels.is_empty():
+		_hand_controls.add_child(_wrapped_label("Food parts you hold\n%s" % "\n".join(food_part_group_labels)))
+	elif not food_parts.is_empty():
 		_hand_controls.add_child(_wrapped_label("Food parts you hold\n%s" % _format_food_parts(food_parts)))
 	if hand.is_empty():
 		_hand_controls.add_child(_wrapped_label("Your hand is empty."))
@@ -1117,11 +1200,27 @@ func _add_platter_swap_controls(snapshot: Dictionary) -> void:
 		if _selected_hand_voucher_id == "" or _selected_platter_voucher_id == "":
 			_on_error_received({"description": "Select one hand voucher and one platter voucher."})
 			return
-		RecipesClient.send_intent({"type": "platter_swap", "giveVoucherId": _selected_hand_voucher_id, "takeVoucherId": _selected_platter_voucher_id})
+		var latest := RecipesClient.latest_snapshot
+		var latest_hand: Array = latest.get("ownHand", [])
+		var latest_platter: Array = latest.get("platter", [])
+		if not _contains_voucher_id(latest_hand, _selected_hand_voucher_id):
+			_on_error_received({"description": "The card selected to give is no longer in your hand. Choose again."})
+			_selected_hand_voucher_id = ""
+			_refresh_controls(latest)
+			return
+		if not _contains_voucher_id(latest_platter, _selected_platter_voucher_id):
+			_on_error_received({"description": "The card selected to take is no longer in the platter. Choose again."})
+			_selected_platter_voucher_id = ""
+			_refresh_controls(latest)
+			return
+		var give_label := _voucher_label_by_id(latest_hand, _selected_hand_voucher_id)
+		var take_label := _voucher_label_by_id(latest_platter, _selected_platter_voucher_id)
+		if RecipesClient.send_intent({"type": "platter_swap", "giveVoucherId": _selected_hand_voucher_id, "takeVoucherId": _selected_platter_voucher_id}):
+			_status_label.text = "Swapping %s for %s..." % [give_label, take_label]
 	)
-	swap_button.disabled = _selected_hand_voucher_id == "" or _selected_platter_voucher_id == ""
+	swap_button.disabled = _selected_hand_voucher_id == "" or _selected_platter_voucher_id == "" or not RecipesClient.is_socket_connected()
 	if swap_button.disabled:
-		swap_button.text = "Choose Cards To Swap"
+		swap_button.text = "Reconnect To Swap" if not RecipesClient.is_socket_connected() else "Choose Cards To Swap"
 	_platter_controls.add_child(swap_button)
 
 
@@ -1155,11 +1254,12 @@ func _add_platter_asset_swap_controls(snapshot: Dictionary) -> void:
 		if give_ref.is_empty() or take_ref.is_empty():
 			_on_error_received({"description": "Select one held asset and one platter asset."})
 			return
-		RecipesClient.send_intent({"type": "platter_asset_swap", "give": give_ref, "take": take_ref})
+		if RecipesClient.send_intent({"type": "platter_asset_swap", "give": give_ref, "take": take_ref}):
+			_status_label.text = "Swapping selected assets..."
 	)
-	swap_button.disabled = _selected_give_asset_key == "" or _selected_take_asset_key == ""
+	swap_button.disabled = _selected_give_asset_key == "" or _selected_take_asset_key == "" or not RecipesClient.is_socket_connected()
 	if swap_button.disabled:
-		swap_button.text = "Choose Assets To Swap"
+		swap_button.text = "Reconnect To Swap" if not RecipesClient.is_socket_connected() else "Choose Assets To Swap"
 	_platter_controls.add_child(swap_button)
 
 
@@ -1353,6 +1453,10 @@ func _viewer_can_bite_dish(snapshot: Dictionary, dish: Dictionary) -> bool:
 	if not bool(viewer.get("cleared", false)):
 		return false
 	var dish_id := str(dish.get("id", ""))
+	for raw_group in snapshot.get("ownFoodPartGroups", []):
+		var group: Dictionary = raw_group
+		if str(group.get("dishId", "")) == dish_id and int(group.get("count", 0)) > 0:
+			return true
 	for raw_part in snapshot.get("ownFoodParts", []):
 		var part: Dictionary = raw_part
 		if str(part.get("dishId", "")) == dish_id:
@@ -1407,6 +1511,19 @@ func _hand_for_participant(snapshot: Dictionary, participant_id: String) -> Arra
 	return []
 
 
+func _voucher_summary_labels_for_participant(snapshot: Dictionary, participant_id: String) -> Array[String]:
+	var labels: Array[String] = []
+	for raw_summary in snapshot.get("voucherLocationSummary", []):
+		var summary: Dictionary = raw_summary
+		var location: Dictionary = summary.get("location", {})
+		if str(location.get("type", "")) != "hand" or str(location.get("participantId", "")) != participant_id:
+			continue
+		var count := int(summary.get("count", 0))
+		var ingredient := _ingredient_display(snapshot, str(summary.get("ingredientId", "")))
+		labels.append("%s x%s" % [ingredient, count])
+	return labels
+
+
 func _recipe_for_participant(snapshot: Dictionary, participant_id: String) -> Dictionary:
 	var all_recipes = snapshot.get("allRecipes", {})
 	if typeof(all_recipes) == TYPE_DICTIONARY:
@@ -1438,6 +1555,10 @@ func _all_hands_label(snapshot: Dictionary) -> String:
 
 
 func _all_card_locations_label(snapshot: Dictionary) -> String:
+	var summaries: Array = snapshot.get("voucherLocationSummary", [])
+	if not summaries.is_empty():
+		return _all_card_location_summary_label(snapshot, summaries)
+
 	var all_vouchers: Array = snapshot.get("allVouchers", [])
 	var lines: Array[String] = ["Ingredient Card Locations"]
 	if all_vouchers.is_empty():
@@ -1496,6 +1617,92 @@ func _all_card_locations_label(snapshot: Dictionary) -> String:
 					offer += 1
 				_:
 					unknown += 1
+
+		var total := owner_hand + other_hands + platter + placed + inactive + offer + unknown
+		var total_label := "" if total == 7 else ", total %s" % total
+		lines.append("%s (%s, %s): owner hand %s, other hands %s, platter %s, placed %s, inactive %s, offer %s%s" % [
+			_participant_name(snapshot, owner_id),
+			ingredient,
+			stock_label,
+			owner_hand,
+			other_hands,
+			platter,
+			placed,
+			inactive,
+			offer,
+			total_label
+		])
+		if not other_hand_labels.is_empty():
+			lines.append("Other hands: %s" % "; ".join(other_hand_labels))
+		if not placed_labels.is_empty():
+			lines.append("Placed: %s" % "; ".join(placed_labels))
+		if not inactive_labels.is_empty():
+			lines.append("Inactive cards: %s" % "; ".join(inactive_labels))
+
+	return "\n".join(lines)
+
+
+func _all_card_location_summary_label(snapshot: Dictionary, summaries: Array) -> String:
+	var lines: Array[String] = ["Ingredient Card Locations"]
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		var owner_id := str(participant.get("id", ""))
+		var owner_hand := 0
+		var other_hands := 0
+		var platter := 0
+		var placed := 0
+		var inactive := 0
+		var offer := 0
+		var unknown := 0
+		var other_hand_labels: Array[String] = []
+		var placed_labels: Array[String] = []
+		var inactive_labels: Array[String] = []
+		var ingredient := _participant_ingredient_label(snapshot, participant)
+		var stock_label := "stock %s" % int(participant.get("realIngredientStock", 0)) if participant.has("realIngredientStock") else "stock -"
+
+		for raw_summary in summaries:
+			var summary: Dictionary = raw_summary
+			if str(summary.get("ownerParticipantId", "")) != owner_id:
+				continue
+			var count := int(summary.get("count", 0))
+			var location: Dictionary = summary.get("location", {})
+			var location_type := str(location.get("type", "unknown"))
+			match location_type:
+				"hand":
+					var holder_id := str(location.get("participantId", ""))
+					if holder_id == owner_id:
+						owner_hand += count
+					else:
+						other_hands += count
+						other_hand_labels.append("%s has %s x%s" % [
+							_participant_name(snapshot, holder_id),
+							_ingredient_display(snapshot, str(summary.get("ingredientId", ""))),
+							count
+						])
+				"platter":
+					platter += count
+				"placed":
+					placed += count
+					placed_labels.append("%s x%s on %s's recipe" % [
+						_ingredient_display(snapshot, str(summary.get("ingredientId", ""))),
+						count,
+						_participant_name(snapshot, str(location.get("recipeOwnerId", "")))
+					])
+				"holding":
+					inactive += count
+					var redeemed_by_id := str(location.get("recipeOwnerId", ""))
+					var redeemed_by := "unknown player from an older table" if redeemed_by_id == "" else _participant_name(snapshot, redeemed_by_id)
+					inactive_labels.append("%s x%s last redeemed by %s" % [
+						_ingredient_display(snapshot, str(summary.get("ingredientId", ""))),
+						count,
+						redeemed_by
+					])
+				"offer_lock":
+					offer += count
+				_:
+					unknown += count
 
 		var total := owner_hand + other_hands + platter + placed + inactive + offer + unknown
 		var total_label := "" if total == 7 else ", total %s" % total
@@ -1782,14 +1989,38 @@ func _format_food_parts(parts: Array) -> String:
 	return "\n".join(labels)
 
 
+func _food_part_group_labels(groups: Array) -> Array[String]:
+	var labels: Array[String] = []
+	for raw_group in groups:
+		var group: Dictionary = raw_group
+		var count := int(group.get("count", 0))
+		if count <= 0:
+			continue
+		var unit := str(group.get("unitSingular", "part")) if count == 1 else str(group.get("unitPlural", "parts"))
+		labels.append("%s: %s %s" % [group.get("dishName", "Dish"), count, unit])
+	return labels
+
+
+func _food_part_group_count(groups: Array) -> int:
+	var count := 0
+	for raw_group in groups:
+		var group: Dictionary = raw_group
+		count += int(group.get("count", 0))
+	return count
+
+
 func _format_platter_assets(snapshot: Dictionary) -> String:
 	var labels: Array[String] = []
 	for raw_voucher in snapshot.get("platter", []):
 		var voucher: Dictionary = raw_voucher
 		labels.append(_voucher_label(voucher))
-	for raw_part in snapshot.get("platterFoodParts", []):
-		var part: Dictionary = raw_part
-		labels.append(_food_part_label(part))
+	var food_group_labels := _food_part_group_labels(snapshot.get("platterFoodPartGroups", []))
+	if not food_group_labels.is_empty():
+		labels.append_array(food_group_labels)
+	else:
+		for raw_part in snapshot.get("platterFoodParts", []):
+			var part: Dictionary = raw_part
+			labels.append(_food_part_label(part))
 	if labels.is_empty():
 		return "-"
 	return "\n".join(labels)
@@ -1799,7 +2030,9 @@ func _platter_title(snapshot: Dictionary) -> String:
 	var platter_vouchers: Array = snapshot.get("platter", [])
 	var platter_food_parts: Array = snapshot.get("platterFoodParts", [])
 	var voucher_count := platter_vouchers.size()
-	var food_part_count := platter_food_parts.size()
+	var food_part_count := _food_part_group_count(snapshot.get("platterFoodPartGroups", []))
+	if food_part_count == 0:
+		food_part_count = platter_food_parts.size()
 	var total := int(voucher_count + food_part_count)
 	if total == 1:
 		return "Central platter (1 asset)"
@@ -1811,9 +2044,13 @@ func _format_inventory_assets(snapshot: Dictionary) -> String:
 	for raw_voucher in snapshot.get("ownHand", []):
 		var voucher: Dictionary = raw_voucher
 		labels.append(_voucher_label(voucher))
-	for raw_part in snapshot.get("ownFoodParts", []):
-		var part: Dictionary = raw_part
-		labels.append(_food_part_label(part))
+	var food_group_labels := _food_part_group_labels(snapshot.get("ownFoodPartGroups", []))
+	if not food_group_labels.is_empty():
+		labels.append_array(food_group_labels)
+	else:
+		for raw_part in snapshot.get("ownFoodParts", []):
+			var part: Dictionary = raw_part
+			labels.append(_food_part_label(part))
 	if labels.is_empty():
 		return "-"
 	return "\n".join(labels)
@@ -1821,12 +2058,17 @@ func _format_inventory_assets(snapshot: Dictionary) -> String:
 
 func _format_participant_inventory(snapshot: Dictionary, participant_id: String) -> String:
 	var labels: Array[String] = []
-	for raw_voucher in _hand_for_participant(snapshot, participant_id):
+	var hand := _hand_for_participant(snapshot, participant_id)
+	for raw_voucher in hand:
 		var voucher: Dictionary = raw_voucher
 		labels.append(_voucher_label(voucher))
+	if hand.is_empty():
+		labels.append_array(_voucher_summary_labels_for_participant(snapshot, participant_id))
 	for raw_part in _food_parts_for_participant(snapshot, participant_id):
 		var part: Dictionary = raw_part
 		labels.append(_food_part_label(part))
+	for summary_label in _food_part_summary_labels_for_participant(snapshot, participant_id):
+		labels.append(summary_label)
 	if labels.is_empty():
 		return "-"
 	return "\n".join(labels)
@@ -1877,11 +2119,15 @@ func _asset_label_by_key(assets: Array, key: String) -> String:
 
 func _open_select_popup(select_key: String, anchor: Control) -> void:
 	_active_select_key = select_key
+	_refresh_active_select_popup(RecipesClient.latest_snapshot, true)
 	var width := maxi(280, int(anchor.size.x))
-	var height := 320
+	var content_height := int(ceil(_select_popup_list.get_combined_minimum_size().y))
+	var panel_padding: int = 20
+	var min_height: int = 58
+	var max_height: int = 360
+	var height: int = clampi(content_height + panel_padding, min_height, max_height)
 	var position := Vector2i(int(anchor.global_position.x), int(anchor.global_position.y + anchor.size.y + 4))
 	_select_popup.popup(Rect2i(position, Vector2i(width, height)))
-	_refresh_active_select_popup(RecipesClient.latest_snapshot, true)
 
 
 func _refresh_active_select_popup(snapshot: Dictionary, force := false) -> void:
@@ -1986,11 +2232,47 @@ func _food_parts_for_participant(snapshot: Dictionary, participant_id: String) -
 	return result
 
 
+func _food_part_summary_labels_for_participant(snapshot: Dictionary, participant_id: String) -> Array[String]:
+	var labels: Array[String] = []
+	var summaries: Array = snapshot.get("foodPartLocationSummary", [])
+	for raw_summary in summaries:
+		var summary: Dictionary = raw_summary
+		var location: Dictionary = summary.get("location", {})
+		if str(location.get("type", "")) != "inventory" or str(location.get("participantId", "")) != participant_id:
+			continue
+		labels.append(_food_part_summary_label(summary))
+	return labels
+
+
+func _food_part_summary_label(summary: Dictionary) -> String:
+	var count := int(summary.get("count", 0))
+	var unit := str(summary.get("unitSingular", "part")) if count == 1 else str(summary.get("unitPlural", "parts"))
+	return "%s: %s %s" % [summary.get("dishName", "Dish"), count, unit]
+
+
 func _all_food_part_locations_label(snapshot: Dictionary) -> String:
+	var summary_rows: Array = snapshot.get("foodPartLocationSummary", [])
+	var lines: Array[String] = ["Dish Part Locations"]
+	if not summary_rows.is_empty():
+		for raw_summary in summary_rows:
+			var summary: Dictionary = raw_summary
+			var location: Dictionary = summary.get("location", {})
+			var holder := "unknown"
+			match str(location.get("type", "")):
+				"inventory":
+					holder = _participant_name(snapshot, str(location.get("participantId", "")))
+				"platter":
+					holder = "Central Platter"
+				"eaten":
+					holder = "Eaten by %s" % _participant_name(snapshot, str(location.get("participantId", "")))
+				_:
+					holder = str(location.get("type", "unknown"))
+			lines.append("%s - %s" % [_food_part_summary_label(summary), holder])
+		return "\n".join(lines)
+
 	var all_parts: Array = snapshot.get("allFoodParts", [])
 	if all_parts.is_empty() and str(snapshot.get("viewerRole", "")) == "witness":
 		all_parts = snapshot.get("dishParts", [])
-	var lines: Array[String] = ["Dish Part Locations"]
 	if all_parts.is_empty():
 		lines.append("No dish parts yet, or this audit is only available to witnesses.")
 		return "\n".join(lines)

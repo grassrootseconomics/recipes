@@ -102,6 +102,15 @@ function completeRecipeBySetup(table: Table, participantId: string): void {
   }
 }
 
+function prepareAllDishesBySetup(table: Table): void {
+  for (let round = 0; round < table.targetDishCount; round += 1) {
+    for (const participant of activeParticipants(table)) {
+      completeRecipeBySetup(table, participant.id);
+      applyIntent(table, participant.id, { type: "prepare" });
+    }
+  }
+}
+
 function validQuantityShape(quantities: number[]): boolean {
   const sorted = [...quantities].sort((left, right) => right - left);
   return (
@@ -718,6 +727,55 @@ describe("platter, offers, and visibility", () => {
     expect(table.vouchers[takeVoucherId].location).toEqual({ type: "hand", participantId: participant.id });
   });
 
+  it("exposes aggregate voucher groups and accepts aggregate deposit and platter swap intents", () => {
+    const { table } = startTable(7, "aggregate-vouchers");
+    const [first, second] = activeParticipants(table);
+    const initialSnapshot = buildSnapshot(table, first.id);
+
+    expect(initialSnapshot.ownHandGroups).toContainEqual({
+      ingredientId: first.ingredientId,
+      ownerParticipantId: first.id,
+      count: VOUCHERS_PER_INGREDIENT
+    });
+
+    for (const participant of activeParticipants(table)) {
+      applyIntent(table, participant.id, { type: "deposit_ingredient" });
+    }
+
+    expect(table.phase).toBe("playing");
+    expect(platterVoucherIds(table).filter((voucherId) => table.vouchers[voucherId].ownerParticipantId === first.id)).toHaveLength(1);
+
+    applyIntent(table, first.id, {
+      type: "platter_swap_ingredient",
+      giveIngredientId: first.ingredientId as string,
+      takeIngredientId: second.ingredientId as string
+    });
+
+    const snapshot = buildSnapshot(table, first.id);
+    expect(snapshot.platterVoucherGroups.find((group) => group.ingredientId === first.ingredientId)?.count).toBe(2);
+    expect(snapshot.ownHandGroups.find((group) => group.ingredientId === second.ingredientId)?.count).toBe(1);
+  });
+
+  it("allows prepared food parts to be swapped through the platter during play", () => {
+    const { table } = startAndDeposit(7, "playing-food-part-swap");
+    const participant = activeParticipants(table)[0] as Participant;
+    completeRecipeBySetup(table, participant.id);
+    applyIntent(table, participant.id, { type: "prepare" });
+    expect(table.phase).toBe("playing");
+
+    const givePartId = inventoryDishPartIds(table, participant.id)[0] as string;
+    const takeVoucherId = platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId !== participant.id) as string;
+
+    applyIntent(table, participant.id, {
+      type: "platter_asset_swap",
+      give: { kind: "dish_part", id: givePartId },
+      take: { kind: "voucher", id: takeVoucherId }
+    });
+
+    expect(table.dishParts[givePartId].location).toEqual({ type: "platter" });
+    expect(table.vouchers[takeVoucherId].location).toEqual({ type: "hand", participantId: participant.id });
+  });
+
   it("locks structured offer cards and resolves an accepted exchange", () => {
     const { table } = startAndDeposit(7);
     const from = activeParticipants(table)[0] as Participant;
@@ -1035,7 +1093,14 @@ describe("platter, offers, and visibility", () => {
     expect(otherSnapshot.ownFoodParts.map((part) => part.id)).not.toContain(partId);
     expect(otherSnapshot.dishParts.map((part) => part.id)).not.toContain(partId);
     expect(witnessSnapshot.allFoodParts).toBeUndefined();
-    expect(witnessSnapshot.dishParts.map((part) => part.id)).toContain(partId);
+    expect(witnessSnapshot.dishParts.map((part) => part.id)).not.toContain(partId);
+    expect(witnessSnapshot.foodPartLocationSummary).toContainEqual(
+      expect.objectContaining({
+        dishId: table.dishParts[partId].dishId,
+        location: { type: "inventory", participantId: owner.id },
+        count: DISH_PARTS_PER_DISH
+      })
+    );
   });
 
   it("defaults missing transaction history to an empty snapshot list", () => {
@@ -1068,14 +1133,21 @@ describe("platter, offers, and visibility", () => {
     expect(witness.participant.role).toBe("witness");
     expect(snapshot.allHands).toBeUndefined();
     expect(snapshot.allFoodParts).toBeUndefined();
-    expect(snapshot.allVouchers).toBeDefined();
+    expect(snapshot.allVouchers).toBeUndefined();
     expect(snapshot.allRecipes).toBeDefined();
-    expect(snapshot.allVouchers?.filter((voucher) => voucher.location.type === "hand")).not.toHaveLength(0);
+    expect(snapshot.foodPartLocationSummary).toBeDefined();
+    expect(snapshot.voucherLocationSummary).toBeDefined();
+    expect(snapshot.voucherLocationSummary?.filter((summary) => summary.location.type === "hand")).not.toHaveLength(0);
   });
 
   it("keeps running-game witness snapshots compact enough for Godot websocket frames", () => {
     const { store, table } = startAndDeposit(7, "compact-witness");
     const participants = activeParticipants(table);
+
+    for (const participant of participants) {
+      completeRecipeBySetup(table, participant.id);
+      applyIntent(table, participant.id, { type: "prepare" });
+    }
 
     for (let index = 0; index < 180; index += 1) {
       const participant = participants[index % participants.length];
@@ -1092,7 +1164,56 @@ describe("platter, offers, and visibility", () => {
 
     expect(snapshot.allHands).toBeUndefined();
     expect(snapshot.allFoodParts).toBeUndefined();
+    expect(snapshot.dishParts.length).toBe(platterDishPartIds(table).length);
+    expect(snapshot.foodPartLocationSummary).toBeDefined();
+    expect(snapshot.transactionHistoryComplete).toBe(false);
+    expect(snapshot.transactionHistoryTotal).toBe(table.transactionHistory.length);
+    expect(snapshot.transactionHistory).toHaveLength(100);
     expect(payloadBytes).toBeLessThan(64 * 1024);
+  });
+
+  it("keeps mature reconnect snapshots and normal deltas within load-test budgets", () => {
+    const { store, table } = startAndDeposit(7, "payload-budget");
+    prepareAllDishesBySetup(table);
+    expect(table.phase).toBe("eating");
+
+    const witness = store.joinTable(table.code, "Observer", true);
+    const witnessPayloadBytes = Buffer.byteLength(JSON.stringify({ type: "snapshot", snapshot: buildSnapshot(table, witness.participant.id) }), "utf8");
+    const participant = activeParticipants(table)[0] as Participant;
+    const activePayloadBytes = Buffer.byteLength(JSON.stringify({ type: "snapshot", snapshot: buildSnapshot(table, participant.id) }), "utf8");
+
+    const hub = new ConnectionHub();
+    const messages: string[] = [];
+    hub.register({
+      tableCode: table.code,
+      participantId: participant.id,
+      send: (payload) => messages.push(payload)
+    });
+    hub.broadcastTable(table);
+    messages.length = 0;
+
+    for (let index = 0; index < 20; index += 1) {
+      const part = Object.values(table.dishParts).find(
+        (candidate) => candidate.location.type === "inventory" && candidate.location.participantId === participant.id
+      );
+      if (!part) {
+        break;
+      }
+      applyIntent(table, participant.id, { type: "bite", dishId: part.dishId });
+      hub.broadcastTable(table);
+    }
+
+    const deltaSizes = messages
+      .map((payload) => ({ payload, bytes: Buffer.byteLength(payload, "utf8") }))
+      .filter(({ payload }) => JSON.parse(payload).type === "delta")
+      .map(({ bytes }) => bytes)
+      .sort((left, right) => left - right);
+    const p95DeltaBytes = deltaSizes[Math.min(deltaSizes.length - 1, Math.ceil(deltaSizes.length * 0.95) - 1)] ?? 0;
+
+    expect(activePayloadBytes).toBeLessThan(64 * 1024);
+    expect(witnessPayloadBytes).toBeLessThan(24 * 1024);
+    expect(Math.max(...deltaSizes)).toBeLessThan(16 * 1024);
+    expect(p95DeltaBytes).toBeLessThan(4 * 1024);
   });
 
   it("enforces bot channel restrictions", () => {
@@ -1180,6 +1301,70 @@ describe("platter, offers, and visibility", () => {
     expect(secondSnapshot.ownHand.map((voucher) => voucher.location.participantId).every((id) => id === second.id)).toBe(true);
     expect(firstSnapshot.allHands).toBeUndefined();
     expect(secondSnapshot.allHands).toBeUndefined();
+  });
+
+  it("sends a full snapshot first and dirty deltas after successful mutations", () => {
+    const { table } = makeHarness(7, "delta-protocol");
+    const host = table.participants[table.hostParticipantId];
+    const hub = new ConnectionHub();
+    const messages: Array<{
+      type: string;
+      snapshot?: ReturnType<typeof buildSnapshot>;
+      patch?: Partial<ReturnType<typeof buildSnapshot>>;
+      append?: { transactionHistory?: unknown[]; participants?: unknown[] };
+    }> = [];
+    hub.register({
+      tableCode: table.code,
+      participantId: host.id,
+      send: (payload) => messages.push(JSON.parse(payload))
+    });
+
+    hub.broadcastTable(table);
+    expect(messages.at(-1)?.type).toBe("snapshot");
+    const firstVersion = messages.at(-1)?.snapshot?.version;
+
+    applyIntent(table, host.id, { type: "set_target_dish_count", count: 3 });
+    hub.broadcastTable(table);
+
+    const delta = messages.at(-1);
+    expect(delta?.type).toBe("delta");
+    expect(delta?.patch?.version).toBe(table.version);
+    expect(delta?.patch?.targetDishCount).toBe(3);
+    expect(delta?.patch?.participants).toBeUndefined();
+    expect(delta?.append?.transactionHistory).toEqual([]);
+    expect(table.version).toBeGreaterThan(firstVersion ?? -1);
+
+    applyIntent(table, host.id, { type: "set_role", participantId: host.id, role: "witness" });
+    hub.broadcastTable(table);
+
+    const participantDelta = messages.at(-1);
+    expect(participantDelta?.type).toBe("delta");
+    expect(participantDelta?.patch?.participants).toBeUndefined();
+    expect(participantDelta?.append?.participants).toContainEqual(expect.objectContaining({ id: host.id, role: "witness" }));
+  });
+
+  it("sends a full snapshot to a reconnected socket", () => {
+    const { table } = makeHarness(7, "delta-reconnect");
+    const host = table.participants[table.hostParticipantId];
+    const hub = new ConnectionHub();
+    const firstMessages: unknown[] = [];
+    const firstConnection = hub.register({
+      tableCode: table.code,
+      participantId: host.id,
+      send: (payload) => firstMessages.push(JSON.parse(payload))
+    });
+    hub.broadcastTable(table);
+    hub.unregister(table.code, firstConnection.id);
+
+    const reconnectMessages: Array<{ type: string }> = [];
+    hub.register({
+      tableCode: table.code,
+      participantId: host.id,
+      send: (payload) => reconnectMessages.push(JSON.parse(payload))
+    });
+    hub.broadcastTable(table);
+
+    expect(reconnectMessages.at(-1)?.type).toBe("snapshot");
   });
 
   it("keeps a disconnected active human seat reclaimable until the host converts it", () => {
@@ -1622,6 +1807,34 @@ describe("HTTP app", () => {
     expect(joined.statusCode).toBe(200);
     const snapshot = (messages.at(-1) as { snapshot: ReturnType<typeof buildSnapshot> }).snapshot;
     expect(snapshot.participants).toHaveLength(2);
+    await app.close();
+  });
+
+  it("exports the full transaction history as authorized CSV", async () => {
+    const store = new TableStore();
+    const app = await buildApp({ store });
+    const created = store.createTable("Host", "csv-export");
+    for (let index = 0; index < 6; index += 1) {
+      store.joinTable(created.table.code, `Player ${index + 2}`);
+    }
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+    store.handleIntent(created.table.code, created.seatToken, { type: "deposit_ingredient" }, false);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/tables/${created.table.code}/transactions.csv?seatToken=${created.seatToken}`
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/csv");
+    expect(response.body).toContain("Name,Action,Counterparty,Item out,Item back");
+    expect(response.body).toContain("Deposit");
+
+    const forbidden = await app.inject({
+      method: "GET",
+      url: `/tables/${created.table.code}/transactions.csv?seatToken=bad-token`
+    });
+    expect(forbidden.statusCode).toBe(400);
     await app.close();
   });
 });

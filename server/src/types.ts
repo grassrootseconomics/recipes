@@ -6,6 +6,7 @@ export type VoucherLocationType = "hand" | "platter" | "placed" | "holding" | "o
 export type DishPartLocationType = "inventory" | "platter" | "eaten";
 export type OfferStatus = "pending" | "accepted" | "refused" | "cancelled";
 export type PlatterAssetKind = "voucher" | "dish_part";
+export type AggregateAssetKind = "voucher" | "dish_part";
 
 export interface Ingredient {
   id: string;
@@ -114,6 +115,34 @@ export interface DishPart {
   location: DishPartLocation;
 }
 
+export interface FoodPartLocationSummary {
+  dishId: string;
+  dishName: string;
+  unitSingular: string;
+  unitPlural: string;
+  location: DishPartLocation;
+  count: number;
+}
+
+export interface VoucherGroup {
+  ingredientId: string;
+  ownerParticipantId: string;
+  count: number;
+}
+
+export interface VoucherLocationSummary extends VoucherGroup {
+  location: VoucherLocation;
+}
+
+export interface DishPartGroup {
+  dishId: string;
+  dishName: string;
+  makerParticipantId: string;
+  unitSingular: string;
+  unitPlural: string;
+  count: number;
+}
+
 export type TransactionAction = "Deposit" | "Swap" | "Settlement Swap" | "Exchange" | "Redeem" | "Prepare" | "Eat";
 
 export interface TransactionRecord {
@@ -140,6 +169,7 @@ export interface TableTimer {
 export interface Table {
   code: string;
   seed: string;
+  version: number;
   phase: TablePhase;
   paused: boolean;
   hostParticipantId: string;
@@ -181,6 +211,7 @@ export interface PublicParticipant {
 export interface Snapshot {
   tableCode: string;
   seed: string;
+  version: number;
   phase: TablePhase;
   paused: boolean;
   viewerParticipantId?: string;
@@ -191,9 +222,17 @@ export interface Snapshot {
   ingredients: Ingredient[];
   platter: Voucher[];
   platterFoodParts: DishPart[];
+  ownHandGroups: VoucherGroup[];
+  platterVoucherGroups: VoucherGroup[];
+  ownFoodPartGroups: DishPartGroup[];
+  platterFoodPartGroups: DishPartGroup[];
   dishes: Dish[];
   dishParts: DishPart[];
+  foodPartLocationSummary?: FoodPartLocationSummary[];
   transactionHistory: TransactionRecord[];
+  transactionCursor: number;
+  transactionHistoryComplete?: boolean;
+  transactionHistoryTotal?: number;
   dishCounts: Record<string, number>;
   winners: string[];
   targetDishCount: number;
@@ -206,12 +245,31 @@ export interface Snapshot {
   allHands?: Record<string, Voucher[]>;
   allFoodParts?: DishPart[];
   allRecipes?: Record<string, Recipe>;
+  voucherLocationSummary?: VoucherLocationSummary[];
   allVouchers?: Voucher[];
 }
 
 export interface PlatterAssetRef {
   kind: PlatterAssetKind;
   id: string;
+}
+
+export type AggregatePlatterAssetRef =
+  | { kind: "voucher"; ingredientId: string; ownerParticipantId?: string }
+  | { kind: "dish_part"; dishId: string; makerParticipantId?: string };
+
+export interface SnapshotDelta {
+  type: "delta";
+  tableCode: string;
+  viewerParticipantId?: string;
+  baseVersion: number;
+  version: number;
+  patch: Partial<Snapshot>;
+  append: {
+    transactionHistory?: TransactionRecord[];
+    dishes?: Dish[];
+    participants?: PublicParticipant[];
+  };
 }
 
 export type Intent =
@@ -228,8 +286,11 @@ export type Intent =
   | { type: "start" }
   | { type: "stop" }
   | { type: "deposit"; voucherId: string }
+  | { type: "deposit_ingredient"; ingredientId?: string }
   | { type: "platter_swap"; giveVoucherId: string; takeVoucherId: string }
+  | { type: "platter_swap_ingredient"; giveIngredientId: string; takeIngredientId: string; quantity?: number }
   | { type: "platter_asset_swap"; give: PlatterAssetRef; take: PlatterAssetRef }
+  | { type: "platter_asset_swap_aggregate"; give: AggregatePlatterAssetRef; take: AggregatePlatterAssetRef; quantity?: number }
   | { type: "create_offer"; toParticipantId: string; offeredVoucherIds: string[]; requested: OfferRequest }
   | { type: "respond_offer"; offerId: string; response: "accept" | "refuse"; voucherIds?: string[] }
   | { type: "cancel_offer"; offerId: string }

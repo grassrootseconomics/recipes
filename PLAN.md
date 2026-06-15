@@ -35,7 +35,9 @@
 
 - [ ] Add persistence if the design requires restart recovery.
 - [ ] Add server deployment configuration.
-- [ ] Add load and soak tests for 20-player tables with bots.
+- [x] Add single-table load tests for 20-player games.
+- [ ] Add concurrent load and soak tests for 100+ simultaneous tables with 7-20 players each.
+- [ ] Optimize live deltas so mature 20-player game deltas stay near the 4 KB p95 target.
 - [ ] Add parity tests or fixtures so offline bot-only rules stay aligned with online server rules.
 - [ ] Add tests for host-controlled seats, round-robin turn enforcement, market-style asynchronous actions, and offline parity.
 - [x] Add fixture coverage for generated recipe catalogs across 7-20 player configurations.

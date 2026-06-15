@@ -10,6 +10,7 @@
     "dev": "npm --workspace server run dev",
     "build": "npm --workspace server run build",
     "generate:recipes": "npm --workspace server run generate:recipes",
+    "simulate:game": "npm --workspace server run simulate:game --",
     "test": "npm --workspace server run test",
     "test:run": "npm --workspace server run test:run",
     "typecheck": "npm --workspace server run typecheck"

@@ -117,6 +117,34 @@ Vitest watch mode:
 npm test
 ```
 
+## Load Simulation
+
+Run a seven-seat game through the real HTTP/WebSocket API:
+
+```bash
+cd /home/wor/src/recipes
+npm run simulate:game -- --dish-goal=4 --profile=local
+npm run simulate:game -- --players=20 --dish-goal=1 --profile=local
+npm run simulate:game -- --games=100 --player-min=7 --player-max=20 --concurrency=10 --dish-goal=1 --profile=local
+npm run simulate:game -- --games=100 --player-min=7 --player-max=20 --concurrency=10 --dish-goal=1 --profile=local --suite-max-duration-ms=300000
+```
+
+Profiles:
+
+- `local`: no artificial network delay.
+- `jitter`: 100-800 ms delay before intents.
+- `disconnect`: periodic socket close/reconnect.
+- `bad`: jitter, reconnects, and intentional stale/invalid actions.
+
+Reports are written to:
+
+```text
+tmp/simulations/
+```
+
+Single-game reports include full per-client frame arrays for debugging. Multi-game suite reports keep compact per-game rows and aggregate frame/byte metrics so 100+ table runs stay readable.
+Use `--suite-max-duration-ms` to bound the entire multi-game run; per-game `--max-duration-ms` still applies inside the suite.
+
 ## Recipe Catalog
 
 The recipe catalog generator creates named recipe sets for player counts 7 through 20. For each player count it uses one committed ingredient set generated once from the 20 common ingredients, then creates four recipes per ingredient: one initial recipe and three followups.

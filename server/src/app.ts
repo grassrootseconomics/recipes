@@ -5,6 +5,7 @@ import { MAX_STOCK_PER_INGREDIENT, MIN_STOCK_PER_INGREDIENT } from "./constants.
 import { GameError } from "./game.js";
 import { ConnectionHub } from "./hub.js";
 import { TableStore } from "./store.js";
+import { transactionsToCsv } from "./transactions.js";
 import type { Intent } from "./types.js";
 
 const createTableSchema = z.object({
@@ -16,6 +17,11 @@ const joinTableSchema = z.object({
   name: z.string().max(40).default(""),
   asWitness: z.boolean().default(false)
 });
+
+const aggregateAssetRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("voucher"), ingredientId: z.string(), ownerParticipantId: z.string().optional() }),
+  z.object({ kind: z.literal("dish_part"), dishId: z.string(), makerParticipantId: z.string().optional() })
+]);
 
 const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("leave_table") }),
@@ -31,11 +37,24 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("start") }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("deposit"), voucherId: z.string() }),
+  z.object({ type: z.literal("deposit_ingredient"), ingredientId: z.string().optional() }),
   z.object({ type: z.literal("platter_swap"), giveVoucherId: z.string(), takeVoucherId: z.string() }),
+  z.object({
+    type: z.literal("platter_swap_ingredient"),
+    giveIngredientId: z.string(),
+    takeIngredientId: z.string(),
+    quantity: z.number().int().positive().optional()
+  }),
   z.object({
     type: z.literal("platter_asset_swap"),
     give: z.object({ kind: z.enum(["voucher", "dish_part"]), id: z.string() }),
     take: z.object({ kind: z.enum(["voucher", "dish_part"]), id: z.string() })
+  }),
+  z.object({
+    type: z.literal("platter_asset_swap_aggregate"),
+    give: aggregateAssetRefSchema,
+    take: aggregateAssetRefSchema,
+    quantity: z.number().int().positive().optional()
   }),
   z.object({
     type: z.literal("create_offer"),
@@ -56,6 +75,12 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("prepare") }),
   z.object({ type: z.literal("bite"), dishId: z.string() })
 ]);
+
+const intentEnvelopeSchema = z.object({
+  type: z.literal("intent"),
+  clientIntentId: z.string().min(1).max(120),
+  intent: intentSchema
+});
 
 export interface AppOptions {
   store?: TableStore;
@@ -122,6 +147,17 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     };
   });
 
+  app.get("/tables/:code/transactions.csv", async (request, reply) => {
+    const params = z.object({ code: z.string() }).parse(request.params);
+    const query = z.object({ seatToken: z.string() }).parse(request.query);
+    const transactions = store.getTransactionsByToken(params.code, query.seatToken);
+    const filename = `recipes-transactions-${params.code.toLowerCase()}.csv`;
+    reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .send(transactionsToCsv(transactions));
+  });
+
   app.get("/tables/:code/socket", { websocket: true }, (socket, request) => {
     const params = z.object({ code: z.string() }).parse(request.params);
     const query = z.object({ seatToken: z.string() }).parse(request.query);
@@ -144,14 +180,33 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     }
 
     socket.on("message", (message: Buffer) => {
+      let clientIntentId: string | undefined;
       try {
         const parsed = JSON.parse(message.toString()) as unknown;
-        const intent = intentSchema.parse(parsed);
+        const envelope = parseSocketIntent(parsed);
+        clientIntentId = envelope.clientIntentId;
+        const intent = envelope.intent;
         store.handleIntent(tableCode, query.seatToken, intent);
         scheduleTimer(tableCode);
+        if (clientIntentId) {
+          socket.send(JSON.stringify({ type: "ack", clientIntentId, ok: true, version: store.requireTable(tableCode).version }));
+        }
         hub.broadcastTable(store.requireTable(tableCode));
       } catch (error) {
-        socket.send(JSON.stringify(errorPayload(error)));
+        const payload = errorPayload(error);
+        if (clientIntentId) {
+          socket.send(
+            JSON.stringify({
+              type: "ack",
+              clientIntentId,
+              ok: false,
+              errorCode: payload.errorCode,
+              description: payload.description
+            })
+          );
+        } else {
+          socket.send(JSON.stringify(payload));
+        }
       }
     });
 
@@ -220,4 +275,17 @@ function errorPayload(error: unknown) {
     return { type: "error", ok: false, errorCode: "internal_error", description: error.message };
   }
   return { type: "error", ok: false, errorCode: "internal_error", description: "Unknown error" };
+}
+
+function parseSocketIntent(parsed: unknown): { intent: Intent; clientIntentId?: string } {
+  if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    "type" in parsed &&
+    (parsed as { type?: unknown }).type === "intent"
+  ) {
+    const envelope = intentEnvelopeSchema.parse(parsed);
+    return { intent: envelope.intent, clientIntentId: envelope.clientIntentId };
+  }
+  return { intent: intentSchema.parse(parsed) };
 }

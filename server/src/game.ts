@@ -14,6 +14,7 @@ import {
 import { ingredientsForPlayerCount, maxIngredientDemandForPlayerCount } from "./recipeCatalog.js";
 import { generateRecipe } from "./recipes.js";
 import type {
+  AggregatePlatterAssetRef,
   BotType,
   DishPart,
   Intent,
@@ -76,6 +77,7 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
   return {
     code,
     seed,
+    version: 0,
     phase: "lobby",
     paused: false,
     hostParticipantId: host.id,
@@ -101,6 +103,7 @@ export function addHumanParticipant(table: Table, name: string, seatToken: strin
   table.participants[participant.id] = participant;
   table.participantOrder.push(participant.id);
   table.turn += 1;
+  table.version += 1;
   return participant;
 }
 
@@ -111,6 +114,9 @@ export function disconnectParticipant(table: Table, participant: Participant): b
 
   const wasConnected = participant.connected;
   participant.connected = false;
+  if (wasConnected) {
+    table.version += 1;
+  }
   return wasConnected;
 }
 
@@ -170,11 +176,20 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       case "deposit":
         depositToPlatter(table, actor, intent.voucherId);
         break;
+      case "deposit_ingredient":
+        depositIngredientToPlatter(table, actor, intent.ingredientId);
+        break;
       case "platter_swap":
         swapWithPlatter(table, actor, intent.giveVoucherId, intent.takeVoucherId);
         break;
+      case "platter_swap_ingredient":
+        swapIngredientWithPlatter(table, actor, intent.giveIngredientId, intent.takeIngredientId, intent.quantity ?? 1);
+        break;
       case "platter_asset_swap":
         swapPlatterAssets(table, actor, intent.give, intent.take);
+        break;
+      case "platter_asset_swap_aggregate":
+        swapAggregatePlatterAssets(table, actor, intent.give, intent.take, intent.quantity ?? 1);
         break;
       case "create_offer":
         createOffer(table, actor, intent.toParticipantId, intent.offeredVoucherIds, intent.requested);
@@ -204,6 +219,7 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
         assertNever(intent);
     }
     autoRefuseUnavailableOffers(table);
+    table.version += 1;
   } catch (error) {
     restoreTable(table, before);
     throw error;
@@ -226,6 +242,7 @@ export function expireTimer(table: Table, nowMs = Date.now()): boolean {
   table.turn += 1;
   table.timer.expiredAtMs = nowMs;
   enterEndgamePhase(table);
+  table.version += 1;
   return true;
 }
 
@@ -645,6 +662,18 @@ function depositToPlatter(table: Table, actor: Participant, voucherId: string): 
   }
 }
 
+function depositIngredientToPlatter(table: Table, actor: Participant, ingredientId?: string): void {
+  const requestedIngredientId = ingredientId ?? actor.ingredientId;
+  const voucher = Object.values(table.vouchers)
+    .filter((candidate) => candidate.location.type === "hand" && candidate.location.participantId === actor.id)
+    .filter((candidate) => !requestedIngredientId || candidate.ingredientId === requestedIngredientId)
+    .sort((left, right) => left.id.localeCompare(right.id))[0];
+  if (!voucher) {
+    throw new GameError("No matching voucher is available to deposit.", "voucher_not_in_hand");
+  }
+  depositToPlatter(table, actor, voucher.id);
+}
+
 function swapWithPlatter(table: Table, actor: Participant, giveVoucherId: string, takeVoucherId: string): void {
   requirePhase(table, "playing");
   requireActive(actor);
@@ -660,9 +689,36 @@ function swapWithPlatter(table: Table, actor: Participant, giveVoucherId: string
   recordTransaction(table, actor, "Swap", "Platter", ingredientName(giveVoucher.ingredientId), ingredientName(takeVoucher.ingredientId));
 }
 
+function swapIngredientWithPlatter(table: Table, actor: Participant, giveIngredientId: string, takeIngredientId: string, quantity: number): void {
+  if (quantity !== 1) {
+    throw new GameError("Aggregate platter swaps currently support quantity 1.", "invalid_quantity");
+  }
+  const giveVoucher = Object.values(table.vouchers)
+    .filter(
+      (candidate) =>
+        candidate.location.type === "hand" &&
+        candidate.location.participantId === actor.id &&
+        candidate.ingredientId === giveIngredientId
+    )
+    .sort((left, right) => left.id.localeCompare(right.id))[0];
+  if (!giveVoucher) {
+    throw new GameError("No matching held voucher is available to give.", "voucher_not_in_hand");
+  }
+  const takeVoucher = Object.values(table.vouchers)
+    .filter((candidate) => candidate.location.type === "platter" && candidate.ingredientId === takeIngredientId)
+    .sort((left, right) => left.id.localeCompare(right.id))[0];
+  if (!takeVoucher) {
+    throw new GameError("No matching platter voucher is available to take.", "voucher_not_in_platter");
+  }
+  swapWithPlatter(table, actor, giveVoucher.id, takeVoucher.id);
+}
+
 function swapPlatterAssets(table: Table, actor: Participant, give: PlatterAssetRef, take: PlatterAssetRef): void {
-  requirePhase(table, "settlement");
+  if (table.phase !== "playing" && table.phase !== "settlement") {
+    throw new GameError("Action requires phase playing or settlement.", "invalid_phase");
+  }
   requireActive(actor);
+  ensureBotCanUsePool(actor);
   if (give.kind === take.kind && give.id === take.id) {
     throw new GameError("Cannot swap an asset for itself.", "invalid_platter_swap");
   }
@@ -674,7 +730,22 @@ function swapPlatterAssets(table: Table, actor: Participant, give: PlatterAssetR
   moveAssetToPlatter(giveAsset);
   moveAssetToInventory(takeAsset, actor.id);
   recordTransaction(table, actor, "Settlement Swap", "Platter", platterAssetLabel(giveAsset), platterAssetLabel(takeAsset));
-  advanceSettlementIfReady(table);
+  if (table.phase === "settlement") {
+    advanceSettlementIfReady(table);
+  }
+}
+
+function swapAggregatePlatterAssets(
+  table: Table,
+  actor: Participant,
+  give: AggregatePlatterAssetRef,
+  take: AggregatePlatterAssetRef,
+  quantity: number
+): void {
+  if (quantity !== 1) {
+    throw new GameError("Aggregate settlement swaps currently support quantity 1.", "invalid_quantity");
+  }
+  swapPlatterAssets(table, actor, aggregateAssetToExactRef(table, actor.id, give, "inventory"), aggregateAssetToExactRef(table, actor.id, take, "platter"));
 }
 
 function createOffer(
@@ -1075,6 +1146,51 @@ function requirePlatterAsset(table: Table, ref: PlatterAssetRef): ResolvedPlatte
   }
 }
 
+function aggregateAssetToExactRef(
+  table: Table,
+  participantId: string,
+  ref: AggregatePlatterAssetRef,
+  source: "inventory" | "platter"
+): PlatterAssetRef {
+  if (ref.kind === "voucher") {
+    const voucher = Object.values(table.vouchers)
+      .filter((candidate) => candidate.ingredientId === ref.ingredientId)
+      .filter((candidate) => !ref.ownerParticipantId || candidate.ownerParticipantId === ref.ownerParticipantId)
+      .filter((candidate) => {
+        if (source === "inventory") {
+          return candidate.location.type === "hand" && candidate.location.participantId === participantId;
+        }
+        return candidate.location.type === "platter";
+      })
+      .sort((left, right) => left.id.localeCompare(right.id))[0];
+    if (!voucher) {
+      throw new GameError(
+        source === "inventory" ? "No matching held voucher is available to give." : "No matching platter voucher is available to take.",
+        source === "inventory" ? "voucher_not_in_hand" : "voucher_not_in_platter"
+      );
+    }
+    return { kind: "voucher", id: voucher.id };
+  }
+
+  const part = Object.values(table.dishParts ?? {})
+    .filter((candidate) => candidate.dishId === ref.dishId)
+    .filter((candidate) => !ref.makerParticipantId || candidate.makerParticipantId === ref.makerParticipantId)
+    .filter((candidate) => {
+      if (source === "inventory") {
+        return candidate.location.type === "inventory" && candidate.location.participantId === participantId;
+      }
+      return candidate.location.type === "platter";
+    })
+    .sort((left, right) => left.id.localeCompare(right.id))[0];
+  if (!part) {
+    throw new GameError(
+      source === "inventory" ? "No matching held dish part is available to give." : "No matching platter dish part is available to take.",
+      source === "inventory" ? "dish_part_not_held" : "dish_part_not_in_platter"
+    );
+  }
+  return { kind: "dish_part", id: part.id };
+}
+
 function requireDishPart(table: Table, dishPartId: string): DishPart {
   const part = table.dishParts?.[dishPartId];
   if (!part) {
@@ -1129,15 +1245,11 @@ function platterAssetLabel(asset: ResolvedPlatterAsset): string {
 }
 
 function dishPartLabel(part: DishPart): string {
-  const parts = part.id.split("_");
-  const partNumber = parts.at(-1);
-  return `${part.dishName} ${part.unitSingular}${partNumber ? ` ${partNumber}` : ""}`;
+  return `${part.dishName} ${part.unitSingular}`;
 }
 
 function voucherCardLabel(voucher: Voucher): string {
-  const parts = voucher.id.split("_");
-  const cardNumber = parts.at(-1);
-  return `${ingredientName(voucher.ingredientId)} card${cardNumber ? ` #${cardNumber}` : ""}`;
+  return ingredientName(voucher.ingredientId);
 }
 
 function ingredientName(ingredientId: string): string {

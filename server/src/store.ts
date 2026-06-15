@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { runBots } from "./bots.js";
 import { addHumanParticipant, applyIntent, createEmptyTable, disconnectParticipant, expireTimer, GameError } from "./game.js";
 import { buildSnapshot } from "./snapshots.js";
-import type { CreateTableResult, Intent, JoinTableResult, Participant, Snapshot, Table } from "./types.js";
+import type { CreateTableResult, Intent, JoinTableResult, Participant, Snapshot, Table, TransactionRecord } from "./types.js";
 
 export class TableStore {
   readonly tables = new Map<string, Table>();
@@ -39,6 +39,12 @@ export class TableStore {
     return buildSnapshot(table, participant.id);
   }
 
+  getTransactionsByToken(code: string, seatToken: string): TransactionRecord[] {
+    const table = this.requireTable(code);
+    this.requireParticipantByToken(table, seatToken);
+    return [...(table.transactionHistory ?? [])];
+  }
+
   getSnapshotForParticipantId(code: string, participantId: string): Snapshot {
     const table = this.requireTable(code);
     if (!table.participants[participantId]) {
@@ -61,7 +67,11 @@ export class TableStore {
     const table = this.requireTable(code);
     const participant = this.requireParticipantByToken(table, seatToken);
     if (participant.kind === "human") {
+      const wasConnected = participant.connected;
       participant.connected = true;
+      if (!wasConnected) {
+        table.version += 1;
+      }
     }
     return participant;
   }
