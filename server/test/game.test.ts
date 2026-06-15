@@ -1034,7 +1034,8 @@ describe("platter, offers, and visibility", () => {
     expect(ownerSnapshot.dishParts.map((part) => part.id)).toContain(partId);
     expect(otherSnapshot.ownFoodParts.map((part) => part.id)).not.toContain(partId);
     expect(otherSnapshot.dishParts.map((part) => part.id)).not.toContain(partId);
-    expect(witnessSnapshot.allFoodParts?.map((part) => part.id)).toContain(partId);
+    expect(witnessSnapshot.allFoodParts).toBeUndefined();
+    expect(witnessSnapshot.dishParts.map((part) => part.id)).toContain(partId);
   });
 
   it("defaults missing transaction history to an empty snapshot list", () => {
@@ -1065,9 +1066,33 @@ describe("platter, offers, and visibility", () => {
     const snapshot = buildSnapshot(table, witness.participant.id);
 
     expect(witness.participant.role).toBe("witness");
-    expect(snapshot.allHands).toBeDefined();
-    expect(snapshot.allFoodParts).toBeDefined();
-    expect(Object.keys(snapshot.allHands ?? {})).toHaveLength(table.participantOrder.length);
+    expect(snapshot.allHands).toBeUndefined();
+    expect(snapshot.allFoodParts).toBeUndefined();
+    expect(snapshot.allVouchers).toBeDefined();
+    expect(snapshot.allRecipes).toBeDefined();
+    expect(snapshot.allVouchers?.filter((voucher) => voucher.location.type === "hand")).not.toHaveLength(0);
+  });
+
+  it("keeps running-game witness snapshots compact enough for Godot websocket frames", () => {
+    const { store, table } = startAndDeposit(7, "compact-witness");
+    const participants = activeParticipants(table);
+
+    for (let index = 0; index < 180; index += 1) {
+      const participant = participants[index % participants.length];
+      const giveVoucherId = handVoucherIds(table, participant.id)[0];
+      const takeVoucherId = platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId !== participant.id);
+      if (giveVoucherId && takeVoucherId) {
+        applyIntent(table, participant.id, { type: "platter_swap", giveVoucherId, takeVoucherId });
+      }
+    }
+
+    const witness = store.joinTable(table.code, "Observer");
+    const snapshot = buildSnapshot(table, witness.participant.id);
+    const payloadBytes = Buffer.byteLength(JSON.stringify({ type: "snapshot", snapshot }), "utf8");
+
+    expect(snapshot.allHands).toBeUndefined();
+    expect(snapshot.allFoodParts).toBeUndefined();
+    expect(payloadBytes).toBeLessThan(64 * 1024);
   });
 
   it("enforces bot channel restrictions", () => {

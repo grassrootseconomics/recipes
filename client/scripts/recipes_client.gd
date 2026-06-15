@@ -4,6 +4,8 @@ signal snapshot_received(snapshot: Dictionary)
 signal error_received(error: Dictionary)
 signal connection_changed(status: String)
 
+const RECONNECT_DELAY_SECONDS := 1.5
+
 var server_url := "http://127.0.0.1:3000"
 var table_code := ""
 var participant_id := ""
@@ -14,6 +16,8 @@ var _http_request: HTTPRequest
 var _websocket := WebSocketPeer.new()
 var _socket_open := false
 var _reported_open := false
+var _should_reconnect := false
+var _reconnect_delay := -1.0
 
 
 func _ready() -> void:
@@ -24,6 +28,10 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	if not _socket_open:
+		if _should_reconnect and table_code != "" and seat_token != "" and _reconnect_delay >= 0.0:
+			_reconnect_delay -= _delta
+			if _reconnect_delay <= 0.0:
+				connect_socket()
 		return
 	_websocket.poll()
 	var state := _websocket.get_ready_state()
@@ -38,6 +46,8 @@ func _process(_delta: float) -> void:
 		_socket_open = false
 		_reported_open = false
 		connection_changed.emit("closed")
+		if _should_reconnect and table_code != "" and seat_token != "":
+			_reconnect_delay = RECONNECT_DELAY_SECONDS
 
 
 func create_table(host_name: String, seed: String = "") -> void:
@@ -58,6 +68,18 @@ func send_intent(intent: Dictionary) -> void:
 	_websocket.send_text(JSON.stringify(intent))
 
 
+func is_socket_connected() -> bool:
+	return _socket_open and _websocket.get_ready_state() == WebSocketPeer.STATE_OPEN
+
+
+func has_table_session(code: String = "") -> bool:
+	if table_code == "" or seat_token == "":
+		return false
+	if code.strip_edges() == "":
+		return true
+	return table_code == code.strip_edges().to_upper()
+
+
 func leave_table() -> void:
 	if _socket_open and _websocket.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		_websocket.send_text(JSON.stringify({"type": "leave_table"}))
@@ -70,6 +92,8 @@ func disconnect_local() -> void:
 		_websocket.close()
 	_socket_open = false
 	_reported_open = false
+	_should_reconnect = false
+	_reconnect_delay = -1.0
 	table_code = ""
 	participant_id = ""
 	seat_token = ""
@@ -84,10 +108,13 @@ func connect_socket() -> void:
 		_websocket.close()
 	_websocket = WebSocketPeer.new()
 	_reported_open = false
+	_should_reconnect = true
+	_reconnect_delay = -1.0
 	var ws_url := server_url.replace("https://", "wss://").replace("http://", "ws://")
 	var err := _websocket.connect_to_url("%s/tables/%s/socket?seatToken=%s" % [ws_url, table_code, seat_token])
 	if err != OK:
 		error_received.emit({"description": "Could not connect WebSocket: %s" % err})
+		_reconnect_delay = RECONNECT_DELAY_SECONDS
 		return
 	_socket_open = true
 	connection_changed.emit("connecting")

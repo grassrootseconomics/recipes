@@ -62,10 +62,6 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string): Snaps
   };
 
   if (isWitness) {
-    snapshot.allHands = Object.fromEntries(
-      table.participantOrder.map((participantId) => [participantId, handVoucherIds(table, participantId).map((id) => cloneVoucher(table.vouchers[id]))])
-    );
-    snapshot.allFoodParts = Object.values(table.dishParts ?? {}).map(cloneDishPart);
     snapshot.allRecipes = Object.fromEntries(
       Object.entries(table.recipes).map(([participantId, recipe]) => [participantId, cloneRecipe(recipe) as Recipe])
     );

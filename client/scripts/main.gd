@@ -41,6 +41,8 @@ var _confirm_leave_dialog: ConfirmationDialog
 var _confirm_close_dialog: ConfirmationDialog
 var _csv_file_dialog: FileDialog
 var _csv_export_status_label: Label
+var _select_popup: PopupPanel
+var _select_popup_list: VBoxContainer
 
 var _selected_hand_voucher_id := ""
 var _selected_platter_voucher_id := ""
@@ -54,6 +56,7 @@ var _pending_csv := ""
 var _pending_csv_filename := ""
 var _last_csv_export_status := ""
 var _left_table_codes := {}
+var _active_select_key := ""
 
 
 func _ready() -> void:
@@ -178,6 +181,16 @@ func _build_ui() -> void:
 	_csv_file_dialog.canceled.connect(_on_csv_save_canceled)
 	add_child(_csv_file_dialog)
 
+	_select_popup = PopupPanel.new()
+	_select_popup_list = VBoxContainer.new()
+	_select_popup_list.add_theme_constant_override("separation", 6)
+	_select_popup_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_select_popup.add_child(_select_popup_list)
+	_select_popup.popup_hide.connect(func() -> void:
+		_active_select_key = ""
+	)
+	add_child(_select_popup)
+
 	_set_lobby_ui_visible(false)
 	_set_gameplay_ui_visible(false)
 
@@ -274,6 +287,19 @@ func _option_button() -> OptionButton:
 	option.fit_to_longest_item = false
 	option.add_theme_stylebox_override("focus", _control_focus_style())
 	return option
+
+
+func _select_button(label: String, select_key: String) -> Button:
+	var button := Button.new()
+	button.text = label
+	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	button.custom_minimum_size = Vector2(112, 44)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.add_theme_stylebox_override("focus", _control_focus_style())
+	button.pressed.connect(func() -> void:
+		_open_select_popup(select_key, button)
+	)
+	return button
 
 
 func _wrapped_label(text: String) -> Label:
@@ -409,11 +435,17 @@ func _on_join_pressed() -> void:
 		_confirm_close_table()
 		return
 	var code := _code_input.text.strip_edges().to_upper()
+	if RecipesClient.has_table_session(code):
+		RecipesClient.connect_socket()
+		return
 	RecipesClient.join_table(code, _name_input.text.strip_edges(), bool(_left_table_codes.get(code, false)))
 
 
 func _confirm_leave_table() -> void:
 	if RecipesClient.table_code == "":
+		return
+	if not RecipesClient.is_socket_connected():
+		RecipesClient.connect_socket()
 		return
 	_confirm_leave_dialog.popup_centered()
 
@@ -591,6 +623,10 @@ func _csv_field(value: Variant) -> String:
 
 
 func _on_snapshot_received(snapshot: Dictionary) -> void:
+	_render_snapshot(snapshot)
+
+
+func _render_snapshot(snapshot: Dictionary) -> void:
 	_code_input.text = str(snapshot.get("tableCode", RecipesClient.table_code))
 	_status_label.text = "Connected as %s" % RecipesClient.participant_id
 	var table_exists := _table_exists(snapshot)
@@ -613,6 +649,7 @@ func _on_snapshot_received(snapshot: Dictionary) -> void:
 	_platter_label.text = "%s:\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]
 	_hand_label.text = "Your inventory:\n%s" % _format_inventory_assets(snapshot)
 	_refresh_controls(snapshot)
+	_refresh_active_select_popup(snapshot)
 
 
 func _on_error_received(error: Dictionary) -> void:
@@ -628,10 +665,17 @@ func _on_connection_changed(status: String) -> void:
 		_set_lobby_ui_visible(_table_exists(RecipesClient.latest_snapshot))
 		_set_gameplay_ui_visible(_game_started(RecipesClient.latest_snapshot))
 	elif status == "closed":
-		_status_label.text = "Connection: %s" % status
-		_set_lobby_ui_visible(false)
-		_set_gameplay_ui_visible(false)
-		_refresh_connection_buttons({})
+		var snapshot := RecipesClient.latest_snapshot
+		if _table_exists(snapshot):
+			_status_label.text = "Connection closed. Showing last table state."
+			_refresh_connection_buttons(snapshot)
+			_set_lobby_ui_visible(true)
+			_set_gameplay_ui_visible(_game_started(snapshot))
+		else:
+			_status_label.text = "Connection: %s" % status
+			_set_lobby_ui_visible(false)
+			_set_gameplay_ui_visible(false)
+			_refresh_connection_buttons({})
 	else:
 		_status_label.text = "Connection: %s" % status
 
@@ -665,9 +709,14 @@ func _refresh_connection_buttons(snapshot: Dictionary) -> void:
 	if is_host:
 		_create_table_button.text = "Start New Table"
 		_join_table_button.text = "Close Table"
+	elif has_table and not RecipesClient.is_socket_connected():
+		_create_table_button.text = "Create Table"
+		_join_table_button.text = "Join"
+		_leave_table_button.text = "Reconnect"
 	else:
 		_create_table_button.text = "Create Table"
 		_join_table_button.text = "Join"
+		_leave_table_button.text = "Leave Table"
 
 	_create_table_button.disabled = false
 	_join_table_button.disabled = false
@@ -1036,6 +1085,7 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 		)
 		if needed_requirement.is_empty():
 			card_button.disabled = true
+			card_button.text = "Held %s" % voucher_label
 		else:
 			card_button.text = "Redeem %s for %s" % [voucher_label, ingredient_label]
 		_hand_controls.add_child(card_button)
@@ -1052,41 +1102,16 @@ func _add_platter_swap_controls(snapshot: Dictionary) -> void:
 		_voucher_label_by_id(hand, _selected_hand_voucher_id),
 		_voucher_label_by_id(platter, _selected_platter_voucher_id)
 	]))
-	var give_option := _option_button()
-	give_option.add_item("Select card to give")
-	give_option.set_item_metadata(0, "")
-	for raw_voucher in hand:
-		var voucher: Dictionary = raw_voucher
-		var voucher_id := str(voucher.get("id", ""))
-		var item_index := give_option.item_count
-		give_option.add_item(_voucher_label(voucher))
-		give_option.set_item_metadata(item_index, voucher_id)
-		if voucher_id == _selected_hand_voucher_id:
-			give_option.select(item_index)
-	give_option.item_selected.connect(func(index: int) -> void:
-		_selected_hand_voucher_id = str(give_option.get_item_metadata(index))
-		_refresh_controls(RecipesClient.latest_snapshot)
-	)
 	_platter_controls.add_child(_wrapped_label("Give"))
-	_platter_controls.add_child(give_option)
-
-	var take_option := _option_button()
-	take_option.add_item("Select card to take")
-	take_option.set_item_metadata(0, "")
-	for raw_voucher in platter:
-		var voucher: Dictionary = raw_voucher
-		var voucher_id := str(voucher.get("id", ""))
-		var item_index := take_option.item_count
-		take_option.add_item(_voucher_label(voucher))
-		take_option.set_item_metadata(item_index, voucher_id)
-		if voucher_id == _selected_platter_voucher_id:
-			take_option.select(item_index)
-	take_option.item_selected.connect(func(index: int) -> void:
-		_selected_platter_voucher_id = str(take_option.get_item_metadata(index))
-		_refresh_controls(RecipesClient.latest_snapshot)
-	)
+	_platter_controls.add_child(_select_button(
+		_voucher_label_by_id(hand, _selected_hand_voucher_id) if _selected_hand_voucher_id != "" else "Select card to give",
+		"platter_give"
+	))
 	_platter_controls.add_child(_wrapped_label("Take"))
-	_platter_controls.add_child(take_option)
+	_platter_controls.add_child(_select_button(
+		_voucher_label_by_id(platter, _selected_platter_voucher_id) if _selected_platter_voucher_id != "" else "Select card to take",
+		"platter_take"
+	))
 
 	var swap_button := _button("Swap Selected", func() -> void:
 		if _selected_hand_voucher_id == "" or _selected_platter_voucher_id == "":
@@ -1113,39 +1138,16 @@ func _add_platter_asset_swap_controls(snapshot: Dictionary) -> void:
 		_asset_label_by_key(take_assets, _selected_take_asset_key)
 	]))
 
-	var give_option := _option_button()
-	give_option.add_item("Select asset to give")
-	give_option.set_item_metadata(0, "")
-	for asset in give_assets:
-		var asset_key := str(asset.get("key", ""))
-		var item_index := give_option.item_count
-		give_option.add_item(str(asset.get("label", asset_key)))
-		give_option.set_item_metadata(item_index, asset_key)
-		if asset_key == _selected_give_asset_key:
-			give_option.select(item_index)
-	give_option.item_selected.connect(func(index: int) -> void:
-		_selected_give_asset_key = str(give_option.get_item_metadata(index))
-		_refresh_controls(RecipesClient.latest_snapshot)
-	)
 	_platter_controls.add_child(_wrapped_label("Give"))
-	_platter_controls.add_child(give_option)
-
-	var take_option := _option_button()
-	take_option.add_item("Select asset to take")
-	take_option.set_item_metadata(0, "")
-	for asset in take_assets:
-		var asset_key := str(asset.get("key", ""))
-		var item_index := take_option.item_count
-		take_option.add_item(str(asset.get("label", asset_key)))
-		take_option.set_item_metadata(item_index, asset_key)
-		if asset_key == _selected_take_asset_key:
-			take_option.select(item_index)
-	take_option.item_selected.connect(func(index: int) -> void:
-		_selected_take_asset_key = str(take_option.get_item_metadata(index))
-		_refresh_controls(RecipesClient.latest_snapshot)
-	)
+	_platter_controls.add_child(_select_button(
+		_asset_label_by_key(give_assets, _selected_give_asset_key) if _selected_give_asset_key != "" else "Select asset to give",
+		"asset_give"
+	))
 	_platter_controls.add_child(_wrapped_label("Take"))
-	_platter_controls.add_child(take_option)
+	_platter_controls.add_child(_select_button(
+		_asset_label_by_key(take_assets, _selected_take_asset_key) if _selected_take_asset_key != "" else "Select asset to take",
+		"asset_take"
+	))
 
 	var swap_button := _button("Swap Selected", func() -> void:
 		var give_ref := _asset_ref_from_key(_selected_give_asset_key)
@@ -1391,6 +1393,15 @@ func _hand_for_participant(snapshot: Dictionary, participant_id: String) -> Arra
 		var hands: Dictionary = all_hands
 		if hands.has(participant_id):
 			return hands.get(participant_id, [])
+	var all_vouchers: Array = snapshot.get("allVouchers", [])
+	if not all_vouchers.is_empty():
+		var hand: Array = []
+		for raw_voucher in all_vouchers:
+			var voucher: Dictionary = raw_voucher
+			var location: Dictionary = voucher.get("location", {})
+			if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == participant_id:
+				hand.append(voucher)
+		return hand
 	if participant_id == str(snapshot.get("viewerParticipantId", "")):
 		return snapshot.get("ownHand", [])
 	return []
@@ -1864,6 +1875,72 @@ func _asset_label_by_key(assets: Array, key: String) -> String:
 	return "nothing selected"
 
 
+func _open_select_popup(select_key: String, anchor: Control) -> void:
+	_active_select_key = select_key
+	var width := maxi(280, int(anchor.size.x))
+	var height := 320
+	var position := Vector2i(int(anchor.global_position.x), int(anchor.global_position.y + anchor.size.y + 4))
+	_select_popup.popup(Rect2i(position, Vector2i(width, height)))
+	_refresh_active_select_popup(RecipesClient.latest_snapshot, true)
+
+
+func _refresh_active_select_popup(snapshot: Dictionary, force := false) -> void:
+	if _active_select_key == "" or not is_instance_valid(_select_popup):
+		return
+	if not force and not _select_popup.visible:
+		return
+	_clear(_select_popup_list)
+	var options := _select_options(snapshot, _active_select_key)
+	if options.is_empty():
+		_select_popup_list.add_child(_wrapped_label("No options available."))
+		return
+	for raw_option in options:
+		var option: Dictionary = raw_option
+		var option_label := str(option.get("label", ""))
+		var option_value := str(option.get("value", ""))
+		var item_button := _button(option_label, func(key := _active_select_key, value := option_value) -> void:
+			_select_option_value(key, value)
+		)
+		_select_popup_list.add_child(item_button)
+
+
+func _select_options(snapshot: Dictionary, select_key: String) -> Array:
+	var options: Array = []
+	match select_key:
+		"platter_give":
+			for raw_voucher in snapshot.get("ownHand", []):
+				var voucher: Dictionary = raw_voucher
+				options.append({"label": _voucher_label(voucher), "value": str(voucher.get("id", ""))})
+		"platter_take":
+			for raw_voucher in snapshot.get("platter", []):
+				var voucher: Dictionary = raw_voucher
+				options.append({"label": _voucher_label(voucher), "value": str(voucher.get("id", ""))})
+		"asset_give":
+			for raw_asset in _inventory_asset_options(snapshot):
+				var asset: Dictionary = raw_asset
+				options.append({"label": str(asset.get("label", "")), "value": str(asset.get("key", ""))})
+		"asset_take":
+			for raw_asset in _platter_asset_options(snapshot):
+				var asset: Dictionary = raw_asset
+				options.append({"label": str(asset.get("label", "")), "value": str(asset.get("key", ""))})
+	return options
+
+
+func _select_option_value(select_key: String, value: String) -> void:
+	match select_key:
+		"platter_give":
+			_selected_hand_voucher_id = value
+		"platter_take":
+			_selected_platter_voucher_id = value
+		"asset_give":
+			_selected_give_asset_key = value
+		"asset_take":
+			_selected_take_asset_key = value
+	_select_popup.hide()
+	_active_select_key = ""
+	_refresh_controls(RecipesClient.latest_snapshot)
+
+
 func _prune_asset_selection(give_assets: Array, take_assets: Array) -> void:
 	if _selected_give_asset_key != "" and not _contains_asset_key(give_assets, _selected_give_asset_key):
 		_selected_give_asset_key = ""
@@ -1895,6 +1972,8 @@ func _food_part_label(part: Dictionary) -> String:
 func _food_parts_for_participant(snapshot: Dictionary, participant_id: String) -> Array:
 	var result: Array = []
 	var all_parts: Array = snapshot.get("allFoodParts", [])
+	if all_parts.is_empty() and str(snapshot.get("viewerRole", "")) == "witness":
+		all_parts = snapshot.get("dishParts", [])
 	if not all_parts.is_empty():
 		for raw_part in all_parts:
 			var part: Dictionary = raw_part
@@ -1909,6 +1988,8 @@ func _food_parts_for_participant(snapshot: Dictionary, participant_id: String) -
 
 func _all_food_part_locations_label(snapshot: Dictionary) -> String:
 	var all_parts: Array = snapshot.get("allFoodParts", [])
+	if all_parts.is_empty() and str(snapshot.get("viewerRole", "")) == "witness":
+		all_parts = snapshot.get("dishParts", [])
 	var lines: Array[String] = ["Dish Part Locations"]
 	if all_parts.is_empty():
 		lines.append("No dish parts yet, or this audit is only available to witnesses.")
