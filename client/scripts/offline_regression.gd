@@ -1,0 +1,478 @@
+extends SceneTree
+
+const OfflineStore := preload("res://scripts/offline_store.gd")
+
+var _last_error := ""
+
+
+func _initialize() -> void:
+	var store = OfflineStore.new()
+	root.add_child(store)
+	store.error_received.connect(func(error: Dictionary) -> void:
+		_last_error = str(error.get("description", JSON.stringify(error)))
+	)
+	_regression_lobby_seat_editor(store)
+	_regression_own_redeem_returns_card_for_swap(store)
+	_regression_redeem_all_and_pass_turn(store)
+	_regression_goal_complete_bot_accepts_offer(store)
+	_regression_stock_depleted_cards_not_usable(store)
+	_regression_lifecycle(store)
+	_regression_round_robin_pass_turn_history(store)
+	_regression_bot_budget_returns_to_human(store)
+	_regression_full_offline_transaction_export(store)
+	print("offline regression ok")
+	quit()
+
+
+func _regression_lobby_seat_editor(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-seat-editor").is_empty(), "create seat editor table")
+	_require(store.handle_host_intent({"type": "rename_participant", "participantId": "p1", "name": "Mara"}), "rename host seat: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p1", {}).get("name", "")) == "Mara", "offline host seat can be renamed")
+	_require(store.handle_host_intent({"type": "rename_participant", "participantId": "p2", "name": "Zed"}), "rename bot seat: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "Zed_b", "offline bot seat keeps short _b name")
+	_require(store.handle_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ted"}), "take bot seat as player: %s" % _last_error)
+	var controlled: Dictionary = store.table.get("participants", {}).get("p2", {})
+	_require(str(controlled.get("kind", "")) == "human", "offline taken seat becomes player")
+	_require(str(controlled.get("controllerParticipantId", "")) == "p1", "offline taken seat is controlled by host")
+	_require(str(controlled.get("name", "")) == "Ted", "offline taken seat keeps edited player name")
+	_require(store.handle_host_intent({"type": "convert_to_bot", "participantId": "p2", "botType": "mixed"}), "return controlled seat to bot: %s" % _last_error)
+	var bot: Dictionary = store.table.get("participants", {}).get("p2", {})
+	_require(str(bot.get("kind", "")) == "bot", "offline seat can return to bot")
+	_require(str(bot.get("name", "")) == "Ted_b", "offline returned bot uses short _b name")
+
+
+func _regression_own_redeem_returns_card_for_swap(store: Node) -> void:
+	_setup_market_table(store)
+	var participant_id := "p1"
+	var main_ingredient_id := _participant_ingredient_id(store, participant_id)
+	var requirement := _requirement_for_ingredient(store, participant_id, main_ingredient_id)
+	_require(not requirement.is_empty(), "own ingredient is present in recipe")
+	var voucher := _first_hand_voucher_by_ingredient(store, participant_id, main_ingredient_id)
+	_require(not voucher.is_empty(), "own ingredient card starts in hand")
+	_require(
+		store.handle_intent({"type": "redeem_from_hand", "voucherId": voucher.get("id", ""), "requirementId": requirement.get("id", "")}, participant_id),
+		"redeem own card from hand succeeds: %s" % _last_error
+	)
+	var returned := _first_hand_voucher_by_ingredient(store, participant_id, main_ingredient_id)
+	_require(not returned.is_empty(), "redeemed own card returns to hand while stock remains")
+	var take := _first_platter_voucher_not_ingredient(store, main_ingredient_id)
+	_require(not take.is_empty(), "platter has a different card after deposits")
+	_require(
+		store.handle_intent({"type": "platter_swap", "giveVoucherId": returned.get("id", ""), "takeVoucherId": take.get("id", "")}, participant_id),
+		"returned own card can be swapped from hand: %s" % _last_error
+	)
+
+
+func _regression_lifecycle(store: Node) -> void:
+	_setup_market_table(store)
+	_assert_invalid_intent_rolls_back(store)
+	_assert_platter_swap(store)
+	_assert_offer_exchange(store)
+	var maker_id := "p1"
+	_complete_recipe(store, maker_id)
+	_require(store.handle_intent({"type": "prepare"}, maker_id), "prepare dish: %s" % _last_error)
+	var dish_id := _first_dish_id(store, maker_id)
+	_require(dish_id != "", "prepared dish exists")
+	_require(_inventory_dish_parts(store, maker_id).size() == 10, "prepared dish creates 10 food parts")
+	_assert_settlement_and_eating(store, maker_id, dish_id)
+
+
+func _regression_redeem_all_and_pass_turn(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-redeem-all-pass").is_empty(), "create redeem-all table")
+	for _index in range(7):
+		_require(store.handle_host_intent({"type": "add_controlled_seat"}), "add controlled seat: %s" % _last_error)
+	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 1}), "set one-dish goal")
+	_require(store.handle_host_intent({"type": "start"}), "start redeem-all table: %s" % _last_error)
+	for participant_id in _active_ids(store.latest_snapshot):
+		_require(store.view_as(participant_id), "view participant %s" % participant_id)
+		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id, false), "deposit %s: %s" % [participant_id, _last_error])
+	_require(str(store.table.get("phase", "")) == "playing", "redeem-all table enters playing")
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "p1", "redeem-all starts with p1")
+	var ingredient_id := _participant_ingredient_id(store, "p1")
+	var requirement := _requirement_for_ingredient(store, "p1", ingredient_id)
+	_require(not requirement.is_empty(), "redeem-all recipe includes p1 ingredient")
+	var before_redeemed := int(requirement.get("redeemedQty", 0))
+	var placed_ids: Array = requirement.get("placedVoucherIds", [])
+	var outstanding: int = int(requirement.get("requiredQty", 0)) - before_redeemed - placed_ids.size()
+	var expected_redeemed := mini(_hand_voucher_count_by_ingredient(store, "p1", ingredient_id), outstanding)
+	var before_stock := int(store.table.get("participants", {}).get("p1", {}).get("realIngredientStock", 0))
+	_require(store.handle_intent({"type": "redeem_all_and_pass_turn"}, "p1", false), "redeem-all pass succeeds: %s" % _last_error)
+	requirement = _requirement_for_ingredient(store, "p1", ingredient_id)
+	_require(int(requirement.get("redeemedQty", 0)) == before_redeemed + expected_redeemed, "redeem-all redeems useful cards once")
+	_require(int(store.table.get("participants", {}).get("p1", {}).get("realIngredientStock", 0)) == before_stock - expected_redeemed, "redeem-all decrements stock once per redeemed card")
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "p2", "redeem-all advances to p2")
+	var history: Array = store.table.get("transactionHistory", [])
+	var last: Dictionary = history[history.size() - 1]
+	_require(str(last.get("action", "")) == "Pass Turn", "redeem-all records final pass turn")
+
+
+func _regression_goal_complete_bot_accepts_offer(store: Node) -> void:
+	_setup_market_table(store)
+	var sender_id := "p1"
+	var bot_id := "p2"
+	var bot: Dictionary = store.table.get("participants", {}).get(bot_id, {})
+	bot["kind"] = "bot"
+	bot["botType"] = "mixed"
+	bot["dishCount"] = int(store.table.get("targetDishCount", 1))
+	store.table.get("recipes", {}).erase(bot_id)
+	var offered := _first_hand_voucher(store, sender_id)
+	_require(not offered.is_empty(), "sender has a card to offer")
+	_require(
+		store.handle_intent({
+			"type": "create_offer",
+			"toParticipantId": bot_id,
+			"offeredVoucherIds": [offered.get("id", "")],
+			"requested": {"ingredientId": _participant_ingredient_id(store, bot_id), "quantity": 1}
+		}, sender_id, false),
+		"create incoming offer for goal-complete bot: %s" % _last_error
+	)
+	var decision: Dictionary = store._decide_bot_intent(bot_id)
+	_require(str(decision.get("type", "")) == "respond_offer", "goal-complete bot still responds to incoming offers")
+	_require(str(decision.get("response", "")) == "accept", "goal-complete bot accepts satisfiable offer")
+
+
+func _regression_stock_depleted_cards_not_usable(store: Node) -> void:
+	_setup_market_table(store)
+	var participant_id := "p1"
+	var participant: Dictionary = store.table.get("participants", {}).get(participant_id, {})
+	var ingredient_id := _participant_ingredient_id(store, participant_id)
+	var own_voucher := _first_hand_voucher_by_owner(store, participant_id, participant_id)
+	var take := _first_platter_voucher_not_ingredient(store, ingredient_id)
+	var requirement := _requirement_for_ingredient(store, participant_id, ingredient_id)
+	_require(not own_voucher.is_empty(), "depleted-card test has own card")
+	_require(not take.is_empty(), "depleted-card test has platter card")
+	_require(not requirement.is_empty(), "depleted-card test has matching requirement")
+	participant["realIngredientStock"] = 0
+	_require(
+		not store.handle_intent({"type": "platter_swap", "giveVoucherId": own_voucher.get("id", ""), "takeVoucherId": take.get("id", "")}, participant_id),
+		"stock-depleted card cannot be swapped"
+	)
+	_require(
+		not store.handle_intent({"type": "place_voucher", "voucherId": own_voucher.get("id", ""), "requirementId": requirement.get("id", "")}, participant_id),
+		"stock-depleted card cannot be placed on recipe"
+	)
+	_require(
+		not store.handle_intent({
+			"type": "create_offer",
+			"toParticipantId": "p2",
+			"offeredVoucherIds": [own_voucher.get("id", "")],
+			"requested": {"ingredientId": _participant_ingredient_id(store, "p2"), "quantity": 1}
+		}, participant_id),
+		"stock-depleted card cannot be offered"
+	)
+
+
+func _setup_market_table(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-regression").is_empty(), "create regression table")
+	for _index in range(7):
+		_require(store.handle_host_intent({"type": "add_controlled_seat"}), "add controlled seat: %s" % _last_error)
+	_require(store.handle_host_intent({"type": "set_turn_mode", "mode": "market"}), "set market mode")
+	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 1}), "set one-dish goal")
+	_require(store.handle_host_intent({"type": "start"}), "start regression table: %s" % _last_error)
+	for participant_id in _active_ids(store.latest_snapshot):
+		_require(store.view_as(participant_id), "view participant %s" % participant_id)
+		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id), "deposit %s: %s" % [participant_id, _last_error])
+	_require(str(store.latest_snapshot.get("phase", "")) == "playing", "table enters playing")
+
+
+func _regression_round_robin_pass_turn_history(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-round-robin-pass").is_empty(), "create round robin table")
+	for _index in range(7):
+		_require(store.handle_host_intent({"type": "add_controlled_seat"}), "add controlled seat: %s" % _last_error)
+	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 1}), "set one-dish goal")
+	_require(store.handle_host_intent({"type": "start"}), "start round robin table: %s" % _last_error)
+	for participant_id in _active_ids(store.latest_snapshot):
+		_require(store.view_as(participant_id), "view participant %s" % participant_id)
+		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id, false), "deposit %s: %s" % [participant_id, _last_error])
+	_require(str(store.table.get("phase", "")) == "playing", "round robin table enters playing")
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "p1", "first turn starts with p1")
+	_require(store.handle_intent({"type": "pass_turn"}, "p1", false), "pass turn succeeds: %s" % _last_error)
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "p2", "pass turn advances to p2")
+	var history: Array = store.table.get("transactionHistory", [])
+	var last: Dictionary = history[history.size() - 1]
+	_require(str(last.get("action", "")) == "Pass Turn", "pass turn is recorded")
+	_require(str(last.get("name", "")) == "Amina", "pass turn records actor")
+	_require(str(last.get("counterparty", "")) == "Ben", "pass turn records next participant")
+
+
+func _regression_bot_budget_returns_to_human(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-bot-budget").is_empty(), "create bot budget table")
+	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 4}), "set four-dish goal")
+	_require(store.handle_intent({"type": "start"}, "p1", false), "start bot budget table: %s" % _last_error)
+	for participant_id in _active_ids(store.latest_snapshot):
+		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id, false), "deposit %s: %s" % [participant_id, _last_error])
+	store.table["currentTurnParticipantId"] = "p2"
+	store._run_bots(0)
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "p1", "bot budget fallback returns control to the human host")
+	var history: Array = store.table.get("transactionHistory", [])
+	var last: Dictionary = history[history.size() - 1]
+	_require(str(last.get("action", "")) == "Pass Turn", "bot budget fallback records pass turn")
+	_require(str(last.get("counterparty", "")) == "Amina", "bot budget fallback passes back to host")
+
+
+func _regression_full_offline_transaction_export(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-full-history").is_empty(), "create full history table")
+	var history: Array = []
+	for index in range(105):
+		history.append({
+			"id": "tx_%s" % (index + 1),
+			"turn": index + 1,
+			"participantId": "p1",
+			"name": "Amina",
+			"action": "Pass Turn",
+			"counterpartyParticipantId": "p1",
+			"counterparty": "Amina",
+			"itemOut": "None",
+			"itemBack": "None"
+		})
+	store.table["transactionHistory"] = history
+	_require(store.view_as("p1"), "refresh full history snapshot")
+	_require(int(store.latest_snapshot.get("transactionHistory", []).size()) == 100, "offline live snapshot keeps visible history bounded")
+	_require(not bool(store.latest_snapshot.get("transactionHistoryComplete", true)), "offline live snapshot marks bounded history incomplete")
+	_require(int(store.full_transaction_history().size()) == 105, "offline full export exposes complete local history")
+
+
+func _assert_invalid_intent_rolls_back(store: Node) -> void:
+	var before := JSON.stringify(store.table)
+	_require(
+		not store.handle_intent({"type": "platter_swap", "giveVoucherId": "missing", "takeVoucherId": "missing"}, "p1"),
+		"invalid swap is rejected"
+	)
+	_require(JSON.stringify(store.table) == before, "invalid intent restores full offline table state")
+
+
+func _assert_platter_swap(store: Node) -> void:
+	var give := _first_hand_voucher(store, "p1")
+	var take := _first_platter_voucher_not_ingredient(store, str(give.get("ingredientId", "")))
+	_require(not give.is_empty(), "p1 has a card to swap")
+	_require(not take.is_empty(), "platter has a different card to take")
+	_require(
+		store.handle_intent({"type": "platter_swap", "giveVoucherId": give.get("id", ""), "takeVoucherId": take.get("id", "")}, "p1"),
+		"platter swap succeeds: %s" % _last_error
+	)
+	_require(str(_voucher(store, str(give.get("id", ""))).get("location", {}).get("type", "")) == "platter", "given card enters platter")
+	_require(str(_voucher(store, str(take.get("id", ""))).get("location", {}).get("participantId", "")) == "p1", "taken card enters p1 hand")
+
+
+func _assert_offer_exchange(store: Node) -> void:
+	var recipient_id := "p2"
+	var requested_ingredient := _participant_ingredient_id(store, recipient_id)
+	var offered := _first_hand_voucher_not_ingredient(store, "p1", requested_ingredient)
+	var requested := _first_hand_voucher_by_ingredient(store, recipient_id, requested_ingredient)
+	_require(not offered.is_empty(), "p1 has a non-recipient card to offer")
+	_require(not requested.is_empty(), "recipient has own card to exchange")
+	_require(
+		store.handle_intent({
+			"type": "create_offer",
+			"toParticipantId": recipient_id,
+			"offeredVoucherIds": [offered.get("id", "")],
+			"requested": {"ingredientId": requested_ingredient, "quantity": 1}
+		}, "p1"),
+		"create offer succeeds: %s" % _last_error
+	)
+	var offer_id := _first_pending_offer_id(store)
+	_require(offer_id != "", "pending offer exists")
+	_require(str(_voucher(store, str(offered.get("id", ""))).get("location", {}).get("type", "")) == "offer_lock", "offered card is locked")
+	_require(
+		store.handle_intent({"type": "respond_offer", "offerId": offer_id, "response": "accept", "voucherIds": [requested.get("id", "")]}, recipient_id),
+		"accept offer succeeds: %s" % _last_error
+	)
+	_require(not store.table.get("offers", {}).has(offer_id), "accepted offer is removed")
+	_require(str(_voucher(store, str(offered.get("id", ""))).get("location", {}).get("participantId", "")) == recipient_id, "offered card moves to recipient")
+	_require(str(_voucher(store, str(requested.get("id", ""))).get("location", {}).get("participantId", "")) == "p1", "requested card moves to creator")
+
+
+func _complete_recipe(store: Node, participant_id: String) -> void:
+	var recipe: Dictionary = store.table.get("recipes", {}).get(participant_id, {})
+	_require(not recipe.is_empty(), "participant has recipe")
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		while _outstanding_requirement_qty(requirement) > 0:
+			var voucher: Dictionary = _ensure_hand_voucher_for_ingredient(store, participant_id, str(requirement.get("ingredientId", "")))
+			_require(not voucher.is_empty(), "matching card available for requirement")
+			_require(
+				store.handle_intent({"type": "redeem_from_hand", "voucherId": voucher.get("id", ""), "requirementId": requirement.get("id", "")}, participant_id),
+				"redeem from hand succeeds: %s" % _last_error
+			)
+	_require(_recipe_ready(recipe), "recipe is ready after redemptions")
+
+
+func _assert_settlement_and_eating(store: Node, maker_id: String, dish_id: String) -> void:
+	for participant_id in _active_ids(store.latest_snapshot):
+		store.table["participants"][participant_id]["dishCount"] = 1
+		store.table["recipes"].erase(participant_id)
+	_force_all_accounts_cleared(store)
+	var extra_own: Dictionary = _first_hand_voucher_by_owner(store, maker_id, maker_id)
+	_require(not extra_own.is_empty(), "maker has an extra own card for debt setup")
+	store.table["vouchers"][str(extra_own.get("id", ""))]["location"] = {"type": "platter"}
+	store._enter_settlement_phase()
+	_require(str(store.table.get("phase", "")) == "settlement", "table enters settlement with maker debt")
+	var part: Dictionary = _inventory_dish_parts(store, maker_id)[0]
+	_require(
+		store.handle_intent({"type": "platter_asset_swap", "give": {"kind": "dish_part", "id": part.get("id", "")}, "take": {"kind": "voucher", "id": extra_own.get("id", "")}}, maker_id),
+		"settlement swap succeeds: %s" % _last_error
+	)
+	_require(int(_public_participant(store.latest_snapshot, maker_id).get("ownCardsInPlatter", 0)) == 1, "maker account is cleared")
+	store.table["dishParts"][str(part.get("id", ""))]["location"] = {"type": "inventory", "participantId": maker_id}
+	store._advance_settlement_if_ready()
+	_require(str(store.table.get("phase", "")) == "eating", "cleared table enters eating")
+	var before_remaining := int(store.table["dishes"][dish_id].get("partsRemaining", 0))
+	_require(store.handle_intent({"type": "bite", "dishId": dish_id}, maker_id), "cleared maker can eat: %s" % _last_error)
+	_require(int(store.table["dishes"][dish_id].get("partsRemaining", 0)) == before_remaining - 1, "bite decrements dish parts")
+
+
+func _force_all_accounts_cleared(store: Node) -> void:
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		voucher["location"] = {"type": "hand", "participantId": voucher.get("ownerParticipantId", "")}
+	for participant_id in _active_ids(store.latest_snapshot):
+		var own := _first_hand_voucher_by_owner(store, participant_id, participant_id)
+		_require(not own.is_empty(), "participant has own card for clearance")
+		store.table["vouchers"][str(own.get("id", ""))]["location"] = {"type": "platter"}
+
+
+func _ensure_hand_voucher_for_ingredient(store: Node, holder_id: String, ingredient_id: String) -> Dictionary:
+	var in_hand := _first_hand_voucher_by_ingredient(store, holder_id, ingredient_id)
+	if not in_hand.is_empty():
+		return in_hand
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		if str(voucher.get("ingredientId", "")) != ingredient_id:
+			continue
+		if str(voucher.get("location", {}).get("type", "")) == "offer_lock":
+			continue
+		voucher["location"] = {"type": "hand", "participantId": holder_id}
+		return voucher
+	return {}
+
+
+func _outstanding_requirement_qty(requirement: Dictionary) -> int:
+	return int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
+
+
+func _recipe_ready(recipe: Dictionary) -> bool:
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		if int(requirement.get("redeemedQty", 0)) < int(requirement.get("requiredQty", 0)):
+			return false
+	return true
+
+
+func _active_ids(snapshot: Dictionary) -> Array:
+	var ids: Array = []
+	for participant in snapshot.get("participants", []):
+		if str(participant.get("role", "")) == "active":
+			ids.append(str(participant.get("id", "")))
+	return ids
+
+
+func _participant_ingredient_id(store: Node, participant_id: String) -> String:
+	return str(store.table.get("participants", {}).get(participant_id, {}).get("ingredientId", ""))
+
+
+func _requirement_for_ingredient(store: Node, participant_id: String, ingredient_id: String) -> Dictionary:
+	var recipe: Dictionary = store.table.get("recipes", {}).get(participant_id, {})
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		if str(requirement.get("ingredientId", "")) == ingredient_id:
+			return requirement
+	return {}
+
+
+func _public_participant(snapshot: Dictionary, participant_id: String) -> Dictionary:
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("id", "")) == participant_id:
+			return participant
+	return {}
+
+
+func _first_dish_id(store: Node, owner_id: String) -> String:
+	for raw_dish in store.table.get("dishes", {}).values():
+		var dish: Dictionary = raw_dish
+		if str(dish.get("ownerParticipantId", "")) == owner_id:
+			return str(dish.get("id", ""))
+	return ""
+
+
+func _inventory_dish_parts(store: Node, participant_id: String) -> Array:
+	var parts: Array = []
+	for raw_part in store.table.get("dishParts", {}).values():
+		var part: Dictionary = raw_part
+		var location: Dictionary = part.get("location", {})
+		if str(location.get("type", "")) == "inventory" and str(location.get("participantId", "")) == participant_id:
+			parts.append(part)
+	return parts
+
+
+func _first_pending_offer_id(store: Node) -> String:
+	for offer_id in store.table.get("offers", {}).keys():
+		var offer: Dictionary = store.table["offers"][offer_id]
+		if str(offer.get("status", "")) == "pending":
+			return str(offer_id)
+	return ""
+
+
+func _first_hand_voucher(store: Node, participant_id: String) -> Dictionary:
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == participant_id:
+			return voucher
+	return {}
+
+
+func _first_hand_voucher_not_ingredient(store: Node, participant_id: String, ingredient_id: String) -> Dictionary:
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == participant_id and str(voucher.get("ingredientId", "")) != ingredient_id:
+			return voucher
+	return {}
+
+
+func _first_hand_voucher_by_ingredient(store: Node, participant_id: String, ingredient_id: String) -> Dictionary:
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == participant_id and str(voucher.get("ingredientId", "")) == ingredient_id:
+			return voucher
+	return {}
+
+
+func _hand_voucher_count_by_ingredient(store: Node, participant_id: String, ingredient_id: String) -> int:
+	var count := 0
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == participant_id and str(voucher.get("ingredientId", "")) == ingredient_id:
+			count += 1
+	return count
+
+
+func _first_hand_voucher_by_owner(store: Node, participant_id: String, owner_id: String) -> Dictionary:
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == participant_id and str(voucher.get("ownerParticipantId", "")) == owner_id:
+			return voucher
+	return {}
+
+
+func _first_platter_voucher_not_ingredient(store: Node, ingredient_id: String) -> Dictionary:
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		if str(voucher.get("location", {}).get("type", "")) == "platter" and str(voucher.get("ingredientId", "")) != ingredient_id:
+			return voucher
+	return {}
+
+
+func _voucher(store: Node, voucher_id: String) -> Dictionary:
+	return store.table.get("vouchers", {}).get(voucher_id, {})
+
+
+func _require(condition: bool, message: String) -> void:
+	if condition:
+		return
+	push_error(message)
+	quit(1)

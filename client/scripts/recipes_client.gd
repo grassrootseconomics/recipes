@@ -5,15 +5,19 @@ signal error_received(error: Dictionary)
 signal connection_changed(status: String)
 
 const RECONNECT_DELAY_SECONDS := 1.5
+const OfflineStore := preload("res://scripts/offline_store.gd")
 
 var server_url := "http://127.0.0.1:3000"
 var table_code := ""
 var participant_id := ""
 var seat_token := ""
+var acting_participant_id := ""
 var latest_snapshot: Dictionary = {}
 var last_close_description := ""
+var offline_mode := false
 
 var _http_request: HTTPRequest
+var _offline_store: Node
 var _websocket := WebSocketPeer.new()
 var _socket_open := false
 var _reported_open := false
@@ -25,8 +29,18 @@ var _next_client_intent_id := 1
 
 func _ready() -> void:
 	_http_request = HTTPRequest.new()
+	_http_request.timeout = 10.0
 	add_child(_http_request)
 	_http_request.request_completed.connect(_on_http_request_completed)
+	_offline_store = OfflineStore.new()
+	add_child(_offline_store)
+	_offline_store.snapshot_received.connect(_on_offline_snapshot_received)
+	_offline_store.error_received.connect(func(error: Dictionary) -> void:
+		error_received.emit(error)
+	)
+	_offline_store.connection_changed.connect(func(status: String) -> void:
+		connection_changed.emit(status)
+	)
 
 
 func _process(_delta: float) -> void:
@@ -59,36 +73,117 @@ func _process(_delta: float) -> void:
 			connection_changed.emit("closed")
 
 
-func create_table(host_name: String, seed: String = "") -> void:
+func create_table(host_name: String, seed: String = "", requested_code: String = "") -> void:
+	offline_mode = false
 	var body := {"hostName": host_name}
 	if seed.strip_edges() != "":
 		body["seed"] = seed.strip_edges()
+	if requested_code.strip_edges() != "":
+		body["requestedCode"] = requested_code.strip_edges().to_upper()
 	_post_json("%s/tables" % server_url, body)
 
 
 func join_table(code: String, player_name: String, as_witness := false) -> void:
+	offline_mode = false
 	_post_json("%s/tables/%s/join" % [server_url, code.strip_edges().to_upper()], {"name": player_name, "asWitness": as_witness})
 
 
-func send_intent(intent: Dictionary) -> bool:
+func resume_online_session(resume_server_url: String, code: String, stored_participant_id: String, stored_seat_token: String) -> bool:
+	var normalized_code := code.strip_edges().to_upper()
+	if resume_server_url.strip_edges() == "" or normalized_code == "" or stored_seat_token.strip_edges() == "":
+		error_received.emit({"description": "Saved table session is incomplete."})
+		return false
+	if _socket_open:
+		_websocket.close()
+	_socket_open = false
+	_reported_open = false
+	_should_reconnect = false
+	_reconnect_delay = -1.0
+	offline_mode = false
+	server_url = resume_server_url.strip_edges().trim_suffix("/")
+	table_code = normalized_code
+	participant_id = stored_participant_id
+	acting_participant_id = stored_participant_id
+	seat_token = stored_seat_token
+	latest_snapshot = {}
+	connect_socket()
+	return true
+
+
+func start_offline_table(host_name: String, seed: String = "") -> void:
+	if _socket_open:
+		_websocket.close()
+	_socket_open = false
+	_reported_open = false
+	_should_reconnect = false
+	_reconnect_delay = -1.0
+	offline_mode = true
+	table_code = "OFFLINE"
+	participant_id = "p1"
+	acting_participant_id = "p1"
+	seat_token = "offline:p1"
+	_offline_store.create_table(host_name, seed)
+
+
+func send_intent(intent: Dictionary, actor_participant_id := "") -> bool:
+	if offline_mode:
+		var selected_actor := actor_participant_id
+		if selected_actor == "":
+			selected_actor = acting_participant_id
+		if selected_actor == "":
+			selected_actor = participant_id
+		return _offline_store.handle_intent(intent, selected_actor)
 	if not _socket_open or _websocket.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		error_received.emit({"description": "WebSocket is not connected."})
 		return false
 	var client_intent_id := "%s:%s" % [participant_id, _next_client_intent_id]
 	_next_client_intent_id += 1
-	var err := _websocket.send_text(JSON.stringify({
+	var envelope := {
 		"type": "intent",
 		"clientIntentId": client_intent_id,
 		"intent": intent
-	}))
+	}
+	var selected_actor := actor_participant_id
+	if selected_actor == "":
+		selected_actor = acting_participant_id
+	if selected_actor != "" and selected_actor != participant_id:
+		envelope["actorParticipantId"] = selected_actor
+	var err := _websocket.send_text(JSON.stringify(envelope))
 	if err != OK:
 		error_received.emit({"description": "WebSocket send failed: %s" % err})
 		return false
 	return true
 
 
+func send_host_intent(intent: Dictionary) -> bool:
+	return send_intent(intent, participant_id)
+
+
+func view_as(participant_id_to_view: String) -> bool:
+	if participant_id_to_view == "":
+		return false
+	acting_participant_id = participant_id_to_view
+	if offline_mode:
+		return _offline_store.view_as(participant_id_to_view)
+	if not _socket_open or _websocket.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return false
+	var err := _websocket.send_text(JSON.stringify({"type": "view", "participantId": participant_id_to_view}))
+	if err != OK:
+		error_received.emit({"description": "View switch failed: %s" % err})
+		return false
+	return true
+
+
 func is_socket_connected() -> bool:
+	if offline_mode:
+		return bool(_offline_store.call("has_active_table"))
 	return _socket_open and _websocket.get_ready_state() == WebSocketPeer.STATE_OPEN
+
+
+func full_transaction_history() -> Array:
+	if offline_mode and _offline_store and _offline_store.has_method("full_transaction_history"):
+		return _offline_store.call("full_transaction_history")
+	return latest_snapshot.get("transactionHistory", []).duplicate(true)
 
 
 func reconnect_attempt() -> int:
@@ -96,6 +191,8 @@ func reconnect_attempt() -> int:
 
 
 func has_table_session(code: String = "") -> bool:
+	if offline_mode:
+		return table_code != ""
 	if table_code == "" or seat_token == "":
 		return false
 	if code.strip_edges() == "":
@@ -104,6 +201,9 @@ func has_table_session(code: String = "") -> bool:
 
 
 func leave_table() -> void:
+	if offline_mode:
+		disconnect_local()
+		return
 	if _socket_open and _websocket.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		_websocket.send_text(JSON.stringify({"type": "leave_table"}))
 		_websocket.poll()
@@ -111,14 +211,18 @@ func leave_table() -> void:
 
 
 func disconnect_local() -> void:
+	if offline_mode and _offline_store:
+		_offline_store.disconnect_local()
 	if _socket_open:
 		_websocket.close()
 	_socket_open = false
 	_reported_open = false
 	_should_reconnect = false
 	_reconnect_delay = -1.0
+	offline_mode = false
 	table_code = ""
 	participant_id = ""
+	acting_participant_id = ""
 	seat_token = ""
 	latest_snapshot = {}
 	connection_changed.emit("closed")
@@ -158,6 +262,8 @@ func _close_description() -> String:
 
 
 func _post_json(url: String, body: Dictionary) -> void:
+	if _http_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		_http_request.cancel_request()
 	var headers := PackedStringArray(["Content-Type: application/json"])
 	var err := _http_request.request(url, headers, HTTPClient.METHOD_POST, JSON.stringify(body))
 	if err != OK:
@@ -166,7 +272,7 @@ func _post_json(url: String, body: Dictionary) -> void:
 
 func _on_http_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	if result != HTTPRequest.RESULT_SUCCESS:
-		error_received.emit({"description": "HTTP request failed with result %s." % result})
+		error_received.emit({"description": _http_request_failure_message(result)})
 		return
 	var parsed = JSON.parse_string(body.get_string_from_utf8())
 	if typeof(parsed) != TYPE_DICTIONARY:
@@ -176,12 +282,32 @@ func _on_http_request_completed(result: int, response_code: int, _headers: Packe
 		error_received.emit(parsed)
 		return
 	var response: Dictionary = parsed.get("result", {})
+	offline_mode = false
 	table_code = str(response.get("tableCode", ""))
 	participant_id = str(response.get("participantId", ""))
+	acting_participant_id = participant_id
 	seat_token = str(response.get("seatToken", ""))
 	latest_snapshot = response.get("snapshot", {})
 	snapshot_received.emit(latest_snapshot)
 	connect_socket()
+
+
+func _http_request_failure_message(result: int) -> String:
+	match result:
+		HTTPRequest.RESULT_CANT_CONNECT, HTTPRequest.RESULT_CANT_RESOLVE, HTTPRequest.RESULT_CONNECTION_ERROR, HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR:
+			return "The server is not found.\nPlease try another server or Offline Mode."
+		_:
+			return "The server could not be reached.\nPlease try another server or Offline Mode."
+
+
+func _on_offline_snapshot_received(snapshot: Dictionary) -> void:
+	offline_mode = true
+	table_code = str(snapshot.get("tableCode", "OFFLINE"))
+	participant_id = str(snapshot.get("connectionParticipantId", "p1"))
+	acting_participant_id = str(snapshot.get("viewerParticipantId", participant_id))
+	seat_token = "offline:%s" % participant_id
+	latest_snapshot = snapshot
+	snapshot_received.emit(latest_snapshot)
 
 
 func _handle_socket_message(text: String) -> void:
@@ -198,6 +324,10 @@ func _handle_socket_message(text: String) -> void:
 		if not bool(parsed.get("ok", false)):
 			error_received.emit(parsed)
 	elif parsed.get("type", "") == "error":
+		var error_code := str(parsed.get("errorCode", ""))
+		if error_code == "invalid_seat_token" or error_code == "missing_table" or error_code == "seat_already_connected":
+			_should_reconnect = false
+			_reconnect_delay = -1.0
 		error_received.emit(parsed)
 
 

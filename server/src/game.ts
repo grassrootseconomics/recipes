@@ -11,7 +11,7 @@ import {
   REAL_UNITS_PER_INGREDIENT,
   VOUCHERS_PER_INGREDIENT
 } from "./constants.js";
-import { ingredientsForPlayerCount, maxIngredientDemandForPlayerCount } from "./recipeCatalog.js";
+import { ingredientsForPlayerCount, minimumBackedStockForPlayerCount } from "./recipeCatalog.js";
 import { generateRecipe } from "./recipes.js";
 import type {
   AggregatePlatterAssetRef,
@@ -24,6 +24,7 @@ import type {
   PlatterAssetRef,
   Table,
   TransactionAction,
+  TurnMode,
   Voucher
 } from "./types.js";
 
@@ -50,6 +51,29 @@ const GENERATED_NAMES = [
   "Theo"
 ] as const;
 
+const GENERATED_BOT_NAMES = [
+  "Ben",
+  "Nia",
+  "Luc",
+  "Yan",
+  "Mia",
+  "Leo",
+  "Ava",
+  "Eli",
+  "Noa",
+  "Sam",
+  "Zoe",
+  "Kai",
+  "Ivy",
+  "Max",
+  "Uma",
+  "Ana",
+  "Raj",
+  "Taj",
+  "Moe",
+  "Ada"
+] as const;
+
 const GENERIC_HUMAN_NAMES = new Set(["", "host", "player"]);
 const GENERIC_BOT_NAMES = new Set(["", "bot", "pool bot", "barter bot", "mixed bot", "pool_only", "barter_only", "mixed"]);
 
@@ -74,7 +98,7 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
     connected: true
   };
 
-  return {
+  const table: Table = {
     code,
     seed,
     version: 0,
@@ -92,19 +116,79 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
     winnerParticipantIds: [],
     targetDishCount: DEFAULT_TARGET_DISH_COUNT,
     stockPerIngredient: REAL_UNITS_PER_INGREDIENT,
+    turnMode: "round_robin",
     turn: 0,
     nextId: 2
   };
+  fillOpenBotSeats(table);
+  return table;
 }
 
 export function addHumanParticipant(table: Table, name: string, seatToken: string, asWitness = false): Participant {
-  const role: ParticipantRole = table.phase === "lobby" && !asWitness ? "active" : "witness";
+  if (table.phase === "lobby" && !asWitness) {
+    const openBot = firstAvailableBotSeat(table);
+    if (openBot) {
+      claimBotSeat(table, openBot, name, seatToken);
+      table.turn += 1;
+      table.version += 1;
+      return openBot;
+    }
+  }
+  const canJoinActive = table.phase === "lobby" && !asWitness && activeParticipants(table).length < MAX_ACTIVE_PARTICIPANTS;
+  const role: ParticipantRole = canJoinActive ? "active" : "witness";
   const participant = createParticipant(table, resolveHumanName(existingNames(table), name, table.participantOrder.length + 1), "human", role, seatToken);
   table.participants[participant.id] = participant;
   table.participantOrder.push(participant.id);
   table.turn += 1;
   table.version += 1;
   return participant;
+}
+
+function fillOpenBotSeats(table: Table): void {
+  while (activeParticipants(table).length < MAX_ACTIVE_PARTICIPANTS) {
+    const participant = createParticipant(
+      table,
+      resolveBotName(existingNames(table), "Bot", table.participantOrder.length + 1, "mixed"),
+      "bot",
+      "active",
+      `bot:${table.nextId}`,
+      "mixed"
+    );
+    table.participants[participant.id] = participant;
+    table.participantOrder.push(participant.id);
+  }
+}
+
+function firstAvailableBotSeat(table: Table): Participant | undefined {
+  return table.participantOrder
+    .map((participantId) => table.participants[participantId])
+    .find((participant) => participant?.kind === "bot" && participant.role === "active");
+}
+
+function requireClaimableBotSeat(table: Table, participantId: string): Participant {
+  const participant = requireParticipant(table, participantId);
+  if (participant.kind !== "bot" || participant.role !== "active") {
+    throw new GameError("That seat is not an available bot seat.", "bot_seat_unavailable");
+  }
+  return participant;
+}
+
+function claimBotSeat(table: Table, participant: Participant, name: string, seatToken: string, controllerParticipantId?: string): void {
+  const existing = existingNames(table).filter((candidate) => candidate !== participant.name);
+  const ordinal = Math.max(1, table.participantOrder.indexOf(participant.id) + 1);
+  participant.name = resolveHumanName(existing, name, ordinal);
+  participant.kind = "human";
+  participant.role = "active";
+  participant.seatToken = seatToken;
+  participant.connected = true;
+  participant.dishCount = 0;
+  participant.depositedInitial = false;
+  delete participant.botType;
+  if (controllerParticipantId) {
+    participant.controllerParticipantId = controllerParticipantId;
+  } else {
+    delete participant.controllerParticipantId;
+  }
 }
 
 export function disconnectParticipant(table: Table, participant: Participant): boolean {
@@ -135,6 +219,10 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       throw new GameError("The table is paused.", "table_paused");
     }
     table.turn += 1;
+    const turnGated = shouldGateTurn(table, intent);
+    if (turnGated) {
+      requireCurrentTurn(table, actor);
+    }
 
     switch (intent.type) {
       case "leave_table":
@@ -149,8 +237,14 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       case "set_role":
         setRole(table, actor, intent.participantId, intent.role);
         break;
+      case "rename_participant":
+        renameParticipant(table, actor, intent.participantId, intent.name);
+        break;
       case "add_bot":
         addBot(table, actor, intent.name, intent.botType);
+        break;
+      case "add_controlled_seat":
+        addControlledSeat(table, actor, intent.name, intent.participantId);
         break;
       case "convert_to_bot":
         convertParticipantToBot(table, actor, intent.participantId, intent.botType ?? "mixed");
@@ -164,6 +258,9 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       case "set_stock":
         setStock(table, actor, intent.count);
         break;
+      case "set_turn_mode":
+        setTurnMode(table, actor, intent.mode);
+        break;
       case "set_pause":
         setPaused(table, actor, intent.paused);
         break;
@@ -172,6 +269,12 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
         break;
       case "stop":
         stopTable(table, actor);
+        break;
+      case "pass_turn":
+        passTurn(table, actor);
+        break;
+      case "redeem_all_and_pass_turn":
+        redeemUsefulHandVouchersAndPassTurn(table, actor);
         break;
       case "deposit":
         depositToPlatter(table, actor, intent.voucherId);
@@ -219,6 +322,9 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
         assertNever(intent);
     }
     autoRefuseUnavailableOffers(table);
+    if (shouldAdvanceTurnAfterIntent(table, intent)) {
+      advanceTurn(table, actor.id);
+    }
     table.version += 1;
   } catch (error) {
     restoreTable(table, before);
@@ -347,24 +453,78 @@ function resolveHumanName(existing: string[], requestedName: string, ordinal: nu
   return uniqueName(existing, base);
 }
 
-function resolveBotName(existing: string[], requestedName: string, ordinal: number, botType: BotType): string {
+function resolveBotName(existing: string[], requestedName: string, _ordinal: number, botType: BotType): string {
   const trimmed = requestedName.trim();
   const lower = trimmed.toLowerCase();
-  const base = GENERIC_BOT_NAMES.has(lower) ? generatedBaseName(ordinal) : trimmed.replace(/_(pool|barter|mix|mixed)_bot$/i, "").replace(/_?bot$/i, "");
-  return uniqueName(existing, `${base}${botNameSuffix(botType)}`);
+  if (GENERIC_BOT_NAMES.has(lower)) {
+    return uniqueGeneratedBotName(existing, botType);
+  }
+  const rawBase = trimmed.replace(/_(pool|barter|mix|mixed)_bot$/i, "").replace(/_?bot$/i, "").replace(/_b$/i, "");
+  return uniqueBotName(existing, rawBase, botType);
 }
 
 function botNameSuffix(botType: BotType): string {
   switch (botType) {
     case "pool_only":
-      return "_pool_bot";
     case "barter_only":
-      return "_barter_bot";
     case "mixed":
-      return "_mix_bot";
+      return "_b";
     default:
       assertNever(botType);
   }
+}
+
+function shortBotBase(base: string): string {
+  const letters = base.replace(/[^A-Za-z0-9]/g, "");
+  if (letters.length === 0) {
+    return "Bot";
+  }
+  return letters.slice(0, 3);
+}
+
+function uniqueBotName(existing: string[], rawBase: string, botType: BotType): string {
+  const suffix = botNameSuffix(botType);
+  const base = shortBotBase(rawBase);
+  const first = `${base}${suffix}`;
+  if (!existing.includes(first)) {
+    return first;
+  }
+  for (let index = 2; index < 100; index += 1) {
+    const marker = String(index);
+    const prefixLength = Math.max(1, 3 - marker.length);
+    const candidate = `${base.slice(0, prefixLength)}${marker}${suffix}`;
+    if (!existing.includes(candidate)) {
+      return candidate;
+    }
+  }
+  return `B${existing.length % 100}${suffix}`;
+}
+
+function uniqueGeneratedBotName(existing: string[], botType: BotType): string {
+  const suffix = botNameSuffix(botType);
+  const usedBases = new Set(existing.map((name) => botBaseKey(name)));
+  for (const base of GENERATED_BOT_NAMES) {
+    const candidate = `${base}${suffix}`;
+    if (!existing.includes(candidate) && !usedBases.has(botBaseKey(base))) {
+      return candidate;
+    }
+  }
+  for (const base of GENERATED_BOT_NAMES) {
+    const candidate = uniqueBotName(existing, base, botType);
+    if (!existing.includes(candidate)) {
+      return candidate;
+    }
+  }
+  return uniqueBotName(existing, "Bot", botType);
+}
+
+function botBaseKey(name: string): string {
+  return name
+    .replace(/_(pool|barter|mix|mixed)_bot$/i, "")
+    .replace(/_?bot$/i, "")
+    .replace(/_b$/i, "")
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toLowerCase();
 }
 
 function generatedBaseName(ordinal: number): string {
@@ -442,6 +602,7 @@ function resetTable(table: Table, actor: Participant): void {
   table.dishParts = {};
   table.transactionHistory = [];
   table.winnerParticipantIds = [];
+  table.currentTurnParticipantId = undefined;
   clearTimerRuntime(table);
   for (const participant of Object.values(table.participants)) {
     participant.dishCount = 0;
@@ -466,6 +627,24 @@ function setRole(table: Table, actor: Participant, participantId: string, role: 
   }
 }
 
+function renameParticipant(table: Table, actor: Participant, participantId: string, name: string): void {
+  requireLobby(table);
+  const participant = requireParticipant(table, participantId);
+  if (!actor.isHost && actor.id !== participant.id) {
+    throw new GameError("Only the host can rename other seats.", "host_required");
+  }
+  if (!actor.isHost && participant.kind !== "human") {
+    throw new GameError("Only the host can rename bot seats.", "host_required");
+  }
+  const existing = existingNames(table).filter((candidate) => candidate !== participant.name);
+  const ordinal = Math.max(1, table.participantOrder.indexOf(participant.id) + 1);
+  if (participant.kind === "bot") {
+    participant.name = resolveBotName(existing, name, ordinal, participant.botType ?? "mixed");
+    return;
+  }
+  participant.name = resolveHumanName(existing, name, ordinal);
+}
+
 function addBot(table: Table, actor: Participant, name = "Bot", botType: BotType): Participant {
   requireHost(actor);
   requireLobby(table);
@@ -480,6 +659,31 @@ function addBot(table: Table, actor: Participant, name = "Bot", botType: BotType
     `bot:${table.nextId}`,
     botType
   );
+  table.participants[participant.id] = participant;
+  table.participantOrder.push(participant.id);
+  return participant;
+}
+
+function addControlledSeat(table: Table, actor: Participant, name = "Player", participantId?: string): Participant {
+  requireHost(actor);
+  requireLobby(table);
+  const botSeat = participantId ? requireClaimableBotSeat(table, participantId) : firstAvailableBotSeat(table);
+  if (botSeat) {
+    claimBotSeat(table, botSeat, name, `controlled:${actor.id}:${botSeat.id}`, actor.id);
+    return botSeat;
+  }
+  if (activeParticipants(table).length >= MAX_ACTIVE_PARTICIPANTS) {
+    throw new GameError(`At most ${MAX_ACTIVE_PARTICIPANTS} active participants are allowed.`, "too_many_active");
+  }
+  const participant = createParticipant(
+    table,
+    resolveHumanName(existingNames(table), name, table.participantOrder.length + 1),
+    "human",
+    "active",
+    `controlled:${actor.id}:${table.nextId}`
+  );
+  participant.controllerParticipantId = actor.id;
+  participant.connected = true;
   table.participants[participant.id] = participant;
   table.participantOrder.push(participant.id);
   return participant;
@@ -500,6 +704,7 @@ function convertParticipantToBot(table: Table, actor: Participant, participantId
   participant.kind = "bot";
   participant.botType = botType;
   participant.connected = false;
+  delete participant.controllerParticipantId;
   participant.name = resolveBotName(existingNames(table), participant.name, table.participantOrder.indexOf(participant.id) + 1, botType);
   participant.seatToken = `bot:${participant.id}:converted`;
   return participant;
@@ -542,6 +747,13 @@ function setStock(table: Table, actor: Participant, count: number): void {
   table.stockPerIngredient = count;
 }
 
+function setTurnMode(table: Table, actor: Participant, mode: TurnMode): void {
+  requireHost(actor);
+  requireLobby(table);
+  table.turnMode = mode;
+  table.currentTurnParticipantId = undefined;
+}
+
 function setPaused(table: Table, actor: Participant, paused: boolean): void {
   requireHost(actor);
   if (table.phase === "complete" && paused) {
@@ -568,10 +780,10 @@ function startTable(table: Table, actor: Participant): void {
   if (active.length > MAX_ACTIVE_PARTICIPANTS) {
     throw new GameError(`Start allows at most ${MAX_ACTIVE_PARTICIPANTS} active participants.`, "too_many_active");
   }
-  const requiredStock = maxIngredientDemandForPlayerCount(active.length, table.targetDishCount);
+  const requiredStock = minimumBackedStockForPlayerCount(active.length, table.targetDishCount);
   if (table.stockPerIngredient < requiredStock) {
     throw new GameError(
-      `Stock must be at least ${requiredStock} for ${active.length} active participants and ${table.targetDishCount} dishes.`,
+      `Stock must be at least ${requiredStock} for ${active.length} active participants, ${table.targetDishCount} dishes, and voucher backing.`,
       "stock_too_low"
     );
   }
@@ -609,6 +821,7 @@ function startTable(table: Table, actor: Participant): void {
   for (const participant of active) {
     table.recipes[participant.id] = generateRecipe(table, participant.id);
   }
+  table.currentTurnParticipantId = table.turnMode === "round_robin" ? active[0]?.id : undefined;
 }
 
 function stopTable(table: Table, actor: Participant): void {
@@ -617,6 +830,57 @@ function stopTable(table: Table, actor: Participant): void {
     throw new GameError("Only a running table can be stopped.", "invalid_phase");
   }
   enterSettlementPhase(table);
+}
+
+function passTurn(table: Table, actor: Participant): void {
+  if (table.phase !== "playing" && table.phase !== "settlement" && table.phase !== "eating") {
+    throw new GameError("Only a running turn can be passed.", "invalid_phase");
+  }
+  requireActive(actor);
+  const nextParticipantId = table.turnMode === "round_robin" ? nextTurnParticipantId(table, actor.id) : undefined;
+  const nextParticipant = nextParticipantId ? table.participants[nextParticipantId] : undefined;
+  recordTransaction(table, actor, "Pass Turn", nextParticipant?.name ?? "Table", "Turn", "None", nextParticipant?.id);
+}
+
+function redeemUsefulHandVouchersAndPassTurn(table: Table, actor: Participant): void {
+  requirePhase(table, "playing");
+  requireActive(actor);
+  const recipe = table.recipes[actor.id];
+  if (recipe) {
+    const outstandingByRequirement = new Map(
+      recipe.requirements.map((requirement) => [
+        requirement.id,
+        requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length
+      ])
+    );
+    const remainingStockByOwner = new Map<string, number>();
+    const plannedRedemptions: Array<{ voucherId: string; requirementId: string }> = [];
+    const initialHandIds = handVoucherIds(table, actor.id);
+    for (const voucherId of initialHandIds) {
+      const voucher = table.vouchers[voucherId];
+      if (!voucher || voucher.location.type !== "hand" || voucher.location.participantId !== actor.id) {
+        continue;
+      }
+      const requirement = recipe.requirements.find(
+        (candidate) => candidate.ingredientId === voucher.ingredientId && (outstandingByRequirement.get(candidate.id) ?? 0) > 0
+      );
+      if (!requirement) {
+        continue;
+      }
+      const owner = requireParticipant(table, voucher.ownerParticipantId);
+      const remainingStock = remainingStockByOwner.get(owner.id) ?? owner.realIngredientStock ?? 0;
+      if (remainingStock <= 0) {
+        continue;
+      }
+      remainingStockByOwner.set(owner.id, remainingStock - 1);
+      outstandingByRequirement.set(requirement.id, (outstandingByRequirement.get(requirement.id) ?? 0) - 1);
+      plannedRedemptions.push({ voucherId, requirementId: requirement.id });
+    }
+    for (const planned of plannedRedemptions) {
+      redeemVoucherFromHand(table, actor, planned.voucherId, planned.requirementId);
+    }
+  }
+  passTurn(table, actor);
 }
 
 function pauseTimer(table: Table, nowMs = Date.now()): void {
@@ -654,6 +918,7 @@ function depositToPlatter(table: Table, actor: Participant, voucherId: string): 
   }
   const voucher = requireVoucher(table, voucherId);
   requireVoucherInHand(voucher, actor.id);
+  requireVoucherBackedByStock(table, voucher);
   voucher.location = { type: "platter" };
   actor.depositedInitial = true;
   recordTransaction(table, actor, "Deposit", "Platter", ingredientName(voucher.ingredientId), "None");
@@ -681,9 +946,11 @@ function swapWithPlatter(table: Table, actor: Participant, giveVoucherId: string
   const giveVoucher = requireVoucher(table, giveVoucherId);
   const takeVoucher = requireVoucher(table, takeVoucherId);
   requireVoucherInHand(giveVoucher, actor.id);
+  requireVoucherBackedByStock(table, giveVoucher);
   if (takeVoucher.location.type !== "platter") {
     throw new GameError("Taken voucher is not in the platter.", "voucher_not_in_platter");
   }
+  requireVoucherBackedByStock(table, takeVoucher);
   giveVoucher.location = { type: "platter" };
   takeVoucher.location = { type: "hand", participantId: actor.id };
   recordTransaction(table, actor, "Swap", "Platter", ingredientName(giveVoucher.ingredientId), ingredientName(takeVoucher.ingredientId));
@@ -726,6 +993,8 @@ function swapPlatterAssets(table: Table, actor: Participant, give: PlatterAssetR
   const takeAsset = requirePlatterAsset(table, take);
   requireAssetInInventory(giveAsset, actor.id);
   requireAssetInPlatter(takeAsset);
+  requireResolvedVoucherBackedByStock(table, giveAsset);
+  requireResolvedVoucherBackedByStock(table, takeAsset);
 
   moveAssetToPlatter(giveAsset);
   moveAssetToInventory(takeAsset, actor.id);
@@ -781,6 +1050,7 @@ function createOffer(
   for (const voucherId of offeredVoucherIds) {
     const voucher = requireVoucher(table, voucherId);
     requireVoucherInHand(voucher, actor.id);
+    requireVoucherBackedByStock(table, voucher);
   }
 
   const offerId = `offer_${table.nextId}`;
@@ -833,6 +1103,7 @@ function respondOffer(
   for (const voucherId of voucherIds) {
     const voucher = requireVoucher(table, voucherId);
     requireVoucherInHand(voucher, actor.id);
+    requireVoucherBackedByStock(table, voucher);
     if (voucher.ingredientId !== offer.requested.ingredientId) {
       throw new GameError("Accepted voucher ingredient does not match the request.", "invalid_offer_response");
     }
@@ -881,6 +1152,12 @@ function autoRefuseUnavailableOffers(table: Table): void {
     }
     const recipient = table.participants[offer.toParticipantId];
     if (!recipient) {
+      offer.status = "refused";
+      releaseOfferedVouchers(table, offer);
+      delete table.offers[offer.id];
+      continue;
+    }
+    if (offer.offeredVoucherIds.some((voucherId) => !voucherIsBackedByStock(table, table.vouchers[voucherId]))) {
       offer.status = "refused";
       releaseOfferedVouchers(table, offer);
       delete table.offers[offer.id];
@@ -936,6 +1213,7 @@ function placeVoucher(table: Table, actor: Participant, voucherId: string, requi
   }
   const voucher = requireVoucher(table, voucherId);
   requireVoucherInHand(voucher, actor.id);
+  requireVoucherBackedByStock(table, voucher);
   if (voucher.ingredientId !== requirement.ingredientId) {
     throw new GameError("Voucher ingredient does not match requirement.", "ingredient_mismatch");
   }
@@ -1316,6 +1594,90 @@ function enterEndgamePhase(table: Table): void {
   enterSettlementPhase(table);
 }
 
+function shouldGateTurn(table: Table, intent: Intent): boolean {
+  if (table.turnMode !== "round_robin") {
+    return false;
+  }
+  switch (intent.type) {
+    case "pass_turn":
+    case "redeem_all_and_pass_turn":
+      return true;
+    case "platter_swap":
+    case "platter_swap_ingredient":
+    case "platter_asset_swap":
+    case "platter_asset_swap_aggregate":
+    case "create_offer":
+    case "respond_offer":
+    case "cancel_offer":
+    case "place_voucher":
+    case "redeem_voucher":
+    case "redeem_from_hand":
+    case "prepare":
+    case "bite":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function shouldAdvanceTurnAfterIntent(table: Table, intent: Intent): boolean {
+  return table.turnMode === "round_robin" && (intent.type === "pass_turn" || intent.type === "redeem_all_and_pass_turn");
+}
+
+function requireCurrentTurn(table: Table, actor: Participant): void {
+  if (table.currentTurnParticipantId && table.currentTurnParticipantId !== actor.id) {
+    const current = table.participants[table.currentTurnParticipantId];
+    throw new GameError(`It is ${current?.name ?? "another participant"}'s turn.`, "not_current_turn");
+  }
+  if (!table.currentTurnParticipantId) {
+    table.currentTurnParticipantId = nextTurnParticipantId(table);
+  }
+  if (table.currentTurnParticipantId && table.currentTurnParticipantId !== actor.id) {
+    throw new GameError("It is not this participant's turn.", "not_current_turn");
+  }
+}
+
+function advanceTurn(table: Table, actorParticipantId: string): void {
+  if (table.turnMode !== "round_robin") {
+    table.currentTurnParticipantId = undefined;
+    return;
+  }
+  if (table.phase === "lobby" || table.phase === "deposit" || table.phase === "complete") {
+    table.currentTurnParticipantId = table.phase === "complete" ? undefined : table.currentTurnParticipantId;
+    return;
+  }
+  table.currentTurnParticipantId = nextTurnParticipantId(table, actorParticipantId);
+}
+
+function nextTurnParticipantId(table: Table, afterParticipantId?: string): string | undefined {
+  const candidates = activeParticipants(table).filter((participant) => participantCanReceiveTurn(table, participant));
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  if (!afterParticipantId) {
+    return candidates[0]?.id;
+  }
+  const afterIndex = table.participantOrder.indexOf(afterParticipantId);
+  const sorted = [...candidates].sort((left, right) => {
+    const leftIndex = table.participantOrder.indexOf(left.id);
+    const rightIndex = table.participantOrder.indexOf(right.id);
+    const normalizedLeft = leftIndex > afterIndex ? leftIndex : leftIndex + table.participantOrder.length;
+    const normalizedRight = rightIndex > afterIndex ? rightIndex : rightIndex + table.participantOrder.length;
+    return normalizedLeft - normalizedRight;
+  });
+  return sorted[0]?.id;
+}
+
+function participantCanReceiveTurn(table: Table, participant: Participant): boolean {
+  if (participant.role !== "active") {
+    return false;
+  }
+  if (table.phase === "playing") {
+    return true;
+  }
+  return table.phase === "settlement" || table.phase === "eating";
+}
+
 function requireParticipant(table: Table, participantId: string): Participant {
   const participant = table.participants[participantId];
   if (!participant) {
@@ -1343,6 +1705,26 @@ function requireOffer(table: Table, offerId: string): Offer {
 function requireVoucherInHand(voucher: Voucher, participantId: string): void {
   if (voucher.location.type !== "hand" || voucher.location.participantId !== participantId) {
     throw new GameError("Voucher is not in participant hand.", "voucher_not_in_hand");
+  }
+}
+
+function requireVoucherBackedByStock(table: Table, voucher: Voucher): void {
+  if (!voucherIsBackedByStock(table, voucher)) {
+    throw new GameError("Voucher owner has no real stock remaining.", "voucher_stock_depleted");
+  }
+}
+
+function voucherIsBackedByStock(table: Table, voucher?: Voucher): boolean {
+  if (!voucher) {
+    return false;
+  }
+  const owner = table.participants[voucher.ownerParticipantId];
+  return (owner?.realIngredientStock ?? 0) > 0;
+}
+
+function requireResolvedVoucherBackedByStock(table: Table, asset: ResolvedPlatterAsset): void {
+  if (asset.kind === "voucher") {
+    requireVoucherBackedByStock(table, asset.value);
   }
 }
 

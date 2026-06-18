@@ -1,0 +1,696 @@
+extends SceneTree
+
+const TableVisual := preload("res://scripts/table_visual.gd")
+const VisualAssets := preload("res://scripts/visual_asset_registry.gd")
+
+var _intents: Array = []
+var _views: Array = []
+var _statuses: Array = []
+var _failed := false
+
+
+func _initialize() -> void:
+	var visual = TableVisual.new()
+	root.add_child(visual)
+	await process_frame
+	visual.intent_requested.connect(func(intent: Dictionary) -> void:
+		_intents.append(intent)
+	)
+	visual.view_requested.connect(func(participant_id: String) -> void:
+		_views.append(participant_id)
+	)
+	visual.status_requested.connect(func(message: String) -> void:
+		_statuses.append(message)
+	)
+
+	var snapshot := _snapshot_fixture()
+	visual.debug_apply_snapshot(snapshot)
+	await process_frame
+	_require(visual.get_combined_minimum_size().x <= 720.0, "visual table minimum width fits a 720px portrait window")
+	var cooks_title := visual.find_child("Title_Cooks", true, false) as Label
+	var basket_title := visual.find_child("Title_Common_Basket", true, false) as Label
+	_require(cooks_title != null and cooks_title.text == "Cooks" and cooks_title.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "centers the Cooks title")
+	_require(basket_title != null and basket_title.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "centers the Common Basket title")
+	_require(visual.find_child("BasketBackdrop", true, false) != null, "renders a basket backdrop behind platter cards")
+	_require(visual.find_child("BasketSlot_rice", true, false) != null, "keeps a stable basket slot for an ingredient before it appears")
+	_require(visual.find_child("BasketSlot_cheese", true, false) != null, "keeps all ingredient basket slots available for animation anchors")
+	var basket_order: Array = visual.debug_stats.get("basketVisualOrder", [])
+	_require(basket_order == ["eggs", "cheese", "vegetables", "spices", "flour", "rice", "beans", "herbs"], "basket slots use the center-first deposit order")
+	_require(int(visual.debug_stats.get("participantCount", 0)) == 3, "hides the viewer from the top player list")
+	_require(visual.find_child("Participant_p1", true, false) == null, "does not render the viewer player tile")
+	var participant_tile := visual.find_child("Participant_p2", true, false)
+	_require(participant_tile != null, "renders non-viewer cook tile")
+	var cook_name := participant_tile.find_child("CookNameLabel", true, false) as Label
+	var cook_ingredient := participant_tile.find_child("CookIngredientLabel", true, false) as Label
+	_require(cook_name != null and cook_name.text == "Ben", "cook tile shows participant name")
+	_require(cook_ingredient != null and cook_ingredient.text.find("Beans x28") >= 0, "cook tile shows ingredient stock label")
+	_require(participant_tile.find_child("OfferBadgeIncoming", true, false) != null, "incoming offers render a visible pulsing badge")
+	var outgoing_tile := visual.find_child("Participant_p3", true, false)
+	_require(outgoing_tile != null and outgoing_tile.find_child("OfferBadgeOutgoing", true, false) != null, "outgoing offers render a visible pulsing badge")
+	_require(str(visual.debug_stats.get("inventoryTitle", "")) == "Amina Inv.", "shows shortened viewer inventory title")
+	_require(int(visual.debug_stats.get("handGroupCount", 0)) == 2, "renders grouped hand cards")
+	_require(int(visual.debug_stats.get("recipeSlotCount", 0)) == 6, "renders six recipe slots with duplicate ingredients")
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "renders the recipe name")
+	_require(int(visual.debug_stats.get("platterGroupCount", 0)) == 3, "renders platter card and food-part groups")
+	_require(int(visual.debug_stats.get("incomingOfferCount", 0)) == 1, "counts incoming offer indicators")
+	_require(int(visual.debug_stats.get("outgoingOfferCount", 0)) == 1, "counts outgoing offer indicators")
+	_require(VisualAssets.dish_meta("Vegetable Chili", "cup").has("texture"), "loads recipe-specific dish piece art")
+	_require(VisualAssets.short_dish_name("Cheese Frittata") == "Frittata", "shortens finished dish part names")
+	_assert_start_snapshot_animates_offerings_from_empty_basket(visual)
+	_assert_turn_update_waits_for_animation(visual)
+	_assert_batch_redeem_updates_counts_one_by_one(visual)
+	_assert_deposits_update_basket_one_by_one(visual)
+	_assert_animation_event(visual, _deposit_before(), _deposit_after(), "deposit", "deposit confirmation queues animation")
+	_assert_animation_event(visual, _snapshot_fixture(), _swap_after(), "swap", "swap confirmation queues animation")
+	_assert_animation_event(visual, _snapshot_fixture(), _public_swap_after(), "swap", "off-turn public swap queues animation")
+	_assert_animation_event(visual, _snapshot_fixture(), _exchange_after(), "exchange", "accepted exchange queues bidirectional animation")
+	_assert_animation_event(visual, _snapshot_fixture(), _redeem_after(), "redeem", "redeem confirmation queues animation")
+	_assert_animation_count(visual, _snapshot_fixture(), _redeem_all_after(), "redeem", 2, "batch redeem queues one animation per redeemed card")
+	_assert_animation_event(visual, _snapshot_fixture(), _public_redeem_after(), "public_redeem", "off-turn public redeem queues animation")
+	_assert_animation_event(visual, _prepare_before(), _prepare_after(), "prepare", "prepare confirmation queues animation")
+	_assert_animation_event(visual, _offer_before(), _snapshot_fixture(), "offer", "offer badge change queues animation")
+	_assert_animation_event(visual, _settlement_before(), _settlement_after(), "settlement_swap", "settlement swap queues animation")
+	_assert_animation_event(visual, _eating_before(), _eating_after(), "eat", "bite confirmation queues animation")
+	_assert_animation_event(visual, _complete_before(), _complete_after(), "complete", "complete confirmation queues animation")
+	visual.render(snapshot)
+	visual.debug_play_animation_event({"type": "deposit", "ingredientId": "rice", "participantId": "p1"})
+	visual.debug_play_animation_event({"type": "swap", "giveKind": "voucher", "giveIngredientId": "rice", "takeKind": "voucher", "takeIngredientId": "beans"})
+	visual.debug_play_animation_event({"type": "exchange", "fromParticipantId": "p2", "toParticipantId": "p1", "offeredIngredientIds": ["beans"], "requestedIngredientIds": ["rice"]})
+	visual.debug_play_animation_event({"type": "redeem", "ingredientId": "rice", "slotIndex": 0})
+	visual.debug_play_animation_event({"type": "public_redeem", "participantId": "p2", "ownerParticipantId": "p1", "ingredientId": "rice"})
+	visual.debug_play_animation_event({"type": "prepare", "dishName": "Cheese Frittata", "unit": "slice"})
+	visual.debug_play_animation_event({"type": "offer", "participantId": "p2", "indicator": "!"})
+	visual.debug_play_animation_event({"type": "settlement_swap", "giveKind": "dish_part", "giveDishName": "Bean Dip", "giveUnit": "scoop", "takeKind": "voucher", "takeIngredientId": "beans"})
+	visual.debug_play_animation_event({"type": "eat", "dishName": "Cheese Frittata", "unit": "slice"})
+	visual.debug_play_animation_event({"type": "complete"})
+
+	_intents.clear()
+	visual.debug_press_hand_ingredient("cheese")
+	_require(_intents.is_empty(), "needed hand card selection does not immediately mutate")
+	visual.debug_press_pass_turn_action()
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "redeem_all_and_pass_turn", "redeem-and-pass action emits batch redeem intent")
+
+	_intents.clear()
+	var off_turn := _snapshot_fixture()
+	off_turn["currentTurnParticipantId"] = "p2"
+	visual.debug_apply_snapshot(off_turn)
+	visual.debug_press_hand_ingredient("cheese")
+	_require(_intents.is_empty(), "off-turn hand card does not emit gameplay intent")
+
+	_intents.clear()
+	_statuses.clear()
+	var depleted := _snapshot_fixture()
+	depleted["participants"][0]["realIngredientStock"] = 0
+	visual.debug_clear_selections()
+	visual.debug_apply_snapshot(depleted)
+	visual.debug_press_hand_ingredient("rice")
+	_require(visual.debug_selected_hand_ingredient() == "", "stock-depleted hand card is not selected")
+	_require(not _statuses.is_empty() and str(_statuses[_statuses.size() - 1]).find("no stock") >= 0, "stock-depleted hand card explains why it is disabled")
+
+	_intents.clear()
+	var deposit := _snapshot_fixture()
+	deposit["phase"] = "deposit"
+	deposit["currentTurnParticipantId"] = "p1"
+	deposit["participants"][0]["depositedInitial"] = false
+	visual.debug_apply_snapshot(deposit)
+	visual.debug_press_hand_ingredient("rice")
+	_require(_intents.is_empty(), "deposit card selection does not immediately mutate")
+	visual.debug_press_offer_selected_to_common_basket()
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "deposit", "offer to common basket emits deposit intent")
+
+	_intents.clear()
+	var swap := _snapshot_fixture()
+	swap["ownRecipe"]["requirements"][0]["redeemedQty"] = 1
+	visual.debug_apply_snapshot(swap)
+	visual.debug_press_hand_ingredient("rice")
+	visual.debug_press_platter_ingredient("beans")
+	_require(_intents.is_empty(), "selected hand and platter cards wait for swap confirmation")
+	visual.debug_press_swap_selected()
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "confirmed selected hand and platter cards emit swap intent")
+
+	_intents.clear()
+	var auto_swap := _snapshot_fixture()
+	visual.debug_apply_snapshot(auto_swap)
+	visual.debug_press_platter_ingredient("beans")
+	_require(visual.debug_selected_hand_ingredient() == "rice", "basket tap defaults give-card to viewer main ingredient")
+	visual.debug_press_swap_selected()
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "auto-selected basket swap emits swap intent")
+	_require(str(_intents[0].get("giveVoucherId", "")) == "rice_1", "auto-selected swap gives viewer main card")
+
+	_intents.clear()
+	var same_resource_swap := _snapshot_fixture()
+	same_resource_swap["platter"].append({"id": "rice_9", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "platter"}})
+	visual.debug_apply_snapshot(same_resource_swap)
+	visual.debug_press_platter_ingredient("rice")
+	_require(visual.debug_selected_hand_ingredient() == "cheese", "basket tap on viewer main ingredient defaults to another held card")
+	visual.debug_press_swap_selected()
+
+	_intents.clear()
+	var offer_shortcut := _snapshot_fixture()
+	visual.debug_apply_snapshot(offer_shortcut)
+	visual.debug_press_participant("p4")
+	_require(visual.debug_selected_hand_ingredient() == "rice", "player tap defaults offer-card to viewer main ingredient")
+	_require(int(visual.debug_stats.get("offerPopupHeight", 0)) > 0 and int(visual.debug_stats.get("offerPopupHeight", 0)) <= 150, "create-offer popup stays compact")
+
+	var incoming_offer_popup := _snapshot_fixture()
+	visual.debug_apply_snapshot(incoming_offer_popup)
+	visual.debug_press_participant("p2")
+	_require(int(visual.debug_stats.get("offerPopupHeight", 0)) > 0 and int(visual.debug_stats.get("offerPopupHeight", 0)) <= 210, "accept/refuse offer popup stays compact")
+
+	_intents.clear()
+	var food_swap := _snapshot_fixture()
+	food_swap["ownFoodParts"] = [
+		{"id": "dish_2_part_1", "dishId": "dish_2", "dishName": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}}
+	]
+	visual.debug_apply_snapshot(food_swap)
+	visual.debug_press_own_food_part("Bean Dip")
+	visual.debug_press_platter_ingredient("beans")
+	visual.debug_press_swap_selected()
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_asset_swap", "held food part can swap with basket asset during play")
+
+	_intents.clear()
+	var eating := _snapshot_fixture()
+	eating["phase"] = "eating"
+	eating["currentTurnParticipantId"] = "p1"
+	eating["participants"][0]["cleared"] = true
+	eating["ownFoodParts"] = [
+		{"id": "dish_3_part_1", "dishId": "dish_3", "dishName": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}}
+	]
+	visual.debug_apply_snapshot(eating)
+	_require(bool(visual.debug_stats.get("takeBiteEnabled", false)), "eating phase enables Take Bite for cleared player with held food parts")
+	visual.debug_press_take_bite_action()
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "bite", "Take Bite emits bite intent")
+	_require(str(_intents[0].get("dishId", "")) == "dish_3", "Take Bite auto-selects a held finished dish piece")
+
+	_intents.clear()
+	visual.debug_apply_snapshot(snapshot)
+	visual.debug_press_first_incoming_offer_accept()
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "respond_offer", "incoming offer accept emits response intent")
+
+	var offline := _snapshot_fixture()
+	offline["offline"] = true
+	visual.debug_apply_snapshot(offline)
+	_require(int(visual.debug_stats.get("recipeSlotCount", 0)) == 6, "offline-shaped snapshot renders through same path")
+
+	var completed := _snapshot_fixture()
+	completed["ownRecipe"] = {}
+	completed["targetDishCount"] = 4
+	completed["participants"][0]["dishCount"] = 4
+	visual.debug_apply_snapshot(completed)
+	_require(int(visual.debug_stats.get("dishSummaryCount", 0)) == 4, "empty recipe area renders active player dish counts")
+	_require(int(visual.debug_stats.get("dishSummaryColumns", 0)) == 2, "dish summary renders as a two-column grid")
+
+	var settlement := _snapshot_fixture()
+	settlement["phase"] = "settlement"
+	settlement["ownRecipe"] = {}
+	settlement["participants"][0]["heldFoodPartCount"] = 40
+	settlement["participants"][1]["heldFoodPartCount"] = 39
+	settlement["participants"][2]["heldFoodPartCount"] = 20
+	settlement["participants"][3]["heldFoodPartCount"] = 0
+	visual.debug_apply_snapshot(settlement)
+	_require(int(visual.debug_stats.get("pieceSummaryCount", 0)) == 4, "settlement summary renders active player held pieces")
+	_require(int(visual.debug_stats.get("pieceSummaryTotal", 0)) == 99, "settlement summary totals held pieces that can still be eaten")
+
+	var complete := _snapshot_fixture()
+	complete["phase"] = "complete"
+	complete["ownRecipe"] = {}
+	complete["dishes"] = [
+		{"id": "dish_1", "ownerParticipantId": "p1", "name": "Cheese Frittata", "partsRemaining": 0, "partsEaten": 10, "bitesRemaining": 0, "biteCounts": {"p1": 3, "p2": 2}},
+		{"id": "dish_2", "ownerParticipantId": "p2", "name": "Bean Dip", "partsRemaining": 0, "partsEaten": 10, "bitesRemaining": 0, "biteCounts": {"p1": 1, "p3": 4}}
+	]
+	visual.debug_apply_snapshot(complete)
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "complete phase renders congratulations state")
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Congratulations!", "complete phase replaces recipe title")
+	_require(int(visual.debug_stats.get("completeBiteSummaryCount", 0)) == 4, "complete phase summarizes bites for active players")
+
+	if _failed:
+		quit(1)
+	else:
+		print("table visual smoke ok")
+		quit()
+
+
+func _assert_animation_event(visual: Node, before_snapshot: Dictionary, after_snapshot: Dictionary, expected_type: String, message: String) -> void:
+	visual.debug_apply_snapshot(before_snapshot)
+	visual.render(after_snapshot)
+	var types: Array = visual.debug_stats.get("lastAnimationTypes", [])
+	_require(types.has(expected_type), message)
+	visual.debug_flush_animations()
+
+
+func _assert_animation_count(visual: Node, before_snapshot: Dictionary, after_snapshot: Dictionary, expected_type: String, expected_minimum: int, message: String) -> void:
+	visual.debug_apply_snapshot(before_snapshot)
+	visual.render(after_snapshot)
+	var count := 0
+	for raw_type in visual.debug_stats.get("lastAnimationTypes", []):
+		if str(raw_type) == expected_type:
+			count += 1
+	_require(count >= expected_minimum, message)
+	visual.debug_flush_animations()
+
+
+func _assert_turn_update_waits_for_animation(visual: Node) -> void:
+	var before := _snapshot_fixture()
+	var after := _snapshot_fixture()
+	after["currentTurnParticipantId"] = "p2"
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "turn handoff waits while animation is staged")
+	var types: Array = visual.debug_stats.get("lastAnimationTypes", [])
+	_require(types.has("turn"), "turn handoff queues a turn animation")
+	visual.debug_flush_animations()
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "turn handoff updates after animation completes")
+
+
+func _assert_batch_redeem_updates_counts_one_by_one(visual: Node) -> void:
+	var before := _snapshot_fixture()
+	var after := _redeem_all_after()
+	after["currentTurnParticipantId"] = "p2"
+	after["turn"] = 15
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	_require(_visible_hand_count(visual, "rice") == 2, "batch redeem keeps initial rice count before first animation finishes")
+	_require(_visible_hand_count(visual, "cheese") == 1, "batch redeem keeps initial cheese count before first animation finishes")
+	_require(_visible_redeemed_count(visual, "rice") == 1, "batch redeem keeps initial recipe count before first animation finishes")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "batch redeem keeps current turn before redeem animations finish")
+
+	var first: String = visual.debug_apply_next_animation_milestone()
+	_require(first == "redeem", "batch redeem first milestone is a redeem")
+	_require(_visible_hand_count(visual, "rice") == 1, "first redeem milestone removes one rice card visually")
+	_require(_visible_hand_count(visual, "cheese") == 1, "first redeem milestone leaves later cheese card in hand")
+	_require(_visible_redeemed_count(visual, "rice") == 2, "first redeem milestone fills one rice recipe slot")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "first redeem milestone does not pass the turn")
+
+	var second: String = visual.debug_apply_next_animation_milestone()
+	_require(second == "redeem", "batch redeem second milestone is a redeem")
+	_require(_visible_hand_count(visual, "cheese") == 0, "second redeem milestone removes one cheese card visually")
+	_require(_visible_redeemed_count(visual, "cheese") == 1, "second redeem milestone fills the cheese recipe slot")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "second redeem milestone still does not pass the turn")
+
+	var third: String = visual.debug_apply_next_animation_milestone()
+	_require(third == "turn", "batch redeem passes turn only after redeem milestones")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "batch redeem updates turn after the turn milestone")
+	visual.debug_flush_animations()
+
+
+func _assert_deposits_update_basket_one_by_one(visual: Node) -> void:
+	var before := _deposit_all_before()
+	var after := _deposit_all_after()
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	_require(_visible_platter_count(visual, "rice") == 0, "opening deposits keep basket empty before the first animation finishes")
+	_require(visual.debug_stats.get("lastDepositBasketSlots", []) == [5, 6, 1, 2], "opening deposits target fixed center-first basket slots")
+
+	var first: String = visual.debug_apply_next_animation_milestone()
+	_require(first == "deposit", "opening deposits first milestone is a deposit")
+	_require(_visible_platter_count(visual, "cheese") == 1, "first opening deposit follows the first Deposit transaction")
+	_require(_visible_platter_total(visual) == 1, "first opening deposit only reveals one basket card")
+
+	var second: String = visual.debug_apply_next_animation_milestone()
+	_require(second == "deposit", "opening deposits second milestone is a deposit")
+	_require(_visible_platter_count(visual, "rice") == 1, "second opening deposit follows the second Deposit transaction")
+	_require(_visible_platter_total(visual) == 2, "second opening deposit reveals exactly two basket cards")
+
+	var third: String = visual.debug_apply_next_animation_milestone()
+	_require(third == "deposit", "opening deposits third milestone is a deposit")
+	_require(_visible_platter_count(visual, "vegetables") == 1, "third opening deposit follows the third Deposit transaction")
+	_require(_visible_platter_total(visual) == 3, "third opening deposit reveals exactly three basket cards")
+
+	var fourth: String = visual.debug_apply_next_animation_milestone()
+	_require(fourth == "deposit", "opening deposits fourth milestone is a deposit")
+	_require(_visible_platter_count(visual, "beans") == 1, "fourth opening deposit follows the fourth Deposit transaction")
+	_require(_visible_platter_total(visual) == 4, "fourth opening deposit reveals all fixture basket cards")
+	visual.debug_flush_animations()
+
+
+func _assert_start_snapshot_animates_offerings_from_empty_basket(visual: Node) -> void:
+	var before := _lobby_before_start()
+	var after := _deposit_all_after()
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	_require(str(visual.debug_stats.get("phase", "")) == "deposit", "start snapshot applies the deposit phase immediately")
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "start snapshot shows the recipe before animations")
+	_require(int(visual.debug_stats.get("recipeSlotCount", 0)) == 6, "start snapshot shows the six recipe slots")
+	_require(int(visual.debug_stats.get("handGroupCount", 0)) == 2, "start snapshot shows viewer promise cards")
+	_require(_visible_hand_count(visual, "rice") == 2, "start snapshot shows the viewer's offered card before it animates")
+	_require(_visible_platter_total(visual) == 0, "start snapshot begins with an empty Common Basket")
+	_require(int(visual.debug_stats.get("animationEventCount", 0)) == 4, "start snapshot queues offering animations from the setup baseline")
+	_require(visual.debug_stats.get("lastDepositBasketSlots", []) == [5, 6, 1, 2], "start snapshot offering animations target fixed center-first basket slots")
+	_require(visual.debug_stats.get("basketVisualOrder", []) == ["eggs", "vegetables", "beans", "spices", "flour", "cheese", "rice", "herbs"], "start snapshot basket order follows Deposit transactions, not participant order")
+	var participant_tile := visual.find_child("Participant_p2", true, false)
+	_require(participant_tile != null, "start snapshot renders cook tiles")
+	if participant_tile != null:
+		var cook_ingredient := participant_tile.find_child("CookIngredientLabel", true, false) as Label
+		_require(cook_ingredient != null and cook_ingredient.text.find("Beans x28") >= 0, "start snapshot shows cook ingredient stock labels")
+	var first: String = visual.debug_apply_next_animation_milestone()
+	_require(first == "deposit", "start snapshot first animation is an offering")
+	_require(_visible_platter_total(visual) == 1, "first offering animation adds one basket card")
+	_require(_visible_platter_count(visual, "cheese") == 1, "first offering animation follows the first Deposit transaction")
+	visual.debug_flush_animations()
+	_require(_visible_platter_total(visual) == 4, "start snapshot ends with confirmed basket contents after animations")
+
+
+func _visible_hand_count(visual: Node, ingredient_id: String) -> int:
+	var snapshot: Dictionary = visual.debug_visible_snapshot()
+	var count := 0
+	for raw_voucher in snapshot.get("ownHand", []):
+		var voucher: Dictionary = raw_voucher
+		if str(voucher.get("ingredientId", "")) == ingredient_id:
+			count += 1
+	return count
+
+
+func _visible_platter_count(visual: Node, ingredient_id: String) -> int:
+	var snapshot: Dictionary = visual.debug_visible_snapshot()
+	var count := 0
+	for raw_voucher in snapshot.get("platter", []):
+		var voucher: Dictionary = raw_voucher
+		if str(voucher.get("ingredientId", "")) == ingredient_id:
+			count += 1
+	return count
+
+
+func _visible_platter_total(visual: Node) -> int:
+	var snapshot: Dictionary = visual.debug_visible_snapshot()
+	return snapshot.get("platter", []).size()
+
+
+func _visible_redeemed_count(visual: Node, ingredient_id: String) -> int:
+	var snapshot: Dictionary = visual.debug_visible_snapshot()
+	var recipe: Dictionary = snapshot.get("ownRecipe", {})
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		if str(requirement.get("ingredientId", "")) == ingredient_id:
+			return int(requirement.get("redeemedQty", 0))
+	return 0
+
+
+func _deposit_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["phase"] = "deposit"
+	snapshot["participants"][0]["depositedInitial"] = false
+	return snapshot
+
+
+func _deposit_after() -> Dictionary:
+	var snapshot := _deposit_before()
+	snapshot["participants"][0]["depositedInitial"] = true
+	_move_voucher(snapshot, "rice_1", "ownHand", "platter")
+	return snapshot
+
+
+func _deposit_all_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["phase"] = "deposit"
+	snapshot["platter"] = []
+	for index in range(snapshot["participants"].size()):
+		snapshot["participants"][index]["depositedInitial"] = false
+	return snapshot
+
+
+func _deposit_all_after() -> Dictionary:
+	var snapshot := _deposit_all_before()
+	for index in range(snapshot["participants"].size()):
+		snapshot["participants"][index]["depositedInitial"] = true
+	_remove_voucher(snapshot, "rice_1", "ownHand")
+	snapshot["platter"] = [
+		{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "platter"}},
+		{"id": "beans_1", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "platter"}},
+		{"id": "cheese_7", "ingredientId": "cheese", "ownerParticipantId": "p3", "location": {"type": "platter"}},
+		{"id": "vegetables_1", "ingredientId": "vegetables", "ownerParticipantId": "p4", "location": {"type": "platter"}}
+	]
+	snapshot["transactionHistory"] = [
+		{"id": "tx_1", "turn": 14, "participantId": "p3", "name": "Clara", "action": "Deposit", "counterparty": "Platter", "itemOut": "Cheese", "itemBack": "None"},
+		{"id": "tx_2", "turn": 14, "participantId": "p1", "name": "Amina", "action": "Deposit", "counterparty": "Platter", "itemOut": "Rice", "itemBack": "None"},
+		{"id": "tx_3", "turn": 14, "participantId": "p4", "name": "Diego", "action": "Deposit", "counterparty": "Platter", "itemOut": "Veggies", "itemBack": "None"},
+		{"id": "tx_4", "turn": 14, "participantId": "p2", "name": "Ben", "action": "Deposit", "counterparty": "Platter", "itemOut": "Beans", "itemBack": "None"}
+	]
+	return snapshot
+
+
+func _lobby_before_start() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["phase"] = "lobby"
+	snapshot["currentTurnParticipantId"] = ""
+	snapshot["platter"] = []
+	snapshot["platterFoodParts"] = []
+	snapshot["ownHand"] = []
+	snapshot["ownFoodParts"] = []
+	snapshot["ownRecipe"] = {}
+	snapshot["offers"] = []
+	for index in range(snapshot["participants"].size()):
+		var participant: Dictionary = snapshot["participants"][index]
+		participant.erase("ingredientId")
+		participant.erase("realIngredientStock")
+		participant["depositedInitial"] = false
+		participant["dishCount"] = 0
+		snapshot["participants"][index] = participant
+	return snapshot
+
+
+func _swap_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	_move_voucher(snapshot, "rice_1", "ownHand", "platter")
+	_move_voucher(snapshot, "beans_1", "platter", "ownHand")
+	return snapshot
+
+
+func _public_swap_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	_remove_voucher(snapshot, "vegetables_1", "platter")
+	snapshot["platter"].append({"id": "beans_9", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "platter"}})
+	snapshot["transactionHistory"] = [
+		{"id": "tx_1", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Swap", "counterparty": "Platter", "itemOut": "Beans", "itemBack": "Veggies"}
+	]
+	return snapshot
+
+
+func _exchange_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["currentTurnParticipantId"] = "p3"
+	_remove_voucher(snapshot, "rice_1", "ownHand")
+	snapshot["ownHand"].append({"id": "beans_3", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "hand", "participantId": "p1"}})
+	snapshot["offers"] = [snapshot["offers"][1]]
+	snapshot["transactionHistory"] = [
+		{"id": "tx_3", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Exchange", "counterpartyParticipantId": "p1", "counterparty": "Amina", "itemOut": "Beans", "itemBack": "Rice"}
+	]
+	return snapshot
+
+
+func _redeem_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["ownRecipe"]["requirements"][0]["redeemedQty"] = 2
+	_remove_voucher(snapshot, "rice_1", "ownHand")
+	return snapshot
+
+
+func _redeem_all_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["ownRecipe"]["requirements"][0]["redeemedQty"] = 2
+	snapshot["ownRecipe"]["requirements"][4]["redeemedQty"] = 1
+	_remove_voucher(snapshot, "rice_1", "ownHand")
+	_remove_voucher(snapshot, "cheese_1", "ownHand")
+	snapshot["transactionHistory"] = [
+		{"id": "tx_4", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Redeem", "counterpartyParticipantId": "p1", "counterparty": "Amina", "itemOut": "Rice", "itemBack": "Real Rice"},
+		{"id": "tx_5", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Redeem", "counterpartyParticipantId": "p3", "counterparty": "Clara", "itemOut": "Cheese", "itemBack": "Real Cheese"}
+	]
+	return snapshot
+
+
+func _public_redeem_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["participants"][0]["realIngredientStock"] = 27
+	snapshot["transactionHistory"] = [
+		{"id": "tx_2", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Redeem", "counterpartyParticipantId": "p1", "counterparty": "Amina", "itemOut": "Rice", "itemBack": "Real Rice"}
+	]
+	return snapshot
+
+
+func _prepare_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	for raw_requirement in snapshot["ownRecipe"]["requirements"]:
+		var requirement: Dictionary = raw_requirement
+		requirement["redeemedQty"] = int(requirement.get("requiredQty", 0))
+	return snapshot
+
+
+func _prepare_after() -> Dictionary:
+	var snapshot := _prepare_before()
+	snapshot["participants"][0]["dishCount"] = 1
+	snapshot["ownRecipe"] = {
+		"id": "recipe_2",
+		"name": "Cheese Frittata",
+		"requirements": [
+			{"id": "req_cheese", "ingredientId": "cheese", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
+			{"id": "req_eggs", "ingredientId": "eggs", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
+			{"id": "req_rice", "ingredientId": "rice", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
+			{"id": "req_beans", "ingredientId": "beans", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
+			{"id": "req_spices", "ingredientId": "spices", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
+			{"id": "req_flour", "ingredientId": "flour", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []}
+		]
+	}
+	snapshot["ownFoodParts"] = [
+		{"id": "dish_3_part_1", "dishId": "dish_3", "dishName": "Rice Bean Bowl", "unitSingular": "bowl", "unitPlural": "bowls", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}}
+	]
+	return snapshot
+
+
+func _offer_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["offers"] = []
+	return snapshot
+
+
+func _settlement_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["phase"] = "settlement"
+	snapshot["ownRecipe"] = {}
+	snapshot["ownFoodParts"] = [
+		{"id": "dish_2_part_1", "dishId": "dish_2", "dishName": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}}
+	]
+	return snapshot
+
+
+func _settlement_after() -> Dictionary:
+	var snapshot := _settlement_before()
+	var food_part: Dictionary = snapshot["ownFoodParts"][0]
+	snapshot["ownFoodParts"] = []
+	snapshot["platterFoodParts"].append(food_part)
+	_move_voucher(snapshot, "beans_1", "platter", "ownHand")
+	return snapshot
+
+
+func _eating_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["phase"] = "eating"
+	snapshot["participants"][0]["cleared"] = true
+	snapshot["ownFoodParts"] = [
+		{"id": "dish_3_part_1", "dishId": "dish_3", "dishName": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}}
+	]
+	return snapshot
+
+
+func _eating_after() -> Dictionary:
+	var snapshot := _eating_before()
+	snapshot["ownFoodParts"] = []
+	return snapshot
+
+
+func _complete_before() -> Dictionary:
+	var snapshot := _eating_after()
+	snapshot["phase"] = "eating"
+	return snapshot
+
+
+func _complete_after() -> Dictionary:
+	var snapshot := _complete_before()
+	snapshot["phase"] = "complete"
+	return snapshot
+
+
+func _move_voucher(snapshot: Dictionary, voucher_id: String, from_key: String, to_key: String) -> void:
+	var from_array: Array = snapshot.get(from_key, [])
+	for index in range(from_array.size()):
+		var voucher: Dictionary = from_array[index]
+		if str(voucher.get("id", "")) == voucher_id:
+			from_array.remove_at(index)
+			var moved := voucher.duplicate(true)
+			moved["location"] = {"type": "hand", "participantId": "p1"} if to_key == "ownHand" else {"type": "platter"}
+			var to_array: Array = snapshot.get(to_key, [])
+			to_array.append(moved)
+			snapshot[to_key] = to_array
+			return
+
+
+func _remove_voucher(snapshot: Dictionary, voucher_id: String, from_key: String) -> void:
+	var from_array: Array = snapshot.get(from_key, [])
+	for index in range(from_array.size()):
+		var voucher: Dictionary = from_array[index]
+		if str(voucher.get("id", "")) == voucher_id:
+			from_array.remove_at(index)
+			snapshot[from_key] = from_array
+			return
+
+
+func _snapshot_fixture() -> Dictionary:
+	return {
+		"tableCode": "VISUAL",
+		"phase": "playing",
+		"turn": 14,
+		"turnMode": "round_robin",
+		"currentTurnParticipantId": "p1",
+		"viewerParticipantId": "p1",
+		"connectionParticipantId": "p1",
+		"viewerRole": "active",
+		"viewerCanUseHostControls": true,
+		"controlledParticipantIds": ["p1", "p4"],
+		"ingredients": [
+			{"id": "cheese", "name": "Cheese"},
+			{"id": "flour", "name": "Flour"},
+			{"id": "herbs", "name": "Herbs"},
+			{"id": "vegetables", "name": "Vegetables"},
+			{"id": "rice", "name": "Rice"},
+			{"id": "beans", "name": "Beans"},
+			{"id": "spices", "name": "Spices"},
+			{"id": "eggs", "name": "Eggs"}
+		],
+		"participants": [
+			{"id": "p1", "name": "Amina", "role": "active", "kind": "human", "ingredientId": "rice", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "dishCount": 0, "heldFoodPartCount": 0},
+			{"id": "p2", "name": "Ben", "role": "active", "kind": "human", "ingredientId": "beans", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0},
+			{"id": "p3", "name": "Clara", "role": "active", "kind": "human", "ingredientId": "cheese", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0},
+			{"id": "p4", "name": "Diego", "role": "active", "kind": "human", "ingredientId": "vegetables", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0}
+		],
+		"ownHand": [
+			{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
+			{"id": "rice_2", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
+			{"id": "cheese_1", "ingredientId": "cheese", "ownerParticipantId": "p3", "location": {"type": "hand", "participantId": "p1"}}
+		],
+		"platter": [
+			{"id": "beans_1", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "platter"}},
+			{"id": "beans_2", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "platter"}},
+			{"id": "vegetables_1", "ingredientId": "vegetables", "ownerParticipantId": "p4", "location": {"type": "platter"}}
+		],
+		"platterFoodParts": [
+			{"id": "dish_1_part_1", "dishId": "dish_1", "dishName": "Vegetable Chili", "unitSingular": "cup", "unitPlural": "cups", "makerParticipantId": "p4", "location": {"type": "platter"}},
+			{"id": "dish_1_part_2", "dishId": "dish_1", "dishName": "Vegetable Chili", "unitSingular": "cup", "unitPlural": "cups", "makerParticipantId": "p4", "location": {"type": "platter"}}
+		],
+		"ownFoodParts": [],
+		"ownRecipe": {
+			"id": "recipe_1",
+			"name": "Rice Bean Bowl",
+			"requirements": [
+				{"id": "req_rice", "ingredientId": "rice", "requiredQty": 2, "redeemedQty": 1, "placedVoucherIds": []},
+				{"id": "req_beans", "ingredientId": "beans", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
+				{"id": "req_vegetables", "ingredientId": "vegetables", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
+				{"id": "req_spices", "ingredientId": "spices", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
+				{"id": "req_cheese", "ingredientId": "cheese", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []}
+			]
+		},
+		"offers": [
+			{
+				"id": "offer_in",
+				"status": "pending",
+				"fromParticipantId": "p2",
+				"toParticipantId": "p1",
+				"offeredVoucherIds": ["beans_3"],
+				"offeredVouchers": [{"id": "beans_3", "ingredientId": "beans"}],
+				"requested": {"ingredientId": "rice", "quantity": 1}
+			},
+			{
+				"id": "offer_out",
+				"status": "pending",
+				"fromParticipantId": "p1",
+				"toParticipantId": "p3",
+				"offeredVoucherIds": ["rice_4"],
+				"offeredVouchers": [{"id": "rice_4", "ingredientId": "rice"}],
+				"requested": {"ingredientId": "cheese", "quantity": 1}
+			}
+		]
+	}
+
+
+func _require(condition: bool, message: String) -> void:
+	if condition:
+		return
+	_failed = true
+	push_error(message)

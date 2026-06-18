@@ -20,12 +20,17 @@
 
 ## Phase 3 - Playable MVP
 
-- [ ] Add offline bot-only mode entrypoint for Web and Android.
-- [ ] Mirror online rules for offline bot-only play without requiring the Node server on-device.
-- [ ] Add host-controlled multi-seat support with participant identity separated from controller identity.
-- [ ] Add setup and server validation for `round_robin` and `market` turn modes.
-- [ ] Add UI controls for switching controlled seats and showing the active round-robin turn.
-- [x] Add recipe generation tooling for 7-20 active participants with committed ingredient sets and four recipes per ingredient.
+- [x] Add offline pass-and-play setup entrypoint for Web and Android.
+- [x] Add initial GDScript rules mirror for offline local controlled seats and bot play without requiring the Node server on-device.
+- [x] Add host-controlled multi-seat support with participant identity separated from controller identity.
+- [x] Add setup and server validation for `round_robin` and `market` turn modes.
+- [x] Add UI controls for switching controlled seats and showing the active round-robin turn.
+- [x] Add batch `Redeem Cards and Pass Turn` action for cooking turns in online and offline rules.
+- [x] Add recipe generation tooling for one committed 8-player ingredient set with four recipes per ingredient.
+- [x] Fix the current playable MVP table size at exactly 8 active seats.
+- [x] Simplify setup to `Play Offline` / `Play Online` with player plus 7 prefilled bot seats, fixed 4 dishes, fixed 40 stock, and no timer in normal setup.
+- [x] Allow offline and online hosts to take over prefilled bot seats before start while preserving filtered per-seat views.
+- [x] Add editable pre-start seat grid with ingredient image, name field, and Player/Bot toggle for all 8 seats.
 - [ ] Add polished visual assets and table layout inspired by potluck dinners and cooking apps.
 - [x] Add structured offer creation/acceptance flows.
 - [ ] Add mobile touch UX for card placement, platter swaps, settlement swaps, and eating food parts.
@@ -35,9 +40,12 @@
 
 - [ ] Add persistence if the design requires restart recovery.
 - [ ] Add server deployment configuration.
-- [x] Add single-table load tests for 20-player games.
-- [ ] Add concurrent load and soak tests for 100+ simultaneous tables with 7-20 players each.
-- [ ] Optimize live deltas so mature 20-player game deltas stay near the 4 KB p95 target.
-- [ ] Add parity tests or fixtures so offline bot-only rules stay aligned with online server rules.
-- [ ] Add tests for host-controlled seats, round-robin turn enforcement, market-style asynchronous actions, and offline parity.
-- [x] Add fixture coverage for generated recipe catalogs across 7-20 player configurations.
+- [x] Add single-table load tests for larger catalog-backed games before fixing the current MVP at 8 seats.
+- [ ] Add concurrent load and soak tests for 100+ simultaneous 8-seat tables.
+- [ ] Revisit variable runtime table sizes only if the fixed 8-seat MVP needs expansion.
+- [ ] Optimize live deltas so mature 8-seat game deltas stay near the 4 KB p95 target, with 20-seat budgets reserved for future expansion.
+- [ ] Add full golden parity tests so offline rule traces stay aligned with online server rule traces.
+- [x] Add tests for host-controlled seats, round-robin turn enforcement, and market-style asynchronous actions.
+- [x] Expand offline parity tests beyond smoke coverage to swaps, offers, redemption, preparation, settlement, eating, timers, and invalid rollback.
+- [x] Add fixture coverage for the generated 8-player recipe catalog and shared client rule constants.
+- [x] Generate and consume shared client rule constants so online/offline validation bounds cannot drift silently.

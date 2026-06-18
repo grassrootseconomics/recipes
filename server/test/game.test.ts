@@ -1,7 +1,21 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { decideBotIntent, runBots } from "../src/bots.js";
-import { DISH_PARTS_PER_DISH, INGREDIENTS, REAL_UNITS_PER_INGREDIENT, VOUCHERS_PER_INGREDIENT } from "../src/constants.js";
+import {
+  BOT_TYPES,
+  DEFAULT_TARGET_DISH_COUNT,
+  DISH_PARTS_PER_DISH,
+  INGREDIENTS,
+  MAX_ACTIVE_PARTICIPANTS,
+  MAX_STOCK_PER_INGREDIENT,
+  MAX_TARGET_DISH_COUNT,
+  MIN_ACTIVE_PARTICIPANTS,
+  MIN_STOCK_PER_INGREDIENT,
+  MIN_TARGET_DISH_COUNT,
+  REAL_UNITS_PER_INGREDIENT,
+  VOUCHERS_PER_INGREDIENT
+} from "../src/constants.js";
 import {
   activeParticipants,
   applyIntent,
@@ -20,7 +34,7 @@ import {
   COMMITTED_INGREDIENT_SET_IDS_BY_PLAYER_COUNT,
   generateRecipeCatalog,
   ingredientsForPlayerCount,
-  maxIngredientDemandForPlayerCount,
+  minimumBackedStockForPlayerCount,
   MAX_TEMPLATE_INGREDIENTS,
   MIN_TEMPLATE_INGREDIENTS,
   RECIPE_DISTINCT_COUNTS,
@@ -30,7 +44,7 @@ import {
 } from "../src/recipeCatalog.js";
 import { buildSnapshot } from "../src/snapshots.js";
 import { TableStore } from "../src/store.js";
-import type { BotType, Participant, Table, Voucher } from "../src/types.js";
+import type { BotType, Participant, Table, TurnMode, Voucher } from "../src/types.js";
 
 interface Harness {
   store: TableStore;
@@ -38,23 +52,24 @@ interface Harness {
   hostToken: string;
 }
 
-function makeHarness(activeCount: number, seed = "test-seed"): Harness {
+function makeHarness(activeCount: number, seed = "test-seed", turnMode: TurnMode = "market"): Harness {
   const store = new TableStore();
   const created = store.createTable("Host", seed);
+  created.table.turnMode = turnMode;
   for (let index = 2; index <= activeCount; index += 1) {
     store.joinTable(created.table.code, `Player ${index}`);
   }
   return { store, table: created.table, hostToken: created.seatToken };
 }
 
-function startTable(activeCount: number, seed = "start-seed"): Harness {
-  const harness = makeHarness(activeCount, seed);
+function startTable(activeCount: number, seed = "start-seed", turnMode: TurnMode = "market"): Harness {
+  const harness = makeHarness(activeCount, seed, turnMode);
   harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
   return harness;
 }
 
-function startAndDeposit(activeCount: number, seed = "deposit-seed"): Harness {
-  const harness = startTable(activeCount, seed);
+function startAndDeposit(activeCount: number, seed = "deposit-seed", turnMode: TurnMode = "market"): Harness {
+  const harness = startTable(activeCount, seed, turnMode);
   for (const participant of activeParticipants(harness.table)) {
     const voucherId = handVoucherIds(harness.table, participant.id)[0] as string;
     applyIntent(harness.table, participant.id, { type: "deposit", voucherId });
@@ -66,6 +81,14 @@ function startAndDeposit(activeCount: number, seed = "deposit-seed"): Harness {
 function addBots(table: Table, hostId: string, botTypes: BotType[]): Participant[] {
   const bots: Participant[] = [];
   for (const botType of botTypes) {
+    const existingBot = activeParticipants(table).find(
+      (participant) => participant.kind === "bot" && !bots.some((selected) => selected.id === participant.id)
+    );
+    if (existingBot) {
+      existingBot.botType = botType;
+      bots.push(existingBot);
+      continue;
+    }
     applyIntent(table, hostId, { type: "add_bot", name: botType, botType });
     bots.push(table.participants[table.participantOrder.at(-1) as string]);
   }
@@ -114,8 +137,8 @@ function prepareAllDishesBySetup(table: Table): void {
 function validQuantityShape(quantities: number[]): boolean {
   const sorted = [...quantities].sort((left, right) => right - left);
   return (
-    sorted.join(",") === "2,2,2" ||
     sorted.join(",") === "2,2,1,1" ||
+    sorted.join(",") === "2,1,1,1,1" ||
     sorted.join(",") === "1,1,1,1,1,1"
   );
 }
@@ -128,40 +151,126 @@ function recipeRequirementSignature(recipe: { requirements: Array<{ ingredientId
 }
 
 describe("catalog and startup", () => {
-  it("defines 20 unique ingredient sets", () => {
-    expect(INGREDIENTS).toHaveLength(20);
-    expect(new Set(INGREDIENTS.map((ingredient) => ingredient.id)).size).toBe(20);
+  it("defines 8 unique ingredient sets with visual metadata", () => {
+    expect(INGREDIENTS).toHaveLength(8);
+    expect(new Set(INGREDIENTS.map((ingredient) => ingredient.id)).size).toBe(8);
+    expect(INGREDIENTS.every((ingredient) => ingredient.description && ingredient.imagePath)).toBe(true);
   });
 
   it("creates 7 fixed vouchers per active ingredient owner", () => {
-    const { table } = startTable(7);
+    const { table } = startTable(8);
     for (const participant of activeParticipants(table)) {
       expect(vouchersForIngredientOwner(table, participant.id)).toHaveLength(VOUCHERS_PER_INGREDIENT);
       expect(participant.realIngredientStock).toBe(REAL_UNITS_PER_INGREDIENT);
     }
   });
 
-  it("blocks start below 7 active participants", () => {
-    const { store, table, hostToken } = makeHarness(6);
-    expect(() => store.handleIntent(table.code, hostToken, { type: "start" }, false)).toThrow(GameError);
+  it("creates a full 8-seat table that can start immediately", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "prefilled-8");
+
+    expect(activeParticipants(created.table)).toHaveLength(8);
+    expect(activeParticipants(created.table).filter((participant) => participant.kind === "bot")).toHaveLength(7);
+
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+    expect(created.table.phase).toBe("deposit");
   });
 
-  it("allows start from 7 to 20 active participants", () => {
-    for (let activeCount = 7; activeCount <= 20; activeCount += 1) {
-      const { table } = startTable(activeCount, `allowed-${activeCount}`);
-      expect(table.phase).toBe("deposit");
-      expect(activeParticipants(table)).toHaveLength(activeCount);
+  it("accepts unique requested table codes and rejects reused or invalid codes", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "requested-code", "cheese42");
+
+    expect(created.table.code).toBe("CHEESE42");
+    expect(() => store.createTable("Host", "duplicate-code", "CHEESE42")).toThrow(GameError);
+    expect(() => store.createTable("Host", "invalid-code", "bad code")).toThrow(GameError);
+  });
+
+  it("reports table code availability and joinability case-insensitively", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "status-code", "beans77");
+
+    expect(store.getTableStatus("BEANS77")).toMatchObject({ code: "BEANS77", valid: true, exists: true, joinable: true });
+    expect(store.getTableStatus("beans78")).toMatchObject({ code: "BEANS78", valid: true, exists: false, joinable: false });
+    expect(store.getTableStatus("bad code")).toMatchObject({ valid: false, exists: false, joinable: false, reason: "invalid" });
+
+    for (let index = 0; index < 7; index += 1) {
+      store.joinTable(created.table.code, `Human ${index}`);
     }
+    expect(store.getTableStatus("beans77")).toMatchObject({ exists: true, joinable: false, reason: "full" });
+  });
+
+  it("reports started tables as existing but not joinable", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "status-started", "rice55");
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+
+    expect(store.getTableStatus("rice55")).toMatchObject({ code: "RICE55", valid: true, exists: true, joinable: false, reason: "started" });
+  });
+
+  it("allows start with exactly 8 active participants", () => {
+    const { table } = startTable(8, "allowed-8");
+    expect(table.phase).toBe("deposit");
+    expect(activeParticipants(table)).toHaveLength(8);
   });
 
   it("makes running joins witnesses", () => {
-    const { store, table } = startTable(7);
+    const { store, table } = startTable(8);
     const joined = store.joinTable(table.code, "Late");
     expect(joined.participant.role).toBe("witness");
   });
 
+  it("replaces lobby bot seats with joining humans before making later joins witnesses", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "join-claims-bots");
+
+    for (let index = 0; index < 7; index += 1) {
+      const joined = store.joinTable(created.table.code, `Human ${index + 1}`);
+      expect(joined.participant.kind).toBe("human");
+      expect(joined.participant.role).toBe("active");
+    }
+
+    const overflow = store.joinTable(created.table.code, "Observer");
+
+    expect(activeParticipants(created.table).filter((participant) => participant.kind === "bot")).toHaveLength(0);
+    expect(overflow.participant.role).toBe("witness");
+  });
+
+  it("lets the host rename human and bot seats before start", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "rename-seats");
+    const hostId = created.table.hostParticipantId;
+    const bot = activeParticipants(created.table).find((participant) => participant.kind === "bot") as Participant;
+
+    store.handleIntent(created.table.code, created.seatToken, { type: "rename_participant", participantId: hostId, name: "Mara" }, false);
+    store.handleIntent(created.table.code, created.seatToken, { type: "rename_participant", participantId: bot.id, name: "Zed" }, false);
+
+    expect(created.table.participants[hostId].name).toBe("Mara");
+    expect(created.table.participants[bot.id].name).toBe("Zed_b");
+  });
+
+  it("lets a joined player rename their own lobby seat but not other seats", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "self-rename");
+    const joined = store.joinTable(created.table.code, "");
+
+    store.handleIntent(created.table.code, joined.seatToken, {
+      type: "rename_participant",
+      participantId: joined.participant.id,
+      name: "Lina"
+    }, false);
+
+    expect(joined.participant.name).toBe("Lina");
+    expect(() =>
+      store.handleIntent(created.table.code, joined.seatToken, {
+        type: "rename_participant",
+        participantId: created.participant.id,
+        name: "Not Allowed"
+      }, false)
+    ).toThrow(GameError);
+  });
+
   it("lets the host toggle active/witness roles before start", () => {
-    const { store, table, hostToken } = makeHarness(7);
+    const { store, table, hostToken } = makeHarness(8);
     const hostId = table.hostParticipantId;
     store.handleIntent(table.code, hostToken, { type: "set_role", participantId: hostId, role: "witness" }, false);
     expect(table.participants[hostId].role).toBe("witness");
@@ -169,33 +278,224 @@ describe("catalog and startup", () => {
     expect(table.participants[hostId].role).toBe("active");
   });
 
+  it("defaults new tables to round-robin and lets the host choose market before start", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "turn-mode-default");
+
+    expect(created.table.turnMode).toBe("round_robin");
+    expect(created.snapshot.turnMode).toBe("round_robin");
+
+    const snapshot = store.handleIntent(created.table.code, created.seatToken, { type: "set_turn_mode", mode: "market" }, false);
+    expect(created.table.turnMode).toBe("market");
+    expect(snapshot.turnMode).toBe("market");
+  });
+
+  it("lets the host add and act as controlled seats without changing participant identity", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "controlled-seat");
+    created.table.turnMode = "market";
+
+    const botToClaim = activeParticipants(created.table).find((participant) => participant.kind === "bot") as Participant;
+    const controlledSnapshot = store.handleIntent(
+      created.table.code,
+      created.seatToken,
+      { type: "add_controlled_seat", name: "Local Seat", participantId: botToClaim.id },
+      false
+    );
+    const controlledId = controlledSnapshot.participants.find((participant) => participant.name === "Local Seat")?.id as string;
+
+    expect(controlledId).toBeTruthy();
+    expect(controlledId).toBe(botToClaim.id);
+    expect(created.table.participants[controlledId]).toMatchObject({
+      kind: "human",
+      role: "active",
+      controllerParticipantId: created.participant.id
+    });
+
+    for (let index = activeParticipants(created.table).length + 1; index <= 8; index += 1) {
+      store.joinTable(created.table.code, `Player ${index}`);
+    }
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+
+    const actorSnapshot = store.handleIntent(created.table.code, created.seatToken, { type: "deposit_ingredient" }, false, controlledId);
+    expect(created.table.participants[controlledId].depositedInitial).toBe(true);
+    expect(actorSnapshot.viewerParticipantId).toBe(controlledId);
+    expect(actorSnapshot.connectionParticipantId).toBe(created.participant.id);
+  });
+
+  it("blocks acting as an uncontrolled participant", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "controlled-blocked");
+    const uncontrolled = store.joinTable(created.table.code, "Uncontrolled");
+
+    expect(() =>
+      store.handleIntent(created.table.code, created.seatToken, { type: "set_role", participantId: uncontrolled.participant.id, role: "witness" }, false, uncontrolled.participant.id)
+    ).toThrow(GameError);
+  });
+
+  it("keeps controlled-seat snapshots filtered to the selected seat", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "controlled-filter");
+    created.table.turnMode = "market";
+    const controlledSnapshot = store.handleIntent(created.table.code, created.seatToken, { type: "add_controlled_seat", name: "Local Seat" }, false);
+    const controlledId = controlledSnapshot.participants.find((participant) => participant.name === "Local Seat")?.id as string;
+    for (let index = activeParticipants(created.table).length + 1; index <= 8; index += 1) {
+      store.joinTable(created.table.code, `Player ${index}`);
+    }
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+
+    const snapshot = store.getSnapshotByToken(created.table.code, created.seatToken, controlledId);
+
+    expect(snapshot.viewerParticipantId).toBe(controlledId);
+    expect(snapshot.connectionParticipantId).toBe(created.participant.id);
+    expect(snapshot.controlledParticipantIds).toContain(controlledId);
+    expect(snapshot.viewerCanUseHostControls).toBe(true);
+    expect(snapshot.ownHand.every((voucher) => voucher.location.participantId === controlledId)).toBe(true);
+    expect(snapshot.allHands).toBeUndefined();
+    expect(snapshot.allVouchers).toBeUndefined();
+  });
+
+  it("enforces round-robin turns and allows current players to pass", () => {
+    const { table } = startAndDeposit(8, "round-robin-turns", "round_robin");
+    const [first, second] = activeParticipants(table);
+    const firstVoucher = handVoucherIds(table, first.id)[0] as string;
+    const secondVoucher = handVoucherIds(table, second.id)[0] as string;
+    const platterVoucher = platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ingredientId !== first.ingredientId) as string;
+
+    expect(table.turnMode).toBe("round_robin");
+    expect(table.currentTurnParticipantId).toBe(first.id);
+    expect(() => applyIntent(table, second.id, { type: "platter_swap", giveVoucherId: secondVoucher, takeVoucherId: platterVoucher })).toThrow(GameError);
+
+    applyIntent(table, first.id, { type: "platter_swap", giveVoucherId: firstVoucher, takeVoucherId: platterVoucher });
+    expect(table.currentTurnParticipantId).toBe(first.id);
+    expect(() => applyIntent(table, second.id, { type: "pass_turn" })).toThrow(GameError);
+
+    applyIntent(table, first.id, { type: "pass_turn" });
+    expect(table.currentTurnParticipantId).toBe(second.id);
+    expect(table.transactionHistory.at(-1)).toMatchObject({
+      name: first.name,
+      action: "Pass Turn",
+      counterparty: second.name,
+      itemOut: "Turn",
+      itemBack: "None"
+    });
+  });
+
+  it("redeems useful held cards once before passing a round-robin turn", () => {
+    const { table } = startAndDeposit(8, "round-robin-redeem-all-pass", "round_robin");
+    const [first, second] = activeParticipants(table);
+    const recipe = table.recipes[first.id];
+    const ownRequirement = recipe?.requirements.find((requirement) => requirement.ingredientId === first.ingredientId);
+    expect(recipe).toBeDefined();
+    expect(ownRequirement).toBeDefined();
+    const initialUsefulIds = handVoucherIds(table, first.id).filter(
+      (voucherId) => table.vouchers[voucherId].ingredientId === first.ingredientId
+    );
+    const initialOutstanding =
+      (ownRequirement?.requiredQty ?? 0) - (ownRequirement?.redeemedQty ?? 0) - (ownRequirement?.placedVoucherIds.length ?? 0);
+    const expectedRedeemed = Math.min(initialUsefulIds.length, initialOutstanding);
+    expect(expectedRedeemed).toBeGreaterThan(0);
+    const startingStock = first.realIngredientStock;
+
+    applyIntent(table, first.id, { type: "redeem_all_and_pass_turn" });
+
+    expect(ownRequirement?.redeemedQty).toBe(expectedRedeemed);
+    expect(first.realIngredientStock).toBe((startingStock ?? 0) - expectedRedeemed);
+    expect(table.currentTurnParticipantId).toBe(second.id);
+    expect(table.transactionHistory.filter((transaction) => transaction.action === "Redeem")).toHaveLength(expectedRedeemed);
+    expect(table.transactionHistory.at(-1)).toMatchObject({
+      name: first.name,
+      action: "Pass Turn",
+      counterparty: second.name
+    });
+  });
+
+  it("keeps goal-reached active players in the playing turn order", () => {
+    const { table } = startAndDeposit(8, "round-robin-goal-reached", "round_robin");
+    const participants = activeParticipants(table);
+    const first = participants[0] as (typeof participants)[number];
+    const last = participants[participants.length - 1] as (typeof participants)[number];
+    first.dishCount = table.targetDishCount;
+    table.currentTurnParticipantId = last.id;
+
+    applyIntent(table, last.id, { type: "pass_turn" });
+
+    expect(table.currentTurnParticipantId).toBe(first.id);
+  });
+
+  it("does not run bot transactions during a human round-robin turn before pass", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "round-robin-human-turn");
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" });
+    store.handleIntent(created.table.code, created.seatToken, { type: "deposit_ingredient" });
+    expect(created.table.phase).toBe("playing");
+    expect(created.table.currentTurnParticipantId).toBe(created.participant.id);
+
+    const hostIngredientId = created.participant.ingredientId as string;
+    const takeIngredientId = platterVoucherIds(created.table)
+      .map((voucherId) => created.table.vouchers[voucherId].ingredientId)
+      .find((ingredientId) => ingredientId !== hostIngredientId) as string;
+    const beforeSwapCount = created.table.transactionHistory.length;
+    store.handleIntent(created.table.code, created.seatToken, {
+      type: "platter_swap_ingredient",
+      giveIngredientId: hostIngredientId,
+      takeIngredientId
+    });
+
+    const swapTransactions = created.table.transactionHistory.slice(beforeSwapCount);
+    expect(swapTransactions).toHaveLength(1);
+    expect(swapTransactions[0]).toMatchObject({ name: created.participant.name, action: "Swap" });
+    expect(created.table.currentTurnParticipantId).toBe(created.participant.id);
+
+    store.handleIntent(created.table.code, created.seatToken, { type: "pass_turn" });
+    expect(created.table.transactionHistory.slice(beforeSwapCount + 1).some((transaction) => transaction.name !== created.participant.name)).toBe(true);
+  });
+
+  it("does not leave round-robin control stranded on bots when the bot budget is exhausted", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "round-robin-bot-budget");
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+    for (const participant of activeParticipants(created.table)) {
+      applyIntent(created.table, participant.id, { type: "deposit_ingredient" });
+    }
+    const firstBot = activeParticipants(created.table).find((participant) => participant.kind === "bot") as Participant;
+    created.table.currentTurnParticipantId = firstBot.id;
+
+    runBots(created.table, 0);
+
+    expect(created.table.currentTurnParticipantId).toBe(created.participant.id);
+    expect(created.table.transactionHistory.at(-1)).toMatchObject({
+      action: "Pass Turn",
+      counterparty: created.participant.name
+    });
+  });
+
   it("generates default participant names and bot names", () => {
     const store = new TableStore();
     const created = store.createTable("", "names");
     const joined = store.joinTable(created.table.code, "");
-    store.handleIntent(created.table.code, created.seatToken, { type: "add_bot", name: "Mixed Bot", botType: "mixed" }, false);
-    store.handleIntent(created.table.code, created.seatToken, { type: "add_bot", name: "Pool Bot", botType: "pool_only" }, false);
-    store.handleIntent(created.table.code, created.seatToken, { type: "add_bot", name: "Barter Bot", botType: "barter_only" }, false);
     const bots = Object.values(created.table.participants).filter((participant) => participant.kind === "bot");
 
     expect(created.participant.name).toBe("Amina");
     expect(joined.participant.name).toBe("Ben");
-    expect(bots.map((bot) => bot.name)).toEqual(["Clara_mix_bot", "Diego_pool_bot", "Esme_barter_bot"]);
+    expect(bots.map((bot) => bot.name)).toEqual(["Nia_b", "Luc_b", "Yan_b", "Mia_b", "Leo_b", "Ava_b"]);
+
+    const botOnlyStore = new TableStore();
+    const botOnly = botOnlyStore.createTable("Host", "first-bot-name");
+    const firstBot = activeParticipants(botOnly.table).find((participant) => participant.kind === "bot");
+    expect(firstBot?.name).toBe("Ben_b");
   });
 
   it("starts a host plus bots through the store without repeat bot deposits", () => {
     const store = new TableStore();
     const created = store.createTable("Host", "bot-start");
-    for (let index = 0; index < 6; index += 1) {
-      store.handleIntent(created.table.code, created.seatToken, { type: "add_bot", name: "Mixed Bot", botType: "mixed" });
-    }
 
     const snapshot = store.handleIntent(created.table.code, created.seatToken, { type: "start" });
     const active = activeParticipants(created.table);
     const bots = active.filter((participant) => participant.kind === "bot");
 
     expect(created.table.phase).toBe("deposit");
-    expect(active).toHaveLength(7);
+    expect(active).toHaveLength(8);
     expect(bots.every((participant) => participant.depositedInitial)).toBe(true);
     expect(created.table.participants[created.table.hostParticipantId].depositedInitial).toBe(false);
     expect(snapshot.phase).toBe("deposit");
@@ -206,9 +506,7 @@ describe("catalog and startup", () => {
   it("continues bot turns into useful self-redemption after the host deposits", () => {
     const store = new TableStore();
     const created = store.createTable("Host", "bot-start-self-redeem");
-    for (let index = 0; index < 6; index += 1) {
-      store.handleIntent(created.table.code, created.seatToken, { type: "add_bot", name: "Mixed Bot", botType: "mixed" });
-    }
+    created.table.turnMode = "market";
     store.handleIntent(created.table.code, created.seatToken, { type: "start" });
     const bot = activeParticipants(created.table).find((participant) => participant.kind === "bot") as Participant;
     const ownRequirement = created.table.recipes[bot.id]?.requirements.find(
@@ -227,7 +525,7 @@ describe("catalog and startup", () => {
   });
 
   it("exposes lobby timer changes in filtered snapshots", () => {
-    const { store, table, hostToken } = makeHarness(7, "timer-snapshot");
+    const { store, table, hostToken } = makeHarness(8, "timer-snapshot");
 
     const setSnapshot = store.handleIntent(table.code, hostToken, { type: "set_timer", seconds: 180 }, false);
     expect(setSnapshot.timer).toMatchObject({ seconds: 180 });
@@ -237,7 +535,7 @@ describe("catalog and startup", () => {
   });
 
   it("lets the host set the dish goal from 1 to 4 before start", () => {
-    const { store, table, hostToken } = makeHarness(7, "dish-goal");
+    const { store, table, hostToken } = makeHarness(8, "dish-goal");
     const snapshot = store.handleIntent(table.code, hostToken, { type: "set_target_dish_count", count: 2 }, false);
 
     expect(table.targetDishCount).toBe(2);
@@ -247,8 +545,8 @@ describe("catalog and startup", () => {
   });
 
   it("lets the host set starting stock before start", () => {
-    const { store, table, hostToken } = makeHarness(7, "stock-setting");
-    const requiredStock = maxIngredientDemandForPlayerCount(7, table.targetDishCount);
+    const { store, table, hostToken } = makeHarness(8, "stock-setting");
+    const requiredStock = minimumBackedStockForPlayerCount(8, table.targetDishCount);
     const snapshot = store.handleIntent(table.code, hostToken, { type: "set_stock", count: requiredStock }, false);
 
     expect(table.stockPerIngredient).toBe(requiredStock);
@@ -260,9 +558,9 @@ describe("catalog and startup", () => {
     }
   });
 
-  it("blocks start when configured stock is below catalog demand for the chosen goal", () => {
-    const { store, table, hostToken } = makeHarness(7, "stock-too-low");
-    const requiredStock = maxIngredientDemandForPlayerCount(7, table.targetDishCount);
+  it("blocks start when configured stock is below catalog demand plus voucher backing for the chosen goal", () => {
+    const { store, table, hostToken } = makeHarness(8, "stock-too-low");
+    const requiredStock = minimumBackedStockForPlayerCount(8, table.targetDishCount);
 
     store.handleIntent(table.code, hostToken, { type: "set_stock", count: requiredStock - 1 }, false);
 
@@ -271,16 +569,16 @@ describe("catalog and startup", () => {
   });
 
   it("does not mutate the table or turn on invalid intents", () => {
-    const { store, table, hostToken } = makeHarness(6);
+    const { store, table, hostToken } = makeHarness(8);
     const before = structuredClone(table);
 
-    expect(() => store.handleIntent(table.code, hostToken, { type: "start" }, false)).toThrow(GameError);
+    expect(() => store.handleIntent(table.code, hostToken, { type: "set_stock", count: MAX_STOCK_PER_INGREDIENT + 1 }, false)).toThrow(GameError);
 
     expect(table).toEqual(before);
   });
 
   it("restores partial mutations when validation fails mid-action", () => {
-    const { store, table, hostToken } = makeHarness(20);
+    const { store, table, hostToken } = makeHarness(8);
     const extra = store.joinTable(table.code, "Extra");
     const extraId = extra.participant.id;
     store.handleIntent(table.code, hostToken, { type: "set_role", participantId: extraId, role: "witness" }, false);
@@ -293,24 +591,23 @@ describe("catalog and startup", () => {
 });
 
 describe("recipe catalog generator", () => {
-  it("defines one committed random ingredient set per supported player count", () => {
+  it("defines one committed 8-ingredient set", () => {
     const knownIngredientIds = new Set(INGREDIENTS.map((ingredient) => ingredient.id));
+    const committedIds = COMMITTED_INGREDIENT_SET_IDS_BY_PLAYER_COUNT[8];
+    const ingredients = ingredientsForPlayerCount(8);
 
-    for (let playerCount = 7; playerCount <= 20; playerCount += 1) {
-      const committedIds = COMMITTED_INGREDIENT_SET_IDS_BY_PLAYER_COUNT[playerCount];
-      const ingredients = ingredientsForPlayerCount(playerCount);
-
-      expect(committedIds).toHaveLength(playerCount);
-      expect(new Set(committedIds).size).toBe(playerCount);
-      expect(committedIds.every((ingredientId) => knownIngredientIds.has(ingredientId))).toBe(true);
-      expect(ingredients.map((ingredient) => ingredient.id)).toEqual(committedIds);
-    }
+    expect(Object.keys(COMMITTED_INGREDIENT_SET_IDS_BY_PLAYER_COUNT)).toEqual(["8"]);
+    expect(committedIds).toHaveLength(8);
+    expect(new Set(committedIds).size).toBe(8);
+    expect(committedIds.every((ingredientId) => knownIngredientIds.has(ingredientId))).toBe(true);
+    expect(ingredients.map((ingredient) => ingredient.id)).toEqual(committedIds);
   });
 
-  it("generates four named recipes per ingredient for every 7-20 player configuration", () => {
+  it("generates four short named recipes per ingredient for the fixed 8-player configuration", () => {
     const catalog = generateRecipeCatalog();
 
-    expect(catalog.configurations).toHaveLength(14);
+    expect(catalog.configurations).toHaveLength(1);
+    expect(catalog.configurations[0]?.playerCount).toBe(8);
     expect(catalog.dishTemplates).toHaveLength(INGREDIENTS.length * RECIPE_VARIANT_COUNT);
 
     const dishNames = catalog.dishTemplates.map((dish) => dish.dishName);
@@ -324,17 +621,8 @@ describe("recipe catalog generator", () => {
           dish.partUnitPlural.length > 0
       )
     ).toBe(true);
-
-    const chanaTemplates = catalog.dishTemplates.filter((dish) => dish.dishName === "Chana Masala");
-    expect(chanaTemplates).toHaveLength(1);
-    expect(chanaTemplates[0]?.realIngredientIds).toEqual([
-      "chickpeas",
-      "tomato",
-      "onion",
-      "garlic",
-      "ginger",
-      "pepper"
-    ]);
+    expect(dishNames).toEqual(expect.arrayContaining(["Cheese Frittata", "Bean Pupusa", "Fried Rice", "Breakfast Burrito"]));
+    expect(dishNames.every((name) => name.length <= 24)).toBe(true);
 
     expect(catalog.recipes).toHaveLength(
       catalog.configurations.reduce((sum, configuration) => sum + configuration.playerCount * RECIPE_VARIANT_COUNT, 0)
@@ -376,9 +664,9 @@ describe("recipe catalog generator", () => {
         expect(recipe.realIngredientIds).toContain(recipe.ownerIngredientId);
         expect(recipe.matchedRealIngredientIds.length).toBeGreaterThan(0);
         expect(recipe.realIngredientIds).toEqual(requirementIngredientIds);
-        if (!generatedFromExactTemplate) {
-          expect(recipe.dishName).not.toBe(template.dishName);
-        }
+        expect(generatedFromExactTemplate).toBe(true);
+        expect(recipe.dishName).toBe(template.dishName);
+        expect(recipe.fallbackIngredientIds).toEqual([]);
         expect(recipe.totalRequiredQty).toBe(RECIPE_REQUIRED_ITEMS);
         expect(RECIPE_DISTINCT_COUNTS.some((distinctCount) => distinctCount === recipe.distinctIngredientCount)).toBe(true);
         expect(validQuantityShape(recipe.requirements.map((requirement) => requirement.requiredQty))).toBe(true);
@@ -391,32 +679,29 @@ describe("recipe catalog generator", () => {
       }
 
       for (const demand of demandByIngredient.values()) {
-        expect(demand).toBeLessThanOrEqual(REAL_UNITS_PER_INGREDIENT);
+        expect(demand + VOUCHERS_PER_INGREDIENT).toBeLessThanOrEqual(REAL_UNITS_PER_INGREDIENT);
       }
     }
   });
 
-  it("uses real recipe ingredients before fallback ingredients", () => {
-    const chanaIngredients = ["chickpeas", "tomato", "onion", "garlic", "ginger", "pepper", "salt"].map(
-      (ingredientId) => INGREDIENTS.find((ingredient) => ingredient.id === ingredientId) as (typeof INGREDIENTS)[number]
-    );
-    const recipe = catalogRecipeForIngredients(chanaIngredients, "chickpeas", "initial", "chana_real_ingredients");
+  it("uses committed recipe ingredients without fallback ingredients", () => {
+    const recipe = catalogRecipeForIngredients(ingredientsForPlayerCount(8), "cheese", "initial", "players_8");
 
-    expect(recipe.dishName).toBe("Chana Masala");
+    expect(recipe.dishName).toBe("Cheese Frittata");
     expect(recipe.fallbackIngredientIds).toEqual([]);
     expect(recipe.requirements.map((requirement) => requirement.ingredientId)).toEqual([
-      "chickpeas",
-      "tomato",
-      "onion",
-      "garlic",
-      "ginger",
-      "pepper"
+      "cheese",
+      "eggs",
+      "vegetables",
+      "herbs",
+      "spices",
+      "flour"
     ]);
   });
 
   it("uses the committed player-count ingredient set for runtime tables and catalog lookup rows", () => {
-    const activeIngredientsForPlayerCount = ingredientsForPlayerCount(7);
-    const { table } = startTable(7, "runtime-committed-set");
+    const activeIngredientsForPlayerCount = ingredientsForPlayerCount(8);
+    const { table } = startTable(8, "runtime-committed-set");
     const runtimeIngredientIds = activeParticipants(table).map((participant) => participant.ingredientId);
 
     expect(runtimeIngredientIds).toEqual(activeIngredientsForPlayerCount.map((ingredient) => ingredient.id));
@@ -426,66 +711,104 @@ describe("recipe catalog generator", () => {
       activeIngredientsForPlayerCount,
       participant.ingredientId as string,
       "initial",
-      "players_7"
+      "players_8"
     );
     expect(table.recipes[participant.id].requirements.map((requirement) => requirement.ingredientId)).toEqual(
       catalogRecipe.requirements.map((requirement) => requirement.ingredientId)
     );
   });
 
-  it("does not reuse a named dish template when generated requirements omit template ingredients", () => {
+  it("writes a client recipe fixture matching the generated catalog", () => {
+    const generated = generateRecipeCatalog();
+    const fixture = JSON.parse(readFileSync(new URL("../../client/data/recipe_catalog.json", import.meta.url), "utf8")) as ReturnType<
+      typeof generateRecipeCatalog
+    >;
+
+    expect(fixture.generatorVersion).toBe(generated.generatorVersion);
+    expect(fixture.ingredients).toEqual(generated.ingredients);
+    expect(fixture.configurations.map((configuration) => configuration.ingredients.map((ingredient) => ingredient.id))).toEqual(
+      generated.configurations.map((configuration) => configuration.ingredients.map((ingredient) => ingredient.id))
+    );
+    expect(fixture.recipes.map((recipe) => [recipe.recipeId, recipe.dishName, recipe.requirements])).toEqual(
+      generated.recipes.map((recipe) => [recipe.recipeId, recipe.dishName, recipe.requirements])
+    );
+  });
+
+  it("writes a client game config fixture matching server rule constants", () => {
+    const fixture = JSON.parse(readFileSync(new URL("../../client/data/game_config.json", import.meta.url), "utf8")) as Record<
+      string,
+      unknown
+    >;
+
+    expect(fixture).toMatchObject({
+      schemaVersion: 1,
+      minActiveParticipants: MIN_ACTIVE_PARTICIPANTS,
+      maxActiveParticipants: MAX_ACTIVE_PARTICIPANTS,
+      vouchersPerIngredient: VOUCHERS_PER_INGREDIENT,
+      realUnitsPerIngredient: REAL_UNITS_PER_INGREDIENT,
+      minStockPerIngredient: MIN_STOCK_PER_INGREDIENT,
+      maxStockPerIngredient: MAX_STOCK_PER_INGREDIENT,
+      dishPartsPerDish: DISH_PARTS_PER_DISH,
+      minTargetDishCount: MIN_TARGET_DISH_COUNT,
+      maxTargetDishCount: MAX_TARGET_DISH_COUNT,
+      defaultTargetDishCount: DEFAULT_TARGET_DISH_COUNT,
+      defaultTurnMode: "round_robin",
+      turnModes: ["round_robin", "market"],
+      botTypes: BOT_TYPES
+    });
+    expect(fixture.intentTypes).toEqual(
+      expect.arrayContaining([
+        "start",
+        "deposit_ingredient",
+        "platter_swap_ingredient",
+        "create_offer",
+        "redeem_from_hand",
+        "redeem_all_and_pass_turn",
+        "prepare",
+        "bite"
+      ])
+    );
+  });
+
+  it("never generates fallback names for the fixed catalog", () => {
     const catalog = generateRecipeCatalog();
-    const sevenPlayerRice = catalog.recipes.find(
-      (recipe) => recipe.playerCount === 7 && recipe.ownerIngredientId === "rice" && recipe.slot === "initial"
-    );
-    const twelvePlayerRice = catalog.recipes.find(
-      (recipe) => recipe.playerCount === 12 && recipe.ownerIngredientId === "rice" && recipe.slot === "initial"
-    );
-
-    if (!sevenPlayerRice || !twelvePlayerRice) {
-      throw new Error("Missing rice recipes.");
+    for (const recipe of catalog.recipes) {
+      const template = catalog.dishTemplates.find((candidate) => candidate.templateId === recipe.templateId);
+      expect(template).toBeDefined();
+      expect(recipe.dishName).toBe(template?.dishName);
+      expect(recipe.fallbackIngredientIds).toEqual([]);
+      expect(recipe.realIngredientIds).toEqual(recipe.requirements.map((requirement) => requirement.ingredientId));
     }
-
-    expect(sevenPlayerRice.templateId).toBe("rice_initial");
-    expect(sevenPlayerRice.dishName).not.toBe("Jollof Rice");
-    expect(sevenPlayerRice.realIngredientIds).toEqual(
-      sevenPlayerRice.requirements.map((requirement) => requirement.ingredientId)
-    );
-
-    expect(twelvePlayerRice.dishName).toBe("Jollof Rice");
-    expect(twelvePlayerRice.realIngredientIds).toEqual(["rice", "tomato", "onion", "garlic", "pepper", "ginger"]);
-    expect(twelvePlayerRice.requirements.every((requirement) => requirement.requiredQty === 1)).toBe(true);
   });
 });
 
 describe("recipes and voucher lifecycle", () => {
   it("creates six-card recipes with valid quantity shapes and own ingredient", () => {
-    for (let activeCount = 7; activeCount <= 20; activeCount += 1) {
-      const { table } = startTable(activeCount, `recipe-total-${activeCount}`);
-      const active = activeParticipants(table);
-      const activeIngredientIds = new Set(active.map((participant) => participant.ingredientId));
+    const { table } = startTable(8, "recipe-total-8");
+    const active = activeParticipants(table);
+    const activeIngredientIds = new Set(active.map((participant) => participant.ingredientId));
 
-      for (const participant of active) {
-        const recipe = table.recipes[participant.id];
-        const totalRequiredQty = recipe.requirements.reduce((sum, requirement) => sum + requirement.requiredQty, 0);
+    for (const participant of active) {
+      const recipe = table.recipes[participant.id];
+      const totalRequiredQty = recipe.requirements.reduce((sum, requirement) => sum + requirement.requiredQty, 0);
 
-        expect(totalRequiredQty).toBe(RECIPE_REQUIRED_ITEMS);
-        expect(RECIPE_DISTINCT_COUNTS.some((distinctCount) => distinctCount === recipe.requirements.length)).toBe(true);
-        expect(validQuantityShape(recipe.requirements.map((requirement) => requirement.requiredQty))).toBe(true);
-        expect(recipe.requirements.some((requirement) => requirement.ingredientId === participant.ingredientId)).toBe(true);
-        expect(recipe.requirements.every((requirement) => activeIngredientIds.has(requirement.ingredientId))).toBe(true);
-      }
+      expect(totalRequiredQty).toBe(RECIPE_REQUIRED_ITEMS);
+      expect(RECIPE_DISTINCT_COUNTS.some((distinctCount) => distinctCount === recipe.requirements.length)).toBe(true);
+      expect(validQuantityShape(recipe.requirements.map((requirement) => requirement.requiredQty))).toBe(true);
+      expect(recipe.requirements.some((requirement) => requirement.ingredientId === participant.ingredientId)).toBe(true);
+      expect(recipe.requirements.every((requirement) => activeIngredientIds.has(requirement.ingredientId))).toBe(true);
     }
   });
 
   it("supports requirement quantities greater than one", () => {
-    const { table } = startTable(7);
-    const quantities = Object.values(table.recipes).flatMap((recipe) => recipe.requirements.map((requirement) => requirement.requiredQty));
+    const quantities = generateRecipeCatalog().recipes.flatMap((recipe) =>
+      recipe.requirements.map((requirement) => requirement.requiredQty)
+    );
     expect(quantities.some((quantity) => quantity > 1)).toBe(true);
   });
 
   it("uses generated catalog dish names in running tables", () => {
-    const { table } = startTable(7, "runtime-catalog");
+    const { table } = startTable(8, "runtime-catalog");
     const catalogDishNames = new Set(generateRecipeCatalog().recipes.map((recipe) => recipe.dishName));
 
     for (const recipe of Object.values(table.recipes)) {
@@ -494,7 +817,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("only asks for ingredients owned by active table participants", () => {
-    const { table } = startTable(12);
+    const { table } = startTable(8);
     const active = activeParticipants(table);
 
     for (const recipe of Object.values(table.recipes)) {
@@ -507,7 +830,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("includes catalog target metadata in filtered own recipe snapshots", () => {
-    const { table } = startTable(7, "snapshot-recipe-metadata");
+    const { table } = startTable(8, "snapshot-recipe-metadata");
     const participant = activeParticipants(table)[0] as Participant;
     const snapshot = buildSnapshot(table, participant.id);
     const recipe = snapshot.ownRecipe;
@@ -528,7 +851,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("assigns a new table-valid recipe after preparing a dish", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const participant = activeParticipants(table)[0] as Participant;
     const previousRecipeId = table.recipes[participant.id].id;
 
@@ -546,7 +869,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("preparing a dish creates 10 named food parts in the maker inventory", () => {
-    const { table } = startAndDeposit(7, "dish-parts");
+    const { table } = startAndDeposit(8, "dish-parts");
     const participant = activeParticipants(table)[0] as Participant;
     const recipe = table.recipes[participant.id];
 
@@ -569,7 +892,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("requires all quantities to be redeemed before preparation", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const participant = activeParticipants(table)[0] as Participant;
     const recipe = table.recipes[participant.id];
     const requirement = recipe.requirements[0];
@@ -587,7 +910,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("redeems a needed card directly from hand as one server-validated action", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const participant = activeParticipants(table)[0] as Participant;
     const recipe = table.recipes[participant.id];
     const requirement = recipe.requirements[0];
@@ -606,9 +929,9 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("keeps total vouchers per ingredient owner at 7", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const before = invariantVoucherCounts(table);
-    expect(Object.values(before)).toEqual(Array(7).fill(VOUCHERS_PER_INGREDIENT));
+    expect(Object.values(before)).toEqual(Array(8).fill(VOUCHERS_PER_INGREDIENT));
 
     const participant = activeParticipants(table)[0] as Participant;
     const recipe = table.recipes[participant.id];
@@ -621,7 +944,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("only creates vouchers for active physical ingredient owners", () => {
-    const { table } = startTable(11);
+    const { table } = startTable(8);
     const activeOwnerIds = new Set(activeParticipants(table).map((participant) => participant.id));
     for (const voucher of Object.values(table.vouchers)) {
       expect(activeOwnerIds.has(voucher.ownerParticipantId)).toBe(true);
@@ -629,7 +952,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("decrements issuer stock and returns redeemed vouchers to the issuer hand", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const participant = activeParticipants(table)[0] as Participant;
     const recipe = table.recipes[participant.id];
     const requirement = recipe.requirements.find((candidate) => candidate.ingredientId !== participant.ingredientId) ?? recipe.requirements[0];
@@ -645,7 +968,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("reconciles stock with redemption transactions, not deposits or swaps", () => {
-    const { table } = startAndDeposit(7, "stock-reconciliation");
+    const { table } = startAndDeposit(8, "stock-reconciliation");
     const participant = activeParticipants(table)[0] as Participant;
     const beforeStock = participant.realIngredientStock;
     const giveVoucherId = handVoucherIds(table, participant.id)[0] as string;
@@ -673,7 +996,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("does not depend on owner preparation to make redeemed cards reusable", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const redeemer = activeParticipants(table)[0] as Participant;
     const requirement = table.recipes[redeemer.id].requirements.find((candidate) => candidate.ingredientId !== redeemer.ingredientId);
     if (!requirement) {
@@ -691,7 +1014,7 @@ describe("recipes and voucher lifecycle", () => {
   });
 
   it("keeps redeemed cards inactive only when issuer stock is exhausted", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const redeemer = activeParticipants(table)[0] as Participant;
     const redeemerRecipe = table.recipes[redeemer.id];
     const requirement = redeemerRecipe.requirements.find((candidate) => candidate.ingredientId !== redeemer.ingredientId);
@@ -710,11 +1033,37 @@ describe("recipes and voucher lifecycle", () => {
     expect(buildSnapshot(table, redeemer.id).participants.find((participant) => participant.id === owner.id)?.offerableOwnIngredientQty).toBe(0);
     expect(invariantVoucherCounts(table)[owner.id]).toBe(VOUCHERS_PER_INGREDIENT);
   });
+
+  it("blocks stock-depleted hand cards from being used as live vouchers", () => {
+    const { table } = startAndDeposit(8, "stock-depleted-cards");
+    const [participant, other] = activeParticipants(table);
+    const ownVoucherId = handVoucherIds(table, participant.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === participant.id
+    ) as string;
+    const takeVoucherId = platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ingredientId !== participant.ingredientId) as string;
+    const ownRequirement = table.recipes[participant.id].requirements.find((requirement) => requirement.ingredientId === participant.ingredientId);
+    participant.realIngredientStock = 0;
+
+    expect(() =>
+      applyIntent(table, participant.id, { type: "platter_swap", giveVoucherId: ownVoucherId, takeVoucherId })
+    ).toThrow(GameError);
+    expect(() =>
+      applyIntent(table, participant.id, {
+        type: "create_offer",
+        toParticipantId: other.id,
+        offeredVoucherIds: [ownVoucherId],
+        requested: { ingredientId: other.ingredientId as string, quantity: 1 }
+      })
+    ).toThrow(GameError);
+    expect(() =>
+      applyIntent(table, participant.id, { type: "place_voucher", voucherId: ownVoucherId, requirementId: ownRequirement?.id as string })
+    ).toThrow(GameError);
+  });
 });
 
 describe("platter, offers, and visibility", () => {
   it("deposits and swaps with the central platter atomically", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const participant = activeParticipants(table)[0] as Participant;
     const platterBefore = platterVoucherIds(table);
     const giveVoucherId = handVoucherIds(table, participant.id)[0] as string;
@@ -728,7 +1077,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("exposes aggregate voucher groups and accepts aggregate deposit and platter swap intents", () => {
-    const { table } = startTable(7, "aggregate-vouchers");
+    const { table } = startTable(8, "aggregate-vouchers");
     const [first, second] = activeParticipants(table);
     const initialSnapshot = buildSnapshot(table, first.id);
 
@@ -757,7 +1106,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("allows prepared food parts to be swapped through the platter during play", () => {
-    const { table } = startAndDeposit(7, "playing-food-part-swap");
+    const { table } = startAndDeposit(8, "playing-food-part-swap");
     const participant = activeParticipants(table)[0] as Participant;
     completeRecipeBySetup(table, participant.id);
     applyIntent(table, participant.id, { type: "prepare" });
@@ -777,7 +1126,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("locks structured offer cards and resolves an accepted exchange", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const from = activeParticipants(table)[0] as Participant;
     const to = firstOtherActive(table, from.id);
     const offeredVoucherId = handVoucherIds(table, from.id)[0] as string;
@@ -803,7 +1152,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("records successful deposit, swap, exchange, and redemption transactions", () => {
-    const { table } = startTable(7, "transactions");
+    const { table } = startTable(8, "transactions");
     const [first, second] = activeParticipants(table);
     const firstDepositId = handVoucherIds(table, first.id)[0] as string;
 
@@ -867,7 +1216,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("includes offered card details in filtered offer snapshots", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const from = activeParticipants(table)[0] as Participant;
     const to = firstOtherActive(table, from.id);
     const offeredVoucherId = handVoucherIds(table, from.id)[0] as string;
@@ -886,7 +1235,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("unlocks offered cards when offers are refused or cancelled", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const from = activeParticipants(table)[0] as Participant;
     const to = firstOtherActive(table, from.id);
     const offeredVoucherId = handVoucherIds(table, from.id)[0] as string;
@@ -916,7 +1265,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("removes refused offers from both participants' snapshots", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const from = activeParticipants(table)[0] as Participant;
     const to = firstOtherActive(table, from.id);
     const offeredVoucherId = handVoucherIds(table, from.id)[0] as string;
@@ -938,7 +1287,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("publishes only own-ingredient offer availability, not hidden hands", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const participant = activeParticipants(table)[0] as Participant;
 
     const snapshot = buildSnapshot(table, participant.id);
@@ -949,7 +1298,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("blocks offers when the recipient has no remaining real stock", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const from = activeParticipants(table)[0] as Participant;
     const to = firstOtherActive(table, from.id);
     to.realIngredientStock = 0;
@@ -968,7 +1317,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("automatically refuses pending offers when the recipient runs out of real stock", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const from = activeParticipants(table)[0] as Participant;
     const to = firstOtherActive(table, from.id);
     const offeredVoucherId = handVoucherIds(table, from.id)[0] as string;
@@ -991,7 +1340,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("automatically cancels incoming offers when requested cards leave the recipient hand", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const recipient = activeParticipants(table)[0] as Participant;
     const sender = firstOtherActive(table, recipient.id);
     const recipientOwnHand = handVoucherIds(table, recipient.id).filter(
@@ -1030,7 +1379,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("reserves requested cards across pending incoming offers", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const [recipient, senderOne, senderTwo] = activeParticipants(table) as [Participant, Participant, Participant];
     const recipientOwnHand = handVoucherIds(table, recipient.id).filter(
       (voucherId) => table.vouchers[voucherId].ownerParticipantId === recipient.id
@@ -1066,7 +1415,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("keeps other active hands hidden from active players", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const participant = activeParticipants(table)[0] as Participant;
     const snapshot = buildSnapshot(table, participant.id);
 
@@ -1076,7 +1425,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("filters food-part inventories while allowing witness audits", () => {
-    const { store, table } = startAndDeposit(7, "food-part-visibility");
+    const { store, table } = startAndDeposit(8, "food-part-visibility");
     const [owner, other] = activeParticipants(table);
 
     completeRecipeBySetup(table, owner.id);
@@ -1087,11 +1436,15 @@ describe("platter, offers, and visibility", () => {
     const otherSnapshot = buildSnapshot(table, other.id);
     const witness = store.joinTable(table.code, "Observer");
     const witnessSnapshot = buildSnapshot(table, witness.participant.id);
+    const ownerPublic = ownerSnapshot.participants.find((participant) => participant.id === owner.id);
+    const otherPublic = ownerSnapshot.participants.find((participant) => participant.id === other.id);
 
     expect(ownerSnapshot.ownFoodParts.map((part) => part.id)).toContain(partId);
     expect(ownerSnapshot.dishParts.map((part) => part.id)).toContain(partId);
     expect(otherSnapshot.ownFoodParts.map((part) => part.id)).not.toContain(partId);
     expect(otherSnapshot.dishParts.map((part) => part.id)).not.toContain(partId);
+    expect(ownerPublic?.heldFoodPartCount).toBe(DISH_PARTS_PER_DISH);
+    expect(otherPublic?.heldFoodPartCount).toBe(0);
     expect(witnessSnapshot.allFoodParts).toBeUndefined();
     expect(witnessSnapshot.dishParts.map((part) => part.id)).not.toContain(partId);
     expect(witnessSnapshot.foodPartLocationSummary).toContainEqual(
@@ -1104,7 +1457,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("defaults missing transaction history to an empty snapshot list", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const participant = activeParticipants(table)[0] as Participant;
     delete (table as Partial<Table>).transactionHistory;
 
@@ -1114,7 +1467,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("keeps hidden hands out of bot snapshots and decisions", () => {
-    const { table } = makeHarness(6);
+    const { table } = makeHarness(7);
     const hostId = table.hostParticipantId;
     const [bot] = addBots(table, hostId, ["mixed"]);
     applyIntent(table, hostId, { type: "start" });
@@ -1126,7 +1479,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("lets witnesses see all hands", () => {
-    const { store, table } = startAndDeposit(7);
+    const { store, table } = startAndDeposit(8);
     const witness = store.joinTable(table.code, "Observer");
     const snapshot = buildSnapshot(table, witness.participant.id);
 
@@ -1141,7 +1494,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("keeps running-game witness snapshots compact enough for Godot websocket frames", () => {
-    const { store, table } = startAndDeposit(7, "compact-witness");
+    const { store, table } = startAndDeposit(8, "compact-witness");
     const participants = activeParticipants(table);
 
     for (const participant of participants) {
@@ -1173,7 +1526,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("keeps mature reconnect snapshots and normal deltas within load-test budgets", () => {
-    const { store, table } = startAndDeposit(7, "payload-budget");
+    const { store, table } = startAndDeposit(8, "payload-budget");
     prepareAllDishesBySetup(table);
     expect(table.phase).toBe("eating");
 
@@ -1211,13 +1564,13 @@ describe("platter, offers, and visibility", () => {
     const p95DeltaBytes = deltaSizes[Math.min(deltaSizes.length - 1, Math.ceil(deltaSizes.length * 0.95) - 1)] ?? 0;
 
     expect(activePayloadBytes).toBeLessThan(64 * 1024);
-    expect(witnessPayloadBytes).toBeLessThan(24 * 1024);
+    expect(witnessPayloadBytes).toBeLessThan(28 * 1024);
     expect(Math.max(...deltaSizes)).toBeLessThan(16 * 1024);
     expect(p95DeltaBytes).toBeLessThan(4 * 1024);
   });
 
   it("enforces bot channel restrictions", () => {
-    const { table } = makeHarness(5);
+    const { table } = makeHarness(6);
     const hostId = table.hostParticipantId;
     const [poolOnly, barterOnly] = addBots(table, hostId, ["pool_only", "barter_only"]);
     applyIntent(table, hostId, { type: "start" });
@@ -1245,7 +1598,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("has bots place and redeem useful cards from their own hand before trading", () => {
-    const { table } = makeHarness(6, "bot-self-redeem");
+    const { table } = makeHarness(7, "bot-self-redeem");
     const [bot] = addBots(table, table.hostParticipantId, ["mixed"]);
     applyIntent(table, table.hostParticipantId, { type: "start" });
     for (const participant of activeParticipants(table)) {
@@ -1265,8 +1618,31 @@ describe("platter, offers, and visibility", () => {
     expect(ownRequirement?.placedVoucherIds).toHaveLength(0);
   });
 
+  it("has goal-complete bots accept incoming offers even without an active recipe", () => {
+    const { table } = startAndDeposit(8, "goal-complete-bot-offer");
+    const [sender, recipient] = activeParticipants(table);
+    recipient.kind = "bot";
+    recipient.botType = "mixed";
+    recipient.dishCount = table.targetDishCount;
+    delete table.recipes[recipient.id];
+    const offeredVoucherId = handVoucherIds(table, sender.id)[0] as string;
+
+    applyIntent(table, sender.id, {
+      type: "create_offer",
+      toParticipantId: recipient.id,
+      offeredVoucherIds: [offeredVoucherId],
+      requested: { ingredientId: recipient.ingredientId as string, quantity: 1 }
+    });
+
+    const decision = decideBotIntent(table, recipient.id);
+    expect(decision?.intent).toMatchObject({
+      type: "respond_offer",
+      response: "accept"
+    });
+  });
+
   it("does not let bots act while the table is paused", () => {
-    const { table } = makeHarness(6, "bot-paused");
+    const { table } = makeHarness(7, "bot-paused");
     const [bot] = addBots(table, table.hostParticipantId, ["mixed"]);
     applyIntent(table, table.hostParticipantId, { type: "start" });
     table.paused = true;
@@ -1275,7 +1651,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("broadcasts per-viewer filtered snapshots through the connection hub", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const [first, second] = activeParticipants(table);
     const hub = new ConnectionHub();
     const firstMessages: unknown[] = [];
@@ -1304,7 +1680,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("sends a full snapshot first and dirty deltas after successful mutations", () => {
-    const { table } = makeHarness(7, "delta-protocol");
+    const { table } = makeHarness(8, "delta-protocol");
     const host = table.participants[table.hostParticipantId];
     const hub = new ConnectionHub();
     const messages: Array<{
@@ -1344,7 +1720,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("sends a full snapshot to a reconnected socket", () => {
-    const { table } = makeHarness(7, "delta-reconnect");
+    const { table } = makeHarness(8, "delta-reconnect");
     const host = table.participants[table.hostParticipantId];
     const hub = new ConnectionHub();
     const firstMessages: unknown[] = [];
@@ -1367,6 +1743,23 @@ describe("platter, offers, and visibility", () => {
     expect(reconnectMessages.at(-1)?.type).toBe("snapshot");
   });
 
+  it("detects duplicate sockets by connection participant, not viewed participant", () => {
+    const { table } = makeHarness(8, "duplicate-socket-seat");
+    const host = table.participants[table.hostParticipantId];
+    const viewed = activeParticipants(table).find((participant) => participant.id !== host.id) as Participant;
+    const hub = new ConnectionHub();
+
+    hub.register({
+      tableCode: table.code,
+      participantId: viewed.id,
+      connectionParticipantId: host.id,
+      send: () => undefined
+    });
+
+    expect(hub.hasConnectionForParticipant(table.code, host.id)).toBe(true);
+    expect(hub.hasConnectionForParticipant(table.code, viewed.id)).toBe(false);
+  });
+
   it("keeps a disconnected active human seat reclaimable until the host converts it", () => {
     const store = new TableStore();
     const created = store.createTable("Host", "disconnect-active");
@@ -1379,6 +1772,35 @@ describe("platter, offers, and visibility", () => {
     expect(participant.connected).toBe(false);
     expect(store.connectParticipantByToken(created.table.code, joined.seatToken).id).toBe(participant.id);
     expect(participant.connected).toBe(true);
+  });
+
+  it("reconnects a joined online player to the same active seat and hand", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "online-rejoin-same-seat");
+    const joined = store.joinTable(created.table.code, "Ravi");
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+
+    const firstSnapshot = store.getSnapshotByToken(created.table.code, joined.seatToken);
+    const firstHand = firstSnapshot.ownHand.map((voucher) => voucher.id).sort();
+
+    store.disconnectParticipantByToken(created.table.code, joined.seatToken);
+    expect(created.table.participants[joined.participant.id].connected).toBe(false);
+
+    const rejoinedSnapshot = store.getSnapshotByToken(created.table.code, joined.seatToken);
+    const rejoinedHand = rejoinedSnapshot.ownHand.map((voucher) => voucher.id).sort();
+
+    expect(rejoinedSnapshot.viewerParticipantId).toBe(joined.participant.id);
+    expect(rejoinedSnapshot.connectionParticipantId).toBe(joined.participant.id);
+    expect(rejoinedSnapshot.viewerRole).toBe("active");
+    expect(rejoinedSnapshot.participants.find((participant) => participant.id === joined.participant.id)).toMatchObject({
+      id: joined.participant.id,
+      name: "Ravi",
+      kind: "human",
+      role: "active",
+      connected: true
+    });
+    expect(rejoinedHand).toEqual(firstHand);
+    expect(rejoinedHand).toHaveLength(VOUCHERS_PER_INGREDIENT);
   });
 
   it("lets the host manually convert a connected or disconnected active player to a mixed bot", () => {
@@ -1401,13 +1823,13 @@ describe("platter, offers, and visibility", () => {
       kind: "bot",
       botType: "mixed",
       connected: false,
-      name: "Ravi_mix_bot"
+      name: "Rav_b"
     });
     expect(created.table.participants[disconnected.participant.id]).toMatchObject({
       kind: "bot",
       botType: "mixed",
       connected: false,
-      name: "Lina_mix_bot"
+      name: "Lin_b"
     });
     expect(() => store.connectParticipantByToken(created.table.code, connected.seatToken)).toThrow(GameError);
     expect(() => store.connectParticipantByToken(created.table.code, disconnected.seatToken)).toThrow(GameError);
@@ -1433,7 +1855,7 @@ describe("platter, offers, and visibility", () => {
   });
 
   it("keeps disconnected witnesses as offline humans", () => {
-    const { store, table } = startAndDeposit(7);
+    const { store, table } = startAndDeposit(8);
     const witness = store.joinTable(table.code, "Observer");
     expect(witness.participant.role).toBe("witness");
 
@@ -1446,7 +1868,7 @@ describe("platter, offers, and visibility", () => {
 
 describe("winning and eating", () => {
   it("keeps cooking after everyone has one dish when the dish goal is the default 4", () => {
-    const { table } = startAndDeposit(7, "default-four-dishes");
+    const { table } = startAndDeposit(8, "default-four-dishes");
 
     for (const participant of activeParticipants(table)) {
       completeRecipeBySetup(table, participant.id);
@@ -1463,7 +1885,7 @@ describe("winning and eating", () => {
   });
 
   it("enters eating after everyone reaches the configured dish goal when accounts are clear", () => {
-    const harness = makeHarness(7, "one-dish-goal");
+    const harness = makeHarness(8, "one-dish-goal");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
     for (const participant of activeParticipants(harness.table)) {
@@ -1482,7 +1904,7 @@ describe("winning and eating", () => {
     applyIntent(harness.table, finalParticipant.id, { type: "prepare" });
 
     expect(harness.table.phase).toBe("eating");
-    expect(harness.table.winnerParticipantIds).toHaveLength(7);
+    expect(harness.table.winnerParticipantIds).toHaveLength(8);
     for (const participant of participants) {
       expect(harness.table.recipes[participant.id]).toBeUndefined();
       expect(platterAccountForParticipant(harness.table, participant.id).cleared).toBe(true);
@@ -1490,7 +1912,7 @@ describe("winning and eating", () => {
   });
 
   it("lets the host pause and resume while blocking gameplay actions", () => {
-    const { store, table, hostToken } = startAndDeposit(7);
+    const { store, table, hostToken } = startAndDeposit(8);
     const [host, other] = activeParticipants(table);
 
     const pausedSnapshot = store.handleIntent(table.code, hostToken, { type: "set_pause", paused: true }, false);
@@ -1510,7 +1932,7 @@ describe("winning and eating", () => {
   });
 
   it("pauses a running timer instead of expiring while paused", () => {
-    const { store, table, hostToken } = makeHarness(7, "pause-timer");
+    const { store, table, hostToken } = makeHarness(8, "pause-timer");
     store.handleIntent(table.code, hostToken, { type: "set_timer", seconds: 60 }, false);
     store.handleIntent(table.code, hostToken, { type: "start" }, false);
     const originalEndsAt = table.timer?.endsAtMs ?? Date.now();
@@ -1529,7 +1951,7 @@ describe("winning and eating", () => {
   });
 
   it("only lets the host end the game for everyone", () => {
-    const { table } = startAndDeposit(7);
+    const { table } = startAndDeposit(8);
     const nonHost = activeParticipants(table).find((participant) => participant.id !== table.hostParticipantId) as Participant;
 
     expect(() => applyIntent(table, nonHost.id, { type: "stop" })).toThrow(GameError);
@@ -1537,7 +1959,7 @@ describe("winning and eating", () => {
   });
 
   it("settles platter debt and shortfall with 1:1 card and food-part swaps", () => {
-    const harness = makeHarness(7, "settlement-swaps");
+    const harness = makeHarness(8, "settlement-swaps");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
     for (const participant of activeParticipants(harness.table)) {
@@ -1594,7 +2016,7 @@ describe("winning and eating", () => {
   });
 
   it("blocks invalid settlement swaps without mutation", () => {
-    const { table } = startAndDeposit(7, "invalid-settlement");
+    const { table } = startAndDeposit(8, "invalid-settlement");
     const [participant] = activeParticipants(table);
     completeRecipeBySetup(table, participant.id);
     applyIntent(table, participant.id, { type: "prepare" });
@@ -1622,7 +2044,7 @@ describe("winning and eating", () => {
   });
 
   it("allows any held voucher card to be swapped for a platter food part", () => {
-    const { table } = startAndDeposit(7, "any-card-for-food-part");
+    const { table } = startAndDeposit(8, "any-card-for-food-part");
     const [participant, other] = activeParticipants(table);
     completeRecipeBySetup(table, participant.id);
     applyIntent(table, participant.id, { type: "prepare" });
@@ -1643,7 +2065,7 @@ describe("winning and eating", () => {
   });
 
   it("only lets cleared players eat food parts they hold", () => {
-    const harness = makeHarness(7, "eat-owned-parts");
+    const harness = makeHarness(8, "eat-owned-parts");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
     for (const participant of activeParticipants(harness.table)) {
@@ -1664,15 +2086,18 @@ describe("winning and eating", () => {
     applyIntent(harness.table, owner.id, { type: "bite", dishId: ownerDish.id });
 
     const updatedDish = harness.table.dishes[ownerDish.id];
+    const snapshotAfterBite = buildSnapshot(harness.table, owner.id);
+    const ownerPublicAfterBite = snapshotAfterBite.participants.find((participant) => participant.id === owner.id);
     expect(updatedDish.partsRemaining).toBe(DISH_PARTS_PER_DISH - 1);
     expect(updatedDish.bitesRemaining).toBe(DISH_PARTS_PER_DISH - 1);
     expect(updatedDish.biteCounts[owner.id]).toBe(1);
+    expect(ownerPublicAfterBite?.heldFoodPartCount).toBe(DISH_PARTS_PER_DISH - 1);
     expect(harness.table.transactionHistory.at(-1)).toMatchObject({ name: owner.name, action: "Eat" });
   });
 
   it("has bots settle accounts and eat held food parts deterministically", () => {
     const harness = makeHarness(1, "bot-settlement-eating");
-    addBots(harness.table, harness.table.hostParticipantId, ["mixed", "mixed", "mixed", "mixed", "mixed", "mixed"]);
+    addBots(harness.table, harness.table.hostParticipantId, ["mixed", "mixed", "mixed", "mixed", "mixed", "mixed", "mixed"]);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
     for (const participant of activeParticipants(harness.table)) {
@@ -1691,7 +2116,7 @@ describe("winning and eating", () => {
   });
 
   it("expires a configured timer into settlement instead of bypassing accountability", () => {
-    const { store, table, hostToken } = makeHarness(7);
+    const { store, table, hostToken } = makeHarness(8);
     store.handleIntent(table.code, hostToken, { type: "set_timer", seconds: 1 }, false);
     store.handleIntent(table.code, hostToken, { type: "start" }, false);
     const winner = activeParticipants(table)[0] as Participant;
@@ -1715,7 +2140,7 @@ describe("winning and eating", () => {
     const joined = store.joinTable(created.table.code, "Observer", true);
 
     expect(joined.participant.role).toBe("witness");
-    expect(activeParticipants(created.table)).toHaveLength(1);
+    expect(activeParticipants(created.table)).toHaveLength(8);
   });
 
   it("lets a non-host leave and rejoin that table as a witness", () => {
@@ -1734,9 +2159,9 @@ describe("winning and eating", () => {
   });
 
   it("lets the host close and reset a table while keeping participants and rules", () => {
-    const { store, table, hostToken } = makeHarness(7, "close-reset");
+    const { store, table, hostToken } = makeHarness(8, "close-reset");
     const participantIds = [...table.participantOrder];
-    const requiredStock = maxIngredientDemandForPlayerCount(7, 2);
+    const requiredStock = minimumBackedStockForPlayerCount(8, 2);
     store.handleIntent(table.code, hostToken, { type: "set_timer", seconds: 60 }, false);
     store.handleIntent(table.code, hostToken, { type: "set_target_dish_count", count: 2 }, false);
     store.handleIntent(table.code, hostToken, { type: "set_stock", count: requiredStock }, false);
@@ -1806,7 +2231,28 @@ describe("HTTP app", () => {
 
     expect(joined.statusCode).toBe(200);
     const snapshot = (messages.at(-1) as { snapshot: ReturnType<typeof buildSnapshot> }).snapshot;
-    expect(snapshot.participants).toHaveLength(2);
+    expect(snapshot.participants).toHaveLength(8);
+    expect(snapshot.participants.find((participant) => participant.name === "Ben")?.kind).toBe("human");
+    await app.close();
+  });
+
+  it("rejects a second websocket for the same seat token", async () => {
+    const store = new TableStore();
+    const hub = new ConnectionHub();
+    const app = await buildApp({ store, hub });
+    const created = store.createTable("Host", "duplicate-host-socket");
+    await app.ready();
+
+    const firstSocket = await app.injectWS(`/tables/${created.table.code}/socket?seatToken=${created.seatToken}`);
+    expect(hub.connectionCount(created.table.code)).toBe(1);
+    expect(hub.hasConnectionForParticipant(created.table.code, created.participant.id)).toBe(true);
+
+    const secondSocket = await app.injectWS(`/tables/${created.table.code}/socket?seatToken=${created.seatToken}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(hub.connectionCount(created.table.code)).toBe(1);
+
+    firstSocket.terminate();
+    secondSocket.terminate();
     await app.close();
   });
 
@@ -1814,7 +2260,7 @@ describe("HTTP app", () => {
     const store = new TableStore();
     const app = await buildApp({ store });
     const created = store.createTable("Host", "csv-export");
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 7; index += 1) {
       store.joinTable(created.table.code, `Player ${index + 2}`);
     }
     store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
@@ -1827,7 +2273,7 @@ describe("HTTP app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/csv");
-    expect(response.body).toContain("Name,Action,Counterparty,Item out,Item back");
+    expect(response.body).toContain("Turn,Name,Action,Counterparty,Item out,Item back");
     expect(response.body).toContain("Deposit");
 
     const forbidden = await app.inject({
@@ -1841,8 +2287,8 @@ describe("HTTP app", () => {
 
 describe("determinism", () => {
   it("generates repeatable recipes from the same seed", () => {
-    const first = startTable(7, "same-seed").table;
-    const second = startTable(7, "same-seed").table;
+    const first = startTable(8, "same-seed").table;
+    const second = startTable(8, "same-seed").table;
     const firstRecipes = Object.values(first.recipes).map((recipe) =>
       recipe.requirements.map((requirement) => `${requirement.ingredientId}:${requirement.requiredQty}`)
     );
@@ -1854,8 +2300,8 @@ describe("determinism", () => {
   });
 
   it("makes deterministic bot decisions from the same seed and state", () => {
-    const first = makeHarness(6, "bot-seed");
-    const second = makeHarness(6, "bot-seed");
+    const first = makeHarness(1, "bot-seed");
+    const second = makeHarness(1, "bot-seed");
     const firstBot = addBots(first.table, first.table.hostParticipantId, ["mixed"])[0];
     const secondBot = addBots(second.table, second.table.hostParticipantId, ["mixed"])[0];
     applyIntent(first.table, first.table.hostParticipantId, { type: "start" });

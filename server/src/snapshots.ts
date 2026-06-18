@@ -30,10 +30,14 @@ import type {
 const WITNESS_TRANSACTION_HISTORY_LIMIT = 100;
 const TRANSACTION_HISTORY_LIMIT = 100;
 
-export function buildSnapshot(table: Table, viewerParticipantId?: string): Snapshot {
+export function buildSnapshot(table: Table, viewerParticipantId?: string, connectionParticipantId = viewerParticipantId): Snapshot {
   const viewer = viewerParticipantId ? table.participants[viewerParticipantId] : undefined;
+  const connectionParticipant = connectionParticipantId ? table.participants[connectionParticipantId] : undefined;
   const isWitness = viewer?.role === "witness";
   const isKnownViewer = Boolean(viewer);
+  const controlledParticipantIds = connectionParticipantId
+    ? table.participantOrder.filter((participantId) => table.participants[participantId]?.controllerParticipantId === connectionParticipantId)
+    : [];
 
   const participants = table.participantOrder
     .map((participantId) => table.participants[participantId])
@@ -61,9 +65,14 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string): Snaps
     phase: table.phase,
     paused: table.paused,
     viewerParticipantId,
+    connectionParticipantId,
     viewerRole: viewer?.role,
+    controlledParticipantIds,
+    viewerCanUseHostControls: Boolean(connectionParticipant?.isHost),
     hostParticipantId: table.hostParticipantId,
     turn: table.turn,
+    turnMode: table.turnMode,
+    currentTurnParticipantId: table.currentTurnParticipantId,
     participants,
     ingredients: INGREDIENTS,
     platter: platterVoucherIds(table).map((id) => cloneVoucher(table.vouchers[id])),
@@ -108,6 +117,7 @@ function publicParticipant(table: Table, participant: Participant): PublicPartic
     kind: participant.kind,
     role: participant.role,
     isHost: participant.isHost,
+    controllerParticipantId: participant.controllerParticipantId,
     botType: participant.botType,
     ingredientId: participant.ingredientId,
     realIngredientStock: participant.realIngredientStock,
@@ -117,8 +127,11 @@ function publicParticipant(table: Table, participant: Participant): PublicPartic
     platterShortfall: account.platterShortfall,
     cleared: account.cleared,
     dishCount: participant.dishCount,
+    heldFoodPartCount: inventoryDishPartIds(table, participant.id).length,
     depositedInitial: participant.depositedInitial,
-    connected: participant.connected
+    connected: participant.controllerParticipantId
+      ? Boolean(table.participants[participant.controllerParticipantId]?.connected)
+      : participant.connected
   };
 }
 

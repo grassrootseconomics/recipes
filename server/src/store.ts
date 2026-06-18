@@ -7,8 +7,8 @@ import type { CreateTableResult, Intent, JoinTableResult, Participant, Snapshot,
 export class TableStore {
   readonly tables = new Map<string, Table>();
 
-  createTable(hostName: string, seed?: string): CreateTableResult {
-    const code = this.nextCode();
+  createTable(hostName: string, seed?: string, requestedCode?: string): CreateTableResult {
+    const code = requestedCode ? this.reserveRequestedCode(requestedCode) : this.nextCode();
     const seatToken = this.nextSeatToken();
     const table = createEmptyTable(code, seed ?? randomUUID(), hostName, seatToken);
     this.tables.set(code, table);
@@ -33,10 +33,33 @@ export class TableStore {
     };
   }
 
-  getSnapshotByToken(code: string, seatToken: string): Snapshot {
+  getTableStatus(code: string): { code: string; valid: boolean; exists: boolean; joinable: boolean; reason?: "invalid" | "started" | "full" } {
+    const normalized = code.trim().toUpperCase();
+    if (!/^[A-Z0-9-]{4,24}$/.test(normalized)) {
+      return { code: normalized, valid: false, exists: false, joinable: false, reason: "invalid" };
+    }
+    const table = this.tables.get(normalized);
+    if (!table) {
+      return { code: normalized, valid: true, exists: false, joinable: false };
+    }
+    const openBotSeat = Object.values(table.participants).some(
+      (participant) => participant.role === "active" && participant.kind === "bot"
+    );
+    const joinable = table.phase === "lobby" && openBotSeat;
+    return {
+      code: normalized,
+      valid: true,
+      exists: true,
+      joinable,
+      reason: joinable ? undefined : table.phase === "lobby" ? "full" : "started"
+    };
+  }
+
+  getSnapshotByToken(code: string, seatToken: string, viewerParticipantId?: string): Snapshot {
     const table = this.requireTable(code);
     const participant = this.connectParticipantByToken(code, seatToken);
-    return buildSnapshot(table, participant.id);
+    const viewer = viewerParticipantId ? this.requireControlledParticipant(table, participant.id, viewerParticipantId) : participant;
+    return buildSnapshot(table, viewer.id, participant.id);
   }
 
   getTransactionsByToken(code: string, seatToken: string): TransactionRecord[] {
@@ -53,14 +76,17 @@ export class TableStore {
     return buildSnapshot(table, participantId);
   }
 
-  handleIntent(code: string, seatToken: string, intent: Intent, runBotTurns = true): Snapshot {
+  handleIntent(code: string, seatToken: string, intent: Intent, runBotTurns = true, actorParticipantId?: string): Snapshot {
     const table = this.requireTable(code);
-    const participant = this.connectParticipantByToken(code, seatToken);
-    applyIntent(table, participant.id, intent);
+    const connectionParticipant = this.connectParticipantByToken(code, seatToken);
+    const actor = actorParticipantId
+      ? this.requireControlledParticipant(table, connectionParticipant.id, actorParticipantId)
+      : connectionParticipant;
+    applyIntent(table, actor.id, intent);
     if (runBotTurns && !table.paused && shouldRunBotsAfterIntent(intent)) {
       runBots(table);
     }
-    return buildSnapshot(table, participant.id);
+    return buildSnapshot(table, actor.id, connectionParticipant.id);
   }
 
   connectParticipantByToken(code: string, seatToken: string): Participant {
@@ -74,6 +100,14 @@ export class TableStore {
       }
     }
     return participant;
+  }
+
+  controlledParticipantIds(table: Table, controllerParticipantId: string): string[] {
+    return table.participantOrder.filter((participantId) => table.participants[participantId]?.controllerParticipantId === controllerParticipantId);
+  }
+
+  canControlParticipant(table: Table, controllerParticipantId: string, actorParticipantId: string): boolean {
+    return actorParticipantId === controllerParticipantId || table.participants[actorParticipantId]?.controllerParticipantId === controllerParticipantId;
   }
 
   disconnectParticipantByToken(code: string, seatToken: string): Participant | undefined {
@@ -106,6 +140,17 @@ export class TableStore {
     return participant;
   }
 
+  private requireControlledParticipant(table: Table, controllerParticipantId: string, actorParticipantId: string): Participant {
+    const actor = table.participants[actorParticipantId];
+    if (!actor) {
+      throw new GameError("Participant not found.", "missing_participant");
+    }
+    if (!this.canControlParticipant(table, controllerParticipantId, actorParticipantId)) {
+      throw new GameError("This connection cannot control that participant.", "not_controller");
+    }
+    return actor;
+  }
+
   private nextCode(): string {
     for (let attempt = 0; attempt < 1000; attempt += 1) {
       const code = randomBytes(4).toString("base64url").replace(/[^A-Z0-9]/gi, "").slice(0, 6).toUpperCase();
@@ -114,6 +159,17 @@ export class TableStore {
       }
     }
     throw new GameError("Could not allocate invite code.", "code_allocation_failed");
+  }
+
+  private reserveRequestedCode(requestedCode: string): string {
+    const code = requestedCode.trim().toUpperCase();
+    if (!/^[A-Z0-9-]{4,24}$/.test(code)) {
+      throw new GameError("Invite code must be 4-24 characters using letters, numbers, or hyphens.", "invalid_table_code");
+    }
+    if (this.tables.has(code)) {
+      throw new GameError("Invite code is already in use. Generate another code or type a different one.", "table_code_in_use");
+    }
+    return code;
   }
 
   private nextSeatToken(): string {

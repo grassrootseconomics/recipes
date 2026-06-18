@@ -1,20 +1,20 @@
 ## Recipes
 
-Each active player receives a recipe goal. Recipes are based on common dishes from around the world where possible, using committed player-count ingredient sets generated once from the 20 common ingredients. Catalog dish targets are playable game targets, not exhaustive real-world recipe ingredient lists, so they always contain 3, 4, or 6 ingredients. A known dish name can only be used when the generated requirements match that dish target; otherwise the generated recipe must receive a distinct short name that reflects the actual required ingredients. Within each player-count catalog, both displayed recipe names and ingredient/quantity requirement signatures must be unique.
+Each active player receives a recipe goal. The current MVP is fixed at exactly 8 active seats and exactly 8 generalized ingredients: Cheese, Flour, Herbs, Vegetables, Rice, Beans, Spices, and Eggs. Recipes are based on short, recognizable real-life dish names using those generalized ingredients. The catalog is committed game data, not runtime-random data. Within the catalog, both displayed recipe names and ingredient/quantity requirement signatures must be unique.
 
-For each supported active participant count from 7 through 20, the catalog contains one fixed ingredient set with `N` unique ingredients. Runtime games use the committed set for their active participant count; they do not randomly choose ingredients at table start.
+Every active participant brings one of the 8 ingredients. Runtime games use the committed 8-player set; they do not randomly choose ingredients at table start.
 
-Every recipe requires exactly 6 total voucher items, because each ingredient has 7 fixed voucher cards and one voucher from each active participant starts in the central platter. Voucher cards are reusable claims on a finite real ingredient stock. The host can configure `Stock` before the game starts; the default is 30 real units per active ingredient owner.
+Every recipe requires exactly 6 total voucher items, because each ingredient has 7 fixed voucher cards and one voucher from each active participant starts in the central platter. Voucher cards are reusable claims on a finite real ingredient stock. The MVP uses a fixed stock of 40 real units per active ingredient owner, enough for full 4-dish catalog demand plus backing for the 7 voucher cards.
 
-Valid recipe quantity shapes are:
+Every recipe has 6 item slots and uses 4, 5, or 6 distinct ingredients. Valid recipe quantity shapes are:
 
-- 3 ingredients: 2 + 2 + 2.
 - 4 ingredients: 2 + 2 + 1 + 1.
+- 5 ingredients: 2 + 1 + 1 + 1 + 1.
 - 6 ingredients: 1 + 1 + 1 + 1 + 1 + 1.
 
 The player’s own ingredient must appear in each of their recipes. Every required ingredient must belong to an active participant at the table, so requested recipe ingredients are physically available through that ingredient owner’s vouchers. The catalog contains four recipes per ingredient-set participant: one initial recipe and three followups. When a player prepares a dish, their next recipe must also be generated from ingredients currently active at the table.
 
-A player places matching vouchers into recipe requirements. Placed vouchers are locked. The player then redeems placed vouchers one by one. Redeeming a voucher closes one needed unit of that recipe requirement, decrements the voucher issuer's real ingredient stock by one, and returns the voucher card to the issuer's hand while stock remains. A requirement group is complete when its delivered quantity equals its required quantity.
+A player places matching vouchers into recipe requirements. Placed vouchers are locked. The player then redeems placed vouchers. Redeeming a voucher closes one needed unit of that recipe requirement, decrements the voucher issuer's real ingredient stock by one, and returns the voucher card to the issuer's hand while stock remains. In normal player UI, cooking turns use `Redeem Cards and Pass Turn`: the authoritative rules redeem every useful voucher that was in the acting player's hand when clicked, at most once per voucher, then end that player's turn. A requirement group is complete when its delivered quantity equals its required quantity.
 
 When every requirement group is complete, the player can click `Prepare`. The ingredients on their final plate transform into a finished dish with exactly 10 food parts. The part name comes from the recipe catalog, such as slices, cups, scoops, pieces, portions, or servings. These parts begin in the maker's inventory, and the player’s dish count increases by one. The player then receives a new recipe while keeping the same ingredient identity.
 
@@ -32,11 +32,11 @@ Players can only be asked for their own ingredient while they still have at leas
 
 After all active players reach the dish goal, the table enters settlement unless everyone is already clear. During settlement, voucher cards and finished dish parts are both 1:1 value assets. A player may give any held card or food part to the platter and take any visible card or food part from the platter. Final clearance requires each active player to have exactly one of their own voucher cards in the central platter. A player with more than one own card in the platter has platter debt; a player with zero own cards in the platter has platter shortfall. Only own cards in the platter count toward clearance.
 
-Successful table transactions are public history entries with: player name, action, counterparty, item out, and item back. MVP transaction actions are `Deposit`, `Swap`, `Settlement Swap`, `Exchange`, `Redeem`, `Prepare`, and `Eat`.
+Successful table transactions are public history entries with: turn number, player name, action, counterparty, item out, and item back. MVP transaction actions are `Deposit`, `Swap`, `Settlement Swap`, `Exchange`, `Redeem`, `Prepare`, `Eat`, and `Pass Turn`.
 
 ## Bots
 
-The host can add bots before the game starts. Bots count as active participants.
+New tables start with exactly 8 active seats: the creator plus 7 mixed bot seats. The pre-start lobby shows all 8 seats in a grid with the seat's ingredient image, editable name, and Player/Bot state. Bots count as active participants. Before start, offline local players, online joiners, and host-controlled seats replace available bot seats instead of increasing the active seat count. If all bot seats are already taken, later online joiners become witnesses.
 
 Bot types are:
 
@@ -52,11 +52,13 @@ If an active human player leaves an online table, their seat stays reserved for 
 
 ## Offline Mode
 
-The game should include an offline mode for Web and Android. Offline mode is single-device and bot-only: one local human player can play with bots, but cannot invite other human players, join hosted tables, use witnesses, or access online matchmaking.
+The game should include an offline mode for Web and Android. Offline mode is single-device pass-and-play: one local controller starts with one human seat and 7 bot seats, can take over bot seats with custom names, and can pass the device between people. Offline mode cannot invite remote players, join hosted tables, use witnesses, or access online matchmaking.
 
 Offline mode should preserve the same recipe, voucher, platter, redemption, preparation, scoring, and eating rules as online play where possible. Bots remain deterministic from the local table seed.
 
-Because the Godot client must remain GDScript-only, offline mode cannot depend on running the Node TypeScript server locally on the device. Offline implementation should either share generated rule fixtures from the server or add a small GDScript rules runtime that mirrors the authoritative online server for bot-only play.
+Because the Godot client must remain GDScript-only, offline mode cannot depend on running the Node TypeScript server locally on the device. Offline implementation should either share generated rule fixtures from the server or add a small GDScript rules runtime that mirrors the authoritative online server for local controlled seats and bot play.
+
+Gameplay semantics must stay aligned between online and offline modes. When a rule changes, the online TypeScript implementation, the offline GDScript mirror, generated client fixtures, and parity tests should be updated together.
 
 ## Host-Controlled Seats
 
@@ -68,18 +70,18 @@ Host-controlled seats must not weaken hidden-information rules. The host can act
 
 ## Turn Modes
 
-The host should choose the table turn mode before the game starts.
+The host should choose the table turn mode before the game starts. New tables default to `round_robin`; `market` remains available before start.
 
-- `round_robin`: active participants take turns in a circle using deterministic table order. Only the current active seat can perform turn-gated gameplay actions, then the turn passes to the next active seat or bot.
+- `round_robin`: active participants take turns in a circle using deterministic table order. Only the current active seat can perform turn-gated gameplay actions. The current seat keeps the turn across swaps, offers, preparation, settlement, and eating until they explicitly pass. During cooking, `Redeem Cards and Pass Turn` redeems all useful held cards first, then advances to the next active seat.
 - `market`: active participants may act asynchronously whenever an action is legal. Offers, platter swaps, placement, redemption, preparation, bot turns, and eating are resolved by server validation without a strict active-seat turn gate.
 
-Online multiplayer must keep turn mode, active turn, and turn advancement server-owned. Offline bot-only mode should mirror the same turn-mode semantics where feasible. The current MVP behavior is closest to `market` mode until explicit round-robin enforcement is implemented.
+Online multiplayer must keep turn mode, active turn, and turn advancement server-owned. Offline mode should mirror the same turn-mode semantics where feasible.
 
 ## Winning And Eating
 
-The host can set a dish goal from 1 to 4 before the game starts; the default goal is 4 dishes per active player. The host can also set starting `Stock`; the server must reject game start if the configured stock is below the catalog demand for the active participant count and dish goal. When a player prepares a dish below the target, they receive a new recipe. When a player reaches the target, they stop receiving new recipes while the rest of the table finishes.
+The MVP dish goal is fixed at 4 dishes per active player. Starting stock is fixed at 40 real units per active ingredient owner. The current MVP active participant count is fixed at 8. When a player prepares a dish below the target, they receive a new recipe. When a player reaches the target, they stop receiving new recipes while the rest of the table finishes.
 
-The host can set a timer and pause or resume the game for everyone. While paused, gameplay actions and bot turns stop, and a running timer is paused rather than expiring in the background. Only the host can stop the game for everyone. When the timer ends, or when the host stops the game, the player with the most prepared dishes wins.
+The MVP does not expose a timer in the normal client setup flow. The host can pause or resume the game for everyone. While paused, gameplay actions and bot turns stop. Only the host can stop the game for everyone. When the host stops the game, the player with the most prepared dishes wins.
 
 Winning can also mean that all active players have reached the configured dish goal. Players that have made an equal number of dishes can tie as winners. Before eating, the table must settle the central platter accounts. Eating begins only when every active player has exactly one own card in the platter and no food parts remain in the platter. A cleared player may eat food parts they hold in their own inventory. Bots should settle accounts and eat held food parts deterministically. The game is fully complete when all prepared food parts have been eaten.
 
@@ -101,7 +103,7 @@ The Godot client will be GDScript-only for Web and Android compatibility. The An
 
 Online multiplayer uses one hosted authoritative Node TypeScript server. The server owns all online game state: tables, invite codes, roles, ingredient sets, card locations, recipes, trades, platter state, redemption, dish preparation, bots, timers, visibility filtering, scoring, and eating phase.
 
-Online clients send intents only. The server validates every action and sends filtered snapshots back to each client. Offline mode is separate and local-only, with no human multiplayer or witness mode.
+Online clients send intents only. The server validates every action and sends filtered snapshots back to each client. Offline mode is separate and local-only, with no remote multiplayer or witness mode.
 
 The design should draw from:
 
@@ -123,27 +125,31 @@ The repo should include:
 
 The server should include focused unit and integration tests for:
 
-- 20 unique ingredients and one committed ingredient set per active participant count.
+- 8 unique generalized ingredients with descriptions and image paths.
+- one committed 8-player ingredient set.
 - 7 fixed vouchers per ingredient.
-- start blocked below 7 active participants.
-- start allowed from 7 to 20 active participants.
+- new tables start with exactly 8 active participants by default.
+- start allowed immediately with exactly 8 active participants.
+- joining before start replaces available bot seats; joining after all bot seats are claimed makes a witness.
 - running joins become witnesses.
-- host active/witness toggle before start.
+- host-controlled seats can claim available bot seats before start.
 - recipe total required quantity equals 6.
-- recipe quantity shape is 2+2+2, 2+2+1+1, or 1+1+1+1+1+1.
+- recipe quantity shape is 2+2+1+1, 2+1+1+1+1, or 1+1+1+1+1+1.
 - own ingredient can appear in a player’s recipe.
 - recipe quantities greater than one are supported.
 - recipe requirement ingredients are owned by active table participants.
 - new recipes after preparing a dish obey the same table-valid ingredient and quantity rules.
 - all quantities must be redeemed before preparation.
+- `Redeem Cards and Pass Turn` redeems each useful initially held voucher at most once, records redemptions, then advances the round-robin turn.
 - total vouchers per ingredient owner always equals 7.
 - active vouchers match physical ingredient availability.
-- default stock is 30 real ingredient units per active ingredient owner.
-- host-configured stock is assigned to each active ingredient owner at start.
-- full catalog demand for the configured dish goal never exceeds per-owner real stock.
+- default stock is 40 real ingredient units per active ingredient owner.
+- fixed stock is assigned to each active ingredient owner at start.
+- full catalog demand plus 7 voucher-backing units for the fixed 4-dish goal never exceeds per-owner real stock.
 - redeeming a voucher decrements issuer real stock.
 - redeemed vouchers return to the issuer's hand while stock remains.
-- the default dish goal is 4, configurable by the host from 1 to 4 before start.
+- zero-stock vouchers remain visible for accounting but cannot be used as live claims for recipe placement, exchange, deposit, or platter swaps.
+- the fixed dish goal is 4.
 - platter deposit and 1:1 swaps are atomic.
 - structured offers lock cards and resolve correctly.
 - players with no available own-ingredient vouchers cannot receive new offers for that ingredient, and impossible pending offers are auto-refused.
@@ -158,8 +164,10 @@ The server should include focused unit and integration tests for:
 - bots redeem useful vouchers already in their own hand before swaps or offers.
 - only the host can stop the game for everyone.
 - disconnected active humans stay reclaimable until the host manually converts them to `mixed` bots.
-- host pause blocks gameplay actions and bot turns, and pauses running timers.
+- host pause blocks gameplay actions and bot turns.
 - prepared dishes create exactly 10 named food parts from the recipe catalog.
 - settlement swaps allow any held card or food part to be swapped 1:1 with any platter card or food part.
 - platter clearance requires exactly one own card in the platter for every active player.
 - players cannot eat until cleared, and can only eat food parts they hold.
+- generated client fixtures match the server recipe catalog and shared rule constants.
+- offline smoke/parity coverage exercises the same intent names, fixture data, hidden-information boundaries, turn mode defaults, bot-seat takeover, deposits, swaps, offers, redemption, preparation, settlement, eating, and fixed stock/dish-goal assumptions as online play.

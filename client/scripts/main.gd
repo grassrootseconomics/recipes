@@ -1,11 +1,22 @@
 extends Control
 
+const TableVisual := preload("res://scripts/table_visual.gd")
+const VisualAssets := preload("res://scripts/visual_asset_registry.gd")
 const TRANSACTION_VISIBLE_ROWS := 20
 const TRANSACTION_ROW_HEIGHT := 30
 const TRANSACTION_ROW_GAP := 6
+const REQUIRED_ACTIVE_SEATS := 8
+const APP_VERSION := "0.0.1"
+const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
+const SERVER_LIST_PATH := "res://data/servers.json"
+const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
+const GRASSROOTS_ECONOMICS_URL := "https://grassrootseconomics.org"
+const ONLINE_SESSION_STORE_PATH := "user://online-sessions.json"
+const ONLINE_SESSION_STORE_TMP_PATH := "user://online-sessions.tmp"
 
 var _status_label: Label
 var _server_input: LineEdit
+var _server_option: OptionButton
 var _name_input: LineEdit
 var _seed_input: LineEdit
 var _code_input: LineEdit
@@ -13,15 +24,33 @@ var _timer_input: LineEdit
 var _target_dish_count_input: LineEdit
 var _stock_input: LineEdit
 var _create_table_button: Button
+var _offline_table_button: Button
 var _join_table_button: Button
 var _leave_table_button: Button
+var _server_connect_button: Button
+var _generate_code_button: Button
+var _take_seat_name_input: LineEdit
+var _main_menu_button: Button
+var _main_menu_spacer: Control
+var _home_panel: PanelContainer
+var _home_sprite_layer: Control
+var _online_setup_panel: VBoxContainer
+var _grassroots_button: Button
+var _quit_button: Button
+var _version_label: Label
+var _ge_logo_texture: Texture2D = null
 var _summary_label: Label
 var _participants_label: Label
 var _participants_option: OptionButton
 var _participant_detail_label: Label
+var _acting_as_option: OptionButton
 var _hand_label: Label
 var _platter_label: Label
 var _participants_area: VBoxContainer
+var _table_visual: Control
+var _post_table_controls: VBoxContainer
+var _root_margin: MarginContainer
+var _root_container: VBoxContainer
 var _table_section: VBoxContainer
 var _hand_section: VBoxContainer
 var _recipe_section: VBoxContainer
@@ -41,46 +70,103 @@ var _confirm_leave_dialog: ConfirmationDialog
 var _confirm_close_dialog: ConfirmationDialog
 var _csv_file_dialog: FileDialog
 var _csv_export_status_label: Label
+var _server_check_request: HTTPRequest
+var _code_check_request: HTTPRequest
 var _select_popup: PopupPanel
 var _select_popup_scroller: ScrollContainer
 var _select_popup_list: VBoxContainer
 var _csv_http_request: HTTPRequest
+var _root_scroll: ScrollContainer
+var _home_sprites: Array = []
+var _server_options: Array = []
+var _home_animation_time := 0.0
+var _home_choice := ""
+var _server_connected := false
+var _connected_server_url := ""
+var _server_check_in_progress := false
+var _server_check_target_url := ""
+var _code_check_in_progress := false
+var _code_check_target := ""
+var _code_check_for_generation := false
+var _code_generation_base := ""
+var _code_generation_attempts := 0
+var _suppress_invite_code_check := false
+var _invite_code_unique := false
+var _invite_code_joinable := false
+var _invite_code_exists := false
+var _ignored_online_session_keys := {}
 
 var _selected_hand_voucher_id := ""
 var _selected_platter_voucher_id := ""
 var _selected_give_asset_key := ""
 var _selected_take_asset_key := ""
 var _selected_offer_target_id := ""
-var _selected_offer_card_id := ""
+var _selected_offer_ingredient_id := ""
 var _selected_participant_id := ""
 var _pending_bot_participant_id := ""
 var _pending_csv := ""
 var _pending_csv_filename := ""
 var _csv_download_filename := ""
 var _last_csv_export_status := ""
+var _pending_controlled_deposit_actor_id := ""
+var _last_controlled_turn_participant_id := ""
+var _last_popup_close_key := ""
+var _last_popup_close_ms := -1
 var _left_table_codes := {}
 var _active_select_key := ""
+var _collapsed_gameplay_for_table := ""
 
 
 func _ready() -> void:
 	_csv_http_request = HTTPRequest.new()
+	_csv_http_request.timeout = 20.0
 	add_child(_csv_http_request)
 	_csv_http_request.request_completed.connect(_on_csv_download_completed)
+	_replace_server_check_request()
+	_code_check_request = HTTPRequest.new()
+	_code_check_request.timeout = 5.0
+	add_child(_code_check_request)
+	_code_check_request.request_completed.connect(_on_code_check_completed)
 	_build_ui()
+	set_process(true)
 	RecipesClient.snapshot_received.connect(_on_snapshot_received)
 	RecipesClient.error_received.connect(_on_error_received)
 	RecipesClient.connection_changed.connect(_on_connection_changed)
 
 
+func _process(delta: float) -> void:
+	_update_home_sprites(delta)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		_fit_home_panel_to_window()
+
+
+func _exit_tree() -> void:
+	_home_sprites.clear()
+	_ge_logo_texture = null
+	VisualAssets.clear_cache()
+
+
 func _build_ui() -> void:
+	var background := ColorRect.new()
+	background.color = Color(0.84, 0.78, 0.64)
+	background.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(background)
+
 	var scroll := ScrollContainer.new()
+	_root_scroll = scroll
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(scroll)
 
 	var margin := MarginContainer.new()
+	_root_margin = margin
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	margin.add_theme_constant_override("margin_left", 20)
 	margin.add_theme_constant_override("margin_top", 16)
 	margin.add_theme_constant_override("margin_right", 20)
@@ -88,28 +174,41 @@ func _build_ui() -> void:
 	scroll.add_child(margin)
 
 	var root := VBoxContainer.new()
+	_root_container = root
 	root.add_theme_constant_override("separation", 12)
 	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	margin.add_child(root)
 
-	var title := Label.new()
-	title.text = "Recipes"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 34)
-	root.add_child(title)
+	_home_panel = _build_home_panel()
+	root.add_child(_home_panel)
+	_fit_home_panel_to_window()
 
-	_status_label = _wrapped_label("Connect to a local Recipes server.")
+	_status_label = _wrapped_label("Choose offline pass-and-play or connect to an online Recipes server.")
+	_status_label.visible = false
 	root.add_child(_status_label)
 
-	_server_input = _labeled_line_edit(root, "Server URL", "http://127.0.0.1:3000", "http://127.0.0.1:3000")
-	_name_input = _labeled_line_edit(root, "Your name", "Leave blank for an auto name", "")
-	_seed_input = _labeled_line_edit(root, "Table seed", "demo", "demo")
-	_code_input = _labeled_line_edit(root, "Invite code", "Required to join an existing table", "")
+	_main_menu_button = _button("Main Menu", _return_to_main_menu)
+	_main_menu_button.visible = false
+
+	_online_setup_panel = VBoxContainer.new()
+	_online_setup_panel.add_theme_constant_override("separation", 6)
+	_online_setup_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_online_setup_panel.visible = false
+	root.add_child(_online_setup_panel)
+
+	_name_input = LineEdit.new()
+	_name_input.visible = false
+	root.add_child(_name_input)
+	_seed_input = LineEdit.new()
+	_seed_input.visible = false
+	root.add_child(_seed_input)
+	_build_online_setup_controls(_online_setup_panel)
 
 	var connect_row := _button_row()
-	root.add_child(connect_row)
+	_online_setup_panel.add_child(connect_row)
 	_create_table_button = _button("Create Table", _on_create_pressed)
-	_join_table_button = _button("Join", _on_join_pressed)
+	_join_table_button = _button("Join Table", _on_join_pressed)
 	_leave_table_button = _button("Leave Table", _confirm_leave_table)
 	connect_row.add_child(_create_table_button)
 	connect_row.add_child(_join_table_button)
@@ -131,9 +230,27 @@ func _build_ui() -> void:
 	_participants_area.add_child(_participants_option)
 	_participant_detail_label = _wrapped_label("")
 	_participants_area.add_child(_participant_detail_label)
+	_acting_as_option = _option_button()
+	_acting_as_option.item_selected.connect(_on_acting_as_selected)
+	_acting_as_option.visible = false
+	_participants_area.add_child(_acting_as_option)
 
 	_table_section = _section(root, "Table")
 	_phase_controls = _section_controls(_table_section)
+
+	_table_visual = TableVisual.new()
+	_table_visual.visible = false
+	_table_visual.intent_requested.connect(_on_table_visual_intent_requested)
+	_table_visual.view_requested.connect(_on_table_visual_view_requested)
+	_table_visual.status_requested.connect(_on_table_visual_status_requested)
+	root.add_child(_table_visual)
+
+	_post_table_controls = VBoxContainer.new()
+	_post_table_controls.visible = false
+	_post_table_controls.add_theme_constant_override("separation", 6)
+	_post_table_controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_child(_post_table_controls)
+
 	_hand_section = _section(root, "Hand")
 	_hand_controls = _section_controls(_hand_section)
 	_recipe_section = _section(root, "Recipe")
@@ -153,6 +270,12 @@ func _build_ui() -> void:
 	_hand_label = _wrapped_label("")
 	root.add_child(_hand_label)
 	_hand_label.visible = false
+
+	_main_menu_spacer = Control.new()
+	_main_menu_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_main_menu_spacer.visible = false
+	root.add_child(_main_menu_spacer)
+	root.add_child(_main_menu_button)
 
 	_confirm_bot_dialog = ConfirmationDialog.new()
 	_confirm_bot_dialog.title = "Switch to bot?"
@@ -199,7 +322,8 @@ func _build_ui() -> void:
 	_select_popup_scroller.add_child(_select_popup_list)
 	_select_popup.add_child(_select_popup_scroller)
 	_select_popup.popup_hide.connect(func() -> void:
-		_active_select_key = ""
+		_last_popup_close_key = _active_select_key
+		_last_popup_close_ms = Time.get_ticks_msec()
 	)
 	add_child(_select_popup)
 
@@ -207,26 +331,1022 @@ func _build_ui() -> void:
 	_set_gameplay_ui_visible(false)
 
 
+func _build_home_panel() -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override("panel", _home_panel_style())
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(box)
+
+	_home_sprite_layer = Control.new()
+	_home_sprite_layer.custom_minimum_size = Vector2(0, 300)
+	_home_sprite_layer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(_home_sprite_layer)
+	_build_home_sprites()
+
+	var title := Label.new()
+	title.text = "Recipes"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 68)
+	title.add_theme_color_override("font_color", Color(1.0, 0.72, 0.20))
+	title.add_theme_color_override("font_outline_color", Color(0.18, 0.16, 0.09))
+	title.add_theme_constant_override("outline_size", 7)
+	title.add_theme_color_override("font_shadow_color", Color(0.22, 0.12, 0.04, 0.38))
+	title.add_theme_constant_override("shadow_offset_x", 3)
+	title.add_theme_constant_override("shadow_offset_y", 5)
+	box.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "Cook, trade, and share the table"
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.add_theme_font_size_override("font_size", 20)
+	subtitle.add_theme_color_override("font_color", Color(0.22, 0.17, 0.10))
+	box.add_child(subtitle)
+
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 12)
+	actions.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(actions)
+
+	_offline_table_button = _home_button("Offline", Color(0.25, 0.55, 0.32), Color(0.84, 0.98, 0.66), _start_offline_table)
+	var online_button := _home_button("Online", Color(0.72, 0.32, 0.12), Color(1.0, 0.83, 0.46), _show_online_setup)
+	actions.add_child(_offline_table_button)
+	actions.add_child(online_button)
+
+	var ge_gap := Control.new()
+	ge_gap.custom_minimum_size = Vector2(0, 10)
+	box.add_child(ge_gap)
+
+	_grassroots_button = _home_logo_button(_open_grassroots_economics)
+	box.add_child(_grassroots_button)
+
+	var footer_spacer := Control.new()
+	footer_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(footer_spacer)
+
+	_version_label = Label.new()
+	_version_label.text = "v%s" % APP_VERSION
+	_version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_version_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_version_label.custom_minimum_size = Vector2(0, 26)
+	_version_label.add_theme_font_size_override("font_size", 16)
+	_version_label.add_theme_color_override("font_color", Color(0.16, 0.13, 0.08, 0.86))
+	_version_label.add_theme_color_override("font_outline_color", Color(1.0, 0.98, 0.84, 0.72))
+	_version_label.add_theme_constant_override("outline_size", 2)
+	box.add_child(_version_label)
+
+	_quit_button = _home_footer_button("Quit", _quit_game)
+	box.add_child(_quit_button)
+
+	return panel
+
+
+func _fit_home_panel_to_window() -> void:
+	if not is_instance_valid(_home_panel):
+		return
+	var viewport_height := get_viewport_rect().size.y
+	_home_panel.custom_minimum_size = Vector2(0, maxf(620.0, viewport_height - 40.0))
+
+
+func _build_online_setup_controls(root: VBoxContainer) -> void:
+	var title := _lobby_title("Online Table")
+	title.custom_minimum_size = Vector2(0, 30)
+	title.add_theme_font_size_override("font_size", 24)
+	root.add_child(title)
+
+	var server_label := _wrapped_label("Server URL")
+	server_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(server_label)
+
+	_server_options = _load_server_options()
+	_server_option = _option_button()
+	_server_option.custom_minimum_size = Vector2(0, 34)
+	for raw_server in _server_options:
+		var server: Dictionary = raw_server
+		var label := "%s  %s" % [str(server.get("name", "Server")), str(server.get("url", ""))]
+		_server_option.add_item(label)
+		_server_option.set_item_metadata(_server_option.get_item_count() - 1, str(server.get("url", "")))
+	_server_option.add_item("Other")
+	_server_option.set_item_metadata(_server_option.get_item_count() - 1, "")
+	_server_option.item_selected.connect(_on_server_option_selected)
+	root.add_child(_server_option)
+
+	_server_input = _line_edit("Custom server URL", _first_server_url())
+	_server_input.custom_minimum_size = Vector2(0, 34)
+	_server_input.visible = false
+	_server_input.text_changed.connect(func(_text: String) -> void:
+		_mark_server_unconnected()
+	)
+	root.add_child(_server_input)
+
+	_server_connect_button = _button("Connect", _connect_to_selected_server)
+	_server_connect_button.custom_minimum_size = Vector2(112, 34)
+	root.add_child(_server_connect_button)
+
+	var code_label := _wrapped_label("Invite Code")
+	code_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(code_label)
+
+	var code_row := HBoxContainer.new()
+	code_row.add_theme_constant_override("separation", 6)
+	code_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_child(code_row)
+
+	_code_input = _line_edit("Connect to a server first", "")
+	_code_input.custom_minimum_size = Vector2(0, 34)
+	_code_input.text_changed.connect(func(_text: String) -> void:
+		_on_invite_code_changed()
+	)
+	code_row.add_child(_code_input)
+
+	_generate_code_button = _button("Generate", func() -> void:
+		_begin_unique_code_generation()
+	)
+	_generate_code_button.custom_minimum_size = Vector2(104, 34)
+	_generate_code_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+	code_row.add_child(_generate_code_button)
+	_refresh_online_setup_ready_state()
+
+
+func _load_server_options() -> Array:
+	var fallback: Array = [{"name": "Local Test Server", "url": "http://127.0.0.1:3000"}]
+	if not FileAccess.file_exists(SERVER_LIST_PATH):
+		return fallback
+	var file := FileAccess.open(SERVER_LIST_PATH, FileAccess.READ)
+	if file == null:
+		return fallback
+	var parsed = JSON.parse_string(file.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return fallback
+	var servers: Array = parsed.get("servers", [])
+	var result: Array = []
+	for raw_server in servers:
+		if typeof(raw_server) != TYPE_DICTIONARY:
+			continue
+		var server: Dictionary = raw_server
+		var url := str(server.get("url", "")).strip_edges()
+		if url.begins_with("http://") or url.begins_with("https://"):
+			result.append({
+				"name": str(server.get("name", "Server")).strip_edges(),
+				"url": url
+			})
+	return result if not result.is_empty() else fallback
+
+
+func _first_server_url() -> String:
+	if _server_options.is_empty():
+		return "http://127.0.0.1:3000"
+	var first: Dictionary = _server_options[0]
+	return str(first.get("url", "http://127.0.0.1:3000"))
+
+
+func _on_server_option_selected(index: int) -> void:
+	if not is_instance_valid(_server_option) or not is_instance_valid(_server_input):
+		return
+	var url := str(_server_option.get_item_metadata(index))
+	_server_input.visible = url == ""
+	if url != "":
+		_server_input.text = url
+	_mark_server_unconnected()
+
+
+func _selected_server_url() -> String:
+	if is_instance_valid(_server_input):
+		return _server_input.text.strip_edges()
+	return "http://127.0.0.1:3000"
+
+
+func _server_is_ready() -> bool:
+	return _server_connected and _connected_server_url == _selected_server_url().trim_suffix("/")
+
+
+func _online_session_key(server_url: String, code: String) -> String:
+	return "%s|%s" % [server_url.strip_edges().trim_suffix("/"), code.strip_edges().to_upper()]
+
+
+func _online_session_ignore_key(server_url: String, code: String, seat_token: String) -> String:
+	return "%s|%s" % [_online_session_key(server_url, code), seat_token]
+
+
+func _load_online_sessions() -> Dictionary:
+	if not FileAccess.file_exists(ONLINE_SESSION_STORE_PATH):
+		return {"sessions": {}}
+	var file := FileAccess.open(ONLINE_SESSION_STORE_PATH, FileAccess.READ)
+	if file == null:
+		return {"sessions": {}}
+	var text := file.get_as_text()
+	file.close()
+	if text.strip_edges() == "":
+		return {"sessions": {}}
+	var json := JSON.new()
+	if json.parse(text) != OK:
+		return {"sessions": {}}
+	var parsed = json.data
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return {"sessions": {}}
+	var sessions = parsed.get("sessions", {})
+	if typeof(sessions) != TYPE_DICTIONARY:
+		return {"sessions": {}}
+	return {"sessions": sessions}
+
+
+func _save_online_sessions(store: Dictionary) -> void:
+	var file := FileAccess.open(ONLINE_SESSION_STORE_TMP_PATH, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(store, "\t"))
+	file.close()
+	var target_path := ProjectSettings.globalize_path(ONLINE_SESSION_STORE_PATH)
+	var tmp_path := ProjectSettings.globalize_path(ONLINE_SESSION_STORE_TMP_PATH)
+	if FileAccess.file_exists(ONLINE_SESSION_STORE_PATH):
+		DirAccess.remove_absolute(target_path)
+	if DirAccess.rename_absolute(tmp_path, target_path) != OK:
+		var fallback := FileAccess.open(ONLINE_SESSION_STORE_PATH, FileAccess.WRITE)
+		if fallback == null:
+			return
+		fallback.store_string(JSON.stringify(store, "\t"))
+		fallback.close()
+
+
+func _online_session_candidates_for_code(code: String) -> Array:
+	var normalized_code := code.strip_edges().to_upper()
+	if normalized_code == "" or not _server_is_ready():
+		return []
+	var store := _load_online_sessions()
+	var sessions: Dictionary = store.get("sessions", {})
+	var raw_sessions = sessions.get(_online_session_key(_connected_server_url, normalized_code), [])
+	var candidates: Array = []
+	if typeof(raw_sessions) == TYPE_ARRAY:
+		for raw_session in raw_sessions:
+			if typeof(raw_session) == TYPE_DICTIONARY:
+				candidates.append(raw_session)
+	elif typeof(raw_sessions) == TYPE_DICTIONARY:
+		candidates.append(raw_sessions)
+	candidates.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		if bool(left.get("isHost", false)) != bool(right.get("isHost", false)):
+			return bool(left.get("isHost", false))
+		return int(left.get("savedAt", 0)) > int(right.get("savedAt", 0))
+	)
+	return candidates
+
+
+func _saved_online_session_for_code(code: String) -> Dictionary:
+	var normalized_code := code.strip_edges().to_upper()
+	if normalized_code == "" or not _server_is_ready():
+		return {}
+	for raw_session in _online_session_candidates_for_code(normalized_code):
+		var saved_session: Dictionary = raw_session
+		var seat_token := str(saved_session.get("seatToken", ""))
+		if seat_token == "":
+			continue
+		if bool(_ignored_online_session_keys.get(_online_session_ignore_key(_connected_server_url, normalized_code, seat_token), false)):
+			continue
+		return saved_session
+	return {}
+
+
+func _has_saved_online_session_for_current_code() -> bool:
+	return _invite_code_exists and not _saved_online_session_for_code(_normalized_invite_code()).is_empty()
+
+
+func _save_current_online_session(snapshot: Dictionary) -> void:
+	if bool(snapshot.get("offline", false)) or RecipesClient.offline_mode:
+		return
+	var code := str(snapshot.get("tableCode", RecipesClient.table_code)).strip_edges().to_upper()
+	if code == "" or RecipesClient.seat_token == "" or RecipesClient.server_url == "":
+		return
+	var participant_id := str(snapshot.get("connectionParticipantId", RecipesClient.participant_id))
+	var store := _load_online_sessions()
+	var sessions: Dictionary = store.get("sessions", {})
+	var session_key := _online_session_key(RecipesClient.server_url, code)
+	var existing: Variant = sessions.get(session_key, [])
+	var session_rows: Array = []
+	if typeof(existing) == TYPE_ARRAY:
+		for raw_session in existing:
+			if typeof(raw_session) == TYPE_DICTIONARY:
+				var row: Dictionary = raw_session
+				if str(row.get("participantId", "")) != participant_id and str(row.get("seatToken", "")) != RecipesClient.seat_token:
+					session_rows.append(row)
+	elif typeof(existing) == TYPE_DICTIONARY:
+		var existing_row: Dictionary = existing
+		if str(existing_row.get("participantId", "")) != participant_id and str(existing_row.get("seatToken", "")) != RecipesClient.seat_token:
+			session_rows.append(existing_row)
+	var session := {
+		"serverUrl": RecipesClient.server_url.strip_edges().trim_suffix("/"),
+		"tableCode": code,
+		"participantId": participant_id,
+		"isHost": participant_id == str(snapshot.get("hostParticipantId", "")),
+		"seatToken": RecipesClient.seat_token,
+		"savedAt": int(Time.get_unix_time_from_system())
+	}
+	if bool(session.get("isHost", false)):
+		session_rows.push_front(session)
+	else:
+		session_rows.append(session)
+	while session_rows.size() > 8:
+		session_rows.remove_at(session_rows.size() - 1)
+	sessions[session_key] = session_rows
+	store["sessions"] = sessions
+	_save_online_sessions(store)
+
+
+func _forget_online_session(server_url: String, code: String, seat_token := "") -> void:
+	var normalized_code := code.strip_edges().to_upper()
+	if server_url.strip_edges() == "" or normalized_code == "":
+		return
+	var store := _load_online_sessions()
+	var sessions: Dictionary = store.get("sessions", {})
+	var session_key := _online_session_key(server_url, normalized_code)
+	if seat_token == "":
+		sessions.erase(session_key)
+	else:
+		var existing: Variant = sessions.get(session_key, [])
+		var kept: Array = []
+		if typeof(existing) == TYPE_ARRAY:
+			for raw_session in existing:
+				if typeof(raw_session) != TYPE_DICTIONARY:
+					continue
+				var row: Dictionary = raw_session
+				if str(row.get("seatToken", "")) != seat_token:
+					kept.append(row)
+		elif typeof(existing) == TYPE_DICTIONARY:
+			var existing_row: Dictionary = existing
+			if str(existing_row.get("seatToken", "")) != seat_token:
+				kept.append(existing_row)
+		if kept.is_empty():
+			sessions.erase(session_key)
+		else:
+			sessions[session_key] = kept
+	store["sessions"] = sessions
+	_save_online_sessions(store)
+
+
+func _ignore_online_session_for_process(server_url: String, code: String) -> void:
+	var normalized_code := code.strip_edges().to_upper()
+	if server_url.strip_edges() == "" or normalized_code == "":
+		return
+	_ignored_online_session_keys[_online_session_ignore_key(server_url, normalized_code, RecipesClient.seat_token)] = true
+
+
+func _resume_saved_online_session(code: String) -> bool:
+	var session := _saved_online_session_for_code(code)
+	if session.is_empty():
+		return false
+	var server_url := str(session.get("serverUrl", _connected_server_url)).strip_edges().trim_suffix("/")
+	var table_code := str(session.get("tableCode", code)).strip_edges().to_upper()
+	var participant_id := str(session.get("participantId", ""))
+	var seat_token := str(session.get("seatToken", ""))
+	_status_label.text = "Reconnecting to your saved seat..."
+	_status_label.visible = true
+	return RecipesClient.resume_online_session(server_url, table_code, participant_id, seat_token)
+
+
+func _replace_server_check_request() -> void:
+	if is_instance_valid(_server_check_request):
+		if _server_check_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+			_server_check_request.cancel_request()
+		if _server_check_request.request_completed.is_connected(_on_server_check_completed):
+			_server_check_request.request_completed.disconnect(_on_server_check_completed)
+		_server_check_request.queue_free()
+	_server_check_request = HTTPRequest.new()
+	_server_check_request.timeout = 5.0
+	add_child(_server_check_request)
+	_server_check_request.request_completed.connect(_on_server_check_completed)
+
+
+func _cancel_code_check_request() -> void:
+	if is_instance_valid(_code_check_request) and _code_check_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		_code_check_request.cancel_request()
+
+
+func _mark_server_unconnected() -> void:
+	_server_check_in_progress = false
+	_server_check_target_url = ""
+	_cancel_code_check_request()
+	_server_connected = false
+	_connected_server_url = ""
+	_reset_invite_code_state()
+	_refresh_online_setup_ready_state()
+
+
+func _refresh_online_setup_ready_state() -> void:
+	var ready := _server_is_ready()
+	var saved_session_available := ready and _has_saved_online_session_for_current_code()
+	if is_instance_valid(_code_input):
+		_code_input.editable = ready
+		if not ready and _code_input.text.strip_edges().to_upper() == "OFFLINE":
+			_code_input.text = ""
+	if is_instance_valid(_generate_code_button):
+		_generate_code_button.disabled = not ready
+	if is_instance_valid(_create_table_button):
+		_create_table_button.disabled = _home_choice == "online" and not _table_exists(RecipesClient.latest_snapshot) and (not ready or not _invite_code_unique or _code_check_in_progress)
+	if is_instance_valid(_join_table_button):
+		_join_table_button.text = "Reconnect Seat" if saved_session_available else "Join Table"
+		_join_table_button.disabled = _home_choice == "online" and not _table_exists(RecipesClient.latest_snapshot) and (not ready or _code_check_in_progress or (not _invite_code_joinable and not saved_session_available))
+		_style_join_table_button((_invite_code_joinable or saved_session_available) and ready and not _code_check_in_progress)
+	if is_instance_valid(_server_connect_button):
+		_server_connect_button.text = "Checking..." if _server_check_in_progress else ("Connected" if ready else "Connect")
+		_server_connect_button.disabled = false
+		_style_server_connect_button(ready)
+
+
+func _connect_to_selected_server() -> void:
+	var url := _selected_server_url().trim_suffix("/")
+	if url == "":
+		_status_label.text = "Choose a server first."
+		_status_label.visible = true
+		return
+	if not (url.begins_with("http://") or url.begins_with("https://")):
+		_status_label.text = "Server URL must start with http:// or https://."
+		_status_label.visible = true
+		return
+	_mark_server_unconnected()
+	_replace_server_check_request()
+	_server_check_in_progress = true
+	_server_check_target_url = url
+	RecipesClient.server_url = url
+	_status_label.text = "Checking server..."
+	_status_label.visible = true
+	_refresh_online_setup_ready_state()
+	var err := _server_check_request.request("%s/health" % url)
+	if err != OK:
+		_server_check_in_progress = false
+		_server_check_target_url = ""
+		_status_label.text = "The server is not found.\nPlease try another server or Offline Mode."
+		_status_label.visible = true
+		_refresh_online_setup_ready_state()
+
+
+func _on_server_check_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	var checked_url := _server_check_target_url
+	_server_check_in_progress = false
+	_server_check_target_url = ""
+	if checked_url != _selected_server_url().trim_suffix("/"):
+		_refresh_online_setup_ready_state()
+		return
+	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		_status_label.text = _server_request_failure_message(result)
+		_status_label.visible = true
+		_mark_server_unconnected()
+		return
+	var parsed = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(parsed) != TYPE_DICTIONARY or not bool(parsed.get("ok", false)):
+		_status_label.text = "That server did not look like a Recipes server.\nPlease try another server or Offline Mode."
+		_status_label.visible = true
+		_mark_server_unconnected()
+		return
+	_server_connected = true
+	_connected_server_url = checked_url
+	RecipesClient.server_url = _connected_server_url
+	_status_label.text = "Server connected. Finding an available invite code..."
+	_status_label.visible = true
+	_refresh_online_setup_ready_state()
+	_begin_unique_code_generation()
+
+
+func _server_request_failure_message(result: int) -> String:
+	match result:
+		HTTPRequest.RESULT_CANT_CONNECT, HTTPRequest.RESULT_CANT_RESOLVE, HTTPRequest.RESULT_CONNECTION_ERROR, HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR:
+			return "The server is not found.\nPlease try another server or Offline Mode."
+		_:
+			return "The server could not be reached.\nPlease try another server or Offline Mode."
+
+
+func _reset_invite_code_state() -> void:
+	_code_check_in_progress = false
+	_code_check_target = ""
+	_code_check_for_generation = false
+	_code_generation_base = ""
+	_code_generation_attempts = 0
+	_invite_code_unique = false
+	_invite_code_joinable = false
+	_invite_code_exists = false
+
+
+func _on_invite_code_changed() -> void:
+	if _suppress_invite_code_check:
+		return
+	if not _server_is_ready() or _home_choice != "online" or _table_exists(RecipesClient.latest_snapshot):
+		return
+	_request_invite_code_status(_normalized_invite_code(), false)
+
+
+func _request_invite_code_status(code: String, for_generation: bool) -> void:
+	_invite_code_unique = false
+	_invite_code_joinable = false
+	_invite_code_exists = false
+	_code_check_in_progress = false
+	var normalized := code.strip_edges().to_upper().replace(" ", "")
+	if not _invite_code_format_is_valid(normalized):
+		if normalized == "":
+			_status_label.text = "Enter an invite code, or generate one."
+		else:
+			_status_label.text = "Invite code must be 4-24 letters, numbers, or hyphens."
+		_status_label.visible = true
+		_refresh_online_setup_ready_state()
+		return
+	_code_check_in_progress = true
+	_code_check_target = normalized
+	_code_check_for_generation = for_generation
+	_refresh_online_setup_ready_state()
+	if _code_check_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		_code_check_request.cancel_request()
+	var err := _code_check_request.request("%s/tables/%s/status" % [
+		_connected_server_url.trim_suffix("/"),
+		normalized.uri_encode()
+	])
+	if err != OK:
+		_code_check_in_progress = false
+		_status_label.text = "Could not check that invite code. Please try again."
+		_status_label.visible = true
+		_refresh_online_setup_ready_state()
+
+
+func _on_code_check_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	var checked_code := _code_check_target
+	_code_check_in_progress = false
+	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		_status_label.text = "Could not check that invite code. Please try again."
+		_status_label.visible = true
+		_refresh_online_setup_ready_state()
+		return
+	var parsed = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(parsed) != TYPE_DICTIONARY or not bool(parsed.get("ok", false)):
+		_status_label.text = "Could not check that invite code. Please try again."
+		_status_label.visible = true
+		_refresh_online_setup_ready_state()
+		return
+	var result_body: Dictionary = parsed.get("result", {})
+	var code := str(result_body.get("code", checked_code)).to_upper()
+	var valid := bool(result_body.get("valid", false))
+	var exists := bool(result_body.get("exists", false))
+	var joinable := bool(result_body.get("joinable", false))
+	if _code_check_for_generation:
+		_handle_generated_code_status(code, valid, exists)
+		return
+	if code != _normalized_invite_code():
+		_refresh_online_setup_ready_state()
+		return
+	_invite_code_exists = exists
+	_invite_code_joinable = exists and joinable
+	_invite_code_unique = valid and not exists
+	if not valid:
+		_status_label.text = "Invite code must be 4-24 letters, numbers, or hyphens."
+	elif exists and not _saved_online_session_for_code(code).is_empty():
+		_status_label.text = "You have a saved seat for this table. Reconnect to it."
+	elif _invite_code_joinable:
+		_status_label.text = "Table found. You can join."
+	elif exists:
+		_status_label.text = "This Table is full or has already started cooking."
+	else:
+		_status_label.text = "Invite code is available. You can create a new table."
+	_status_label.visible = true
+	_refresh_online_setup_ready_state()
+
+
+func _handle_generated_code_status(code: String, valid: bool, exists: bool) -> void:
+	if valid and not exists:
+		_suppress_invite_code_check = true
+		_code_input.text = code
+		_suppress_invite_code_check = false
+		_invite_code_exists = false
+		_invite_code_joinable = false
+		_invite_code_unique = true
+		_status_label.text = "Invite code is available. You can create a new table."
+		_status_label.visible = true
+		_refresh_online_setup_ready_state()
+		return
+	_code_generation_attempts += 1
+	if _code_generation_attempts >= 20:
+		_status_label.text = "Could not find a unique invite code. Please type one."
+		_status_label.visible = true
+		_refresh_online_setup_ready_state()
+		return
+	var candidate := _code_generation_base + _random_code_character()
+	if candidate.length() > 24:
+		_code_generation_base = _generate_invite_code()
+		candidate = _code_generation_base + _random_code_character()
+	_request_invite_code_status(candidate, true)
+
+
+func _begin_unique_code_generation() -> void:
+	if not _server_is_ready():
+		_status_label.text = "Connect to a server before generating an invite code."
+		_status_label.visible = true
+		return
+	_code_generation_base = _generate_invite_code()
+	_code_generation_attempts = 0
+	_request_invite_code_status(_code_generation_base, true)
+
+
+func _invite_code_format_is_valid(code: String) -> bool:
+	if code.length() < 4 or code.length() > 24:
+		return false
+	for index in range(code.length()):
+		var value := code.unicode_at(index)
+		var is_digit := value >= 48 and value <= 57
+		var is_upper := value >= 65 and value <= 90
+		var is_hyphen := value == 45
+		if not (is_digit or is_upper or is_hyphen):
+			return false
+	return true
+
+
+func _random_code_character() -> String:
+	var alphabet := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	return alphabet.substr(rng.randi_range(0, alphabet.length() - 1), 1)
+
+
+func _generate_invite_code() -> String:
+	var foods := ["CHEESE", "FLOUR", "HERBS", "VEGGIES", "RICE", "BEANS", "SPICES", "EGGS"]
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	return "%s%s" % [foods[rng.randi_range(0, foods.size() - 1)], rng.randi_range(10, 99)]
+
+
+func _normalized_invite_code() -> String:
+	return _code_input.text.strip_edges().to_upper().replace(" ", "")
+
+
+func _online_code_needs_generation() -> bool:
+	var code := _normalized_invite_code()
+	return code == "" or code == "OFFLINE"
+
+
+func _build_home_sprites() -> void:
+	_home_sprites = []
+	if not is_instance_valid(_home_sprite_layer):
+		return
+	var ingredient_ids := ["cheese", "flour", "herbs", "vegetables", "rice", "beans", "spices", "eggs"]
+	var placements := [
+		Vector2(0.16, 0.22),
+		Vector2(0.50, 0.14),
+		Vector2(0.82, 0.24),
+		Vector2(0.28, 0.50),
+		Vector2(0.68, 0.48),
+		Vector2(0.14, 0.78),
+		Vector2(0.50, 0.76),
+		Vector2(0.84, 0.78)
+	]
+	for index in range(ingredient_ids.size()):
+		var meta := VisualAssets.ingredient_meta(str(ingredient_ids[index]))
+		var texture = meta.get("texture", null)
+		var sprite := TextureRect.new()
+		sprite.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		sprite.custom_minimum_size = Vector2(86, 86)
+		sprite.size = Vector2(86, 86)
+		sprite.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		sprite.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		if texture is Texture2D:
+			sprite.texture = texture
+		_home_sprite_layer.add_child(sprite)
+		_home_sprites.append({
+			"node": sprite,
+			"base": placements[index],
+			"phase": float(index) * 0.73,
+			"speed": 0.62 + float(index % 3) * 0.12,
+			"radius": 10.0 + float(index % 4) * 3.0,
+			"scale": 1.00 + float(index % 2) * 0.12
+		})
+	_update_home_sprites(0.0)
+
+
+func _update_home_sprites(delta: float) -> void:
+	if not is_instance_valid(_home_panel) or not _home_panel.visible or not is_instance_valid(_home_sprite_layer):
+		return
+	_home_animation_time += delta
+	var area := _home_sprite_layer.size
+	if area.x <= 1.0 or area.y <= 1.0:
+		area = Vector2(640, 330)
+	for raw in _home_sprites:
+		var item: Dictionary = raw
+		var node := item.get("node", null) as Control
+		if not is_instance_valid(node):
+			continue
+		var base: Vector2 = item.get("base", Vector2.ZERO)
+		var phase := float(item.get("phase", 0.0))
+		var speed := float(item.get("speed", 0.7))
+		var radius := float(item.get("radius", 12.0))
+		var pulse := sin(_home_animation_time * speed + phase)
+		var drift := cos(_home_animation_time * (speed * 0.71) + phase)
+		var position := Vector2(area.x * base.x, area.y * base.y)
+		position += Vector2(pulse * radius, drift * radius * 0.65)
+		node.position = position - node.size * 0.5
+		var scale_value := float(item.get("scale", 1.0)) * (1.0 + pulse * 0.035)
+		node.scale = Vector2(scale_value, scale_value)
+		node.rotation = sin(_home_animation_time * speed + phase) * 0.05
+
+
+func _show_online_setup() -> void:
+	_home_choice = "online"
+	_mark_server_unconnected()
+	if is_instance_valid(_code_input):
+		_code_input.text = ""
+	_refresh_connection_buttons(RecipesClient.latest_snapshot)
+	_status_label.text = "Choose a server, then connect before creating or joining a table."
+
+
+func _return_to_main_menu() -> void:
+	if RecipesClient.table_code != "":
+		RecipesClient.disconnect_local()
+	_home_choice = ""
+	_status_label.text = ""
+	_status_label.visible = false
+	_summary_label.visible = false
+	_participants_area.visible = false
+	if is_instance_valid(_table_visual):
+		_table_visual.visible = false
+	_set_lobby_ui_visible(false)
+	_set_gameplay_ui_visible(false)
+	_refresh_connection_buttons({})
+
+
+func _home_button(label: String, base_bg: Color, border: Color, callback: Callable) -> Button:
+	var button := Button.new()
+	button.text = label
+	button.custom_minimum_size = Vector2(0, 76)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	button.add_theme_font_size_override("font_size", 32)
+	button.add_theme_color_override("font_color", Color(1, 0.98, 0.90))
+	button.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	button.add_theme_color_override("font_pressed_color", Color(1, 0.95, 0.82))
+	button.add_theme_stylebox_override("normal", _home_button_style(base_bg, border, 2))
+	button.add_theme_stylebox_override("hover", _home_button_style(base_bg.lightened(0.10), border.lightened(0.08), 3))
+	button.add_theme_stylebox_override("pressed", _home_button_style(base_bg.darkened(0.10), border.darkened(0.10), 2))
+	button.add_theme_stylebox_override("focus", _home_button_style(base_bg.lightened(0.10), Color(1, 1, 1), 4))
+	button.pressed.connect(callback)
+	return button
+
+
+func _home_footer_button(label: String, callback: Callable) -> Button:
+	var button := Button.new()
+	button.text = label
+	button.custom_minimum_size = Vector2(0, 50)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	button.add_theme_font_size_override("font_size", 22)
+	button.add_theme_color_override("font_color", Color(0.18, 0.13, 0.08))
+	button.add_theme_color_override("font_hover_color", Color(0.30, 0.20, 0.10))
+	button.add_theme_color_override("font_pressed_color", Color(0.10, 0.08, 0.05))
+	button.add_theme_stylebox_override("normal", _home_button_style(Color(0.96, 0.89, 0.67), Color(0.42, 0.33, 0.20), 1))
+	button.add_theme_stylebox_override("hover", _home_button_style(Color(1.0, 0.93, 0.72), Color(0.54, 0.41, 0.23), 2))
+	button.add_theme_stylebox_override("pressed", _home_button_style(Color(0.87, 0.78, 0.55), Color(0.32, 0.25, 0.16), 1))
+	button.add_theme_stylebox_override("focus", _home_button_style(Color(1.0, 0.93, 0.72), Color(1, 1, 1), 3))
+	button.pressed.connect(callback)
+	return button
+
+
+func _home_logo_button(callback: Callable) -> Button:
+	var button := Button.new()
+	button.text = ""
+	button.tooltip_text = "Grassroots Economics"
+	button.custom_minimum_size = Vector2(280, 64)
+	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	button.add_theme_stylebox_override("normal", _transparent_button_style())
+	button.add_theme_stylebox_override("hover", _transparent_button_style())
+	button.add_theme_stylebox_override("pressed", _transparent_button_style())
+	button.add_theme_stylebox_override("focus", _home_button_style(Color(1.0, 1.0, 1.0, 0.08), Color(1.0, 1.0, 1.0, 0.85), 3))
+	button.pressed.connect(callback)
+
+	var panel := Panel.new()
+	panel.name = "GEPanel"
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	panel.add_theme_stylebox_override("panel", _ge_logo_panel_style())
+	button.add_child(panel)
+
+	var logo := TextureRect.new()
+	logo.name = "GELogo"
+	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	logo.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	logo.set_anchors_preset(Control.PRESET_FULL_RECT)
+	logo.offset_left = 12
+	logo.offset_top = 8
+	logo.offset_right = -12
+	logo.offset_bottom = -8
+	var texture := _get_ge_logo_texture()
+	if texture is Texture2D:
+		logo.texture = texture
+	else:
+		button.text = "Grassroots Economics"
+		button.add_theme_font_size_override("font_size", 22)
+		button.add_theme_color_override("font_color", Color(0.08, 0.16, 0.1, 1.0))
+	button.add_child(logo)
+	return button
+
+
+func _get_ge_logo_texture() -> Texture2D:
+	if is_instance_valid(_ge_logo_texture):
+		return _ge_logo_texture
+	var image := Image.new()
+	if image.load(GE_LOGO_PATH) != OK:
+		return null
+	_ge_logo_texture = ImageTexture.create_from_image(image)
+	return _ge_logo_texture
+
+
+func _open_grassroots_economics() -> void:
+	var error := OS.shell_open(GRASSROOTS_ECONOMICS_URL)
+	if error != OK and is_instance_valid(_status_label):
+		_status_label.visible = true
+		_status_label.text = "Could not open Grassroots Economics."
+
+
+func _quit_game() -> void:
+	get_tree().quit()
+
+
+func _home_panel_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.92, 0.86, 0.70)
+	style.border_color = Color(0.34, 0.28, 0.19)
+	style.border_width_left = 2
+	style.border_width_top = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 2
+	style.corner_radius_top_left = 10
+	style.corner_radius_top_right = 10
+	style.corner_radius_bottom_left = 10
+	style.corner_radius_bottom_right = 10
+	style.shadow_color = Color(0, 0, 0, 0.24)
+	style.shadow_size = 7
+	style.shadow_offset = Vector2(0, 3)
+	return style
+
+
+func _ge_logo_panel_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(1.0, 1.0, 1.0, 0.97)
+	style.border_color = Color(0.88, 0.82, 0.64, 1.0)
+	style.border_width_left = 2
+	style.border_width_top = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 2
+	style.corner_radius_top_left = 7
+	style.corner_radius_top_right = 7
+	style.corner_radius_bottom_left = 7
+	style.corner_radius_bottom_right = 7
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.24)
+	style.shadow_size = 4
+	style.shadow_offset = Vector2(0, 2)
+	return style
+
+
+func _transparent_button_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(1, 1, 1, 0)
+	style.border_color = Color(1, 1, 1, 0)
+	style.content_margin_left = 0
+	style.content_margin_top = 0
+	style.content_margin_right = 0
+	style.content_margin_bottom = 0
+	return style
+
+
+func _warm_input_style(bg := Color(0.96, 0.91, 0.75), border := Color(0.52, 0.42, 0.28), border_width := 1) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = bg
+	style.border_color = border
+	style.border_width_left = border_width
+	style.border_width_top = border_width
+	style.border_width_right = border_width
+	style.border_width_bottom = border_width
+	style.corner_radius_top_left = 5
+	style.corner_radius_top_right = 5
+	style.corner_radius_bottom_left = 5
+	style.corner_radius_bottom_right = 5
+	style.content_margin_left = 8
+	style.content_margin_top = 4
+	style.content_margin_right = 8
+	style.content_margin_bottom = 4
+	return style
+
+
+func _warm_button_style(bg: Color, border: Color, border_width: int = 1) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = bg
+	style.border_color = border
+	style.border_width_left = border_width
+	style.border_width_top = border_width
+	style.border_width_right = border_width
+	style.border_width_bottom = border_width
+	style.corner_radius_top_left = 6
+	style.corner_radius_top_right = 6
+	style.corner_radius_bottom_left = 6
+	style.corner_radius_bottom_right = 6
+	style.content_margin_left = 8
+	style.content_margin_top = 4
+	style.content_margin_right = 8
+	style.content_margin_bottom = 4
+	style.shadow_color = Color(0, 0, 0, 0.14)
+	style.shadow_size = 2
+	style.shadow_offset = Vector2(0, 1)
+	return style
+
+
+func _home_button_style(bg: Color, border: Color, border_width: int) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = bg
+	style.border_color = border
+	style.border_width_left = border_width
+	style.border_width_top = border_width
+	style.border_width_right = border_width
+	style.border_width_bottom = border_width
+	style.corner_radius_top_left = 9
+	style.corner_radius_top_right = 9
+	style.corner_radius_bottom_left = 9
+	style.corner_radius_bottom_right = 9
+	style.content_margin_left = 14
+	style.content_margin_top = 10
+	style.content_margin_right = 14
+	style.content_margin_bottom = 10
+	style.shadow_color = Color(0, 0, 0, 0.24)
+	style.shadow_size = 4
+	style.shadow_offset = Vector2(0, 2)
+	return style
+
+
 func _section(root: VBoxContainer, title_text: String) -> VBoxContainer:
 	var section := VBoxContainer.new()
 	section.add_theme_constant_override("separation", 6)
 	section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.add_child(section)
+	section.set_meta("title_text", title_text)
 
-	var title := Label.new()
+	var title := Button.new()
 	title.text = title_text
-	title.add_theme_font_size_override("font_size", 20)
+	title.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	title.flat = false
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color(0.18, 0.12, 0.07))
+	title.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
+	title.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
+	title.add_theme_color_override("font_focus_color", Color(0.18, 0.12, 0.07))
+	title.add_theme_color_override("font_hover_pressed_color", Color(0.10, 0.07, 0.04))
+	title.add_theme_color_override("font_disabled_color", Color(0.42, 0.37, 0.29, 0.70))
+	title.add_theme_stylebox_override("normal", _warm_button_style(Color(0.93, 0.86, 0.68), Color(0.43, 0.33, 0.20), 1))
+	title.add_theme_stylebox_override("hover", _warm_button_style(Color(0.98, 0.91, 0.72), Color(0.52, 0.40, 0.23), 2))
+	title.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.84, 0.76, 0.57), Color(0.34, 0.26, 0.17), 1))
+	title.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.82, 0.76, 0.61), Color(0.43, 0.33, 0.20), 1))
+	title.add_theme_stylebox_override("focus", _warm_button_style(Color(0.98, 0.91, 0.72), Color(1.0, 0.98, 0.84), 3))
 	section.add_child(title)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 6)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	section.add_child(box)
+	section.set_meta("header", title)
+	title.pressed.connect(func(s := section) -> void:
+		_toggle_section_collapsed(s)
+	)
+	_set_section_collapsed(section, false)
 	return section
 
 
 func _section_controls(section: VBoxContainer) -> VBoxContainer:
 	return section.get_child(1) as VBoxContainer
+
+
+func _toggle_section_collapsed(section: VBoxContainer) -> void:
+	var box := _section_controls(section)
+	_set_section_collapsed(section, box.visible)
+
+
+func _set_section_collapsed(section: VBoxContainer, collapsed: bool) -> void:
+	if not is_instance_valid(section) or section.get_child_count() < 2:
+		return
+	var box := _section_controls(section)
+	box.visible = not collapsed
+	var header: Button = section.get_meta("header")
+	var title := str(section.get_meta("title_text", "Section"))
+	header.text = "%s %s" % ["+" if collapsed else "-", title]
+
+
+func _set_section_header_visible(section: VBoxContainer, visible: bool) -> void:
+	if not is_instance_valid(section) or section.get_child_count() < 1:
+		return
+	var header := section.get_child(0) as Control
+	if is_instance_valid(header):
+		header.visible = visible
 
 
 func _button_row() -> HBoxContainer:
@@ -245,6 +1365,7 @@ func _labeled_line_edit(root: VBoxContainer, label_text: String, placeholder: St
 	var label := Label.new()
 	label.text = label_text
 	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_color_override("font_color", Color(0.20, 0.13, 0.07))
 	field.add_child(label)
 
 	var input := _line_edit(placeholder, value)
@@ -258,7 +1379,13 @@ func _line_edit(placeholder: String, value: String) -> LineEdit:
 	input.text = value
 	input.custom_minimum_size = Vector2(0, 44)
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	input.add_theme_stylebox_override("focus", _control_focus_style())
+	input.add_theme_color_override("font_color", Color(0.15, 0.11, 0.07))
+	input.add_theme_color_override("font_uneditable_color", Color(0.28, 0.23, 0.16))
+	input.add_theme_color_override("font_placeholder_color", Color(0.40, 0.34, 0.25, 0.75))
+	input.add_theme_color_override("caret_color", Color(0.25, 0.14, 0.06))
+	input.add_theme_stylebox_override("normal", _warm_input_style())
+	input.add_theme_stylebox_override("read_only", _warm_input_style(Color(0.84, 0.79, 0.66), Color(0.55, 0.47, 0.34)))
+	input.add_theme_stylebox_override("focus", _warm_input_style(Color(1.0, 0.95, 0.78), Color(0.94, 0.57, 0.14), 2))
 	return input
 
 
@@ -268,7 +1395,17 @@ func _button(label: String, callback: Callable) -> Button:
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	button.custom_minimum_size = Vector2(112, 44)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	button.add_theme_stylebox_override("focus", _control_focus_style())
+	button.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	button.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
+	button.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
+	button.add_theme_color_override("font_focus_color", Color(0.17, 0.12, 0.07))
+	button.add_theme_color_override("font_hover_pressed_color", Color(0.10, 0.07, 0.04))
+	button.add_theme_color_override("font_disabled_color", Color(0.42, 0.37, 0.29, 0.70))
+	button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.88, 0.80, 0.62), Color(0.47, 0.36, 0.22), 1))
+	button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.96, 0.88, 0.67), Color(0.58, 0.42, 0.21), 2))
+	button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.78, 0.68, 0.48), Color(0.34, 0.26, 0.17), 1))
+	button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.70, 0.66, 0.55), Color(0.54, 0.48, 0.36), 1))
+	button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.96, 0.88, 0.67), Color(1.0, 0.98, 0.84), 3))
 	button.pressed.connect(callback)
 	return button
 
@@ -316,7 +1453,17 @@ func _option_button() -> OptionButton:
 	option.custom_minimum_size = Vector2(0, 44)
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	option.fit_to_longest_item = false
-	option.add_theme_stylebox_override("focus", _control_focus_style())
+	option.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	option.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
+	option.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
+	option.add_theme_color_override("font_focus_color", Color(0.17, 0.12, 0.07))
+	option.add_theme_color_override("font_hover_pressed_color", Color(0.10, 0.07, 0.04))
+	option.add_theme_color_override("font_disabled_color", Color(0.42, 0.37, 0.29, 0.70))
+	option.add_theme_stylebox_override("normal", _warm_button_style(Color(0.88, 0.80, 0.62), Color(0.47, 0.36, 0.22), 1))
+	option.add_theme_stylebox_override("hover", _warm_button_style(Color(0.96, 0.88, 0.67), Color(0.58, 0.42, 0.21), 2))
+	option.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.78, 0.68, 0.48), Color(0.34, 0.26, 0.17), 1))
+	option.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.70, 0.66, 0.55), Color(0.54, 0.48, 0.36), 1))
+	option.add_theme_stylebox_override("focus", _warm_button_style(Color(0.96, 0.88, 0.67), Color(1.0, 0.98, 0.84), 3))
 	return option
 
 
@@ -328,7 +1475,7 @@ func _select_button(label: String, select_key: String) -> Button:
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.add_theme_stylebox_override("focus", _control_focus_style())
 	button.pressed.connect(func() -> void:
-		_open_select_popup(select_key, button)
+		_toggle_select_popup(select_key, button)
 	)
 	return button
 
@@ -339,6 +1486,7 @@ func _wrapped_label(text: String) -> Label:
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.custom_minimum_size = Vector2(0, 0)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.add_theme_color_override("font_color", Color(0.20, 0.13, 0.07))
 	return label
 
 
@@ -365,6 +1513,7 @@ func _colored_label(text: String, background: Color, foreground := Color(1, 1, 1
 
 func _transaction_header_row() -> HBoxContainer:
 	var row := _transaction_row_container()
+	row.add_child(_transaction_cell("Turn", 48, true))
 	row.add_child(_transaction_cell("Name", 80, true))
 	row.add_child(_transaction_cell("Action", 76, true))
 	row.add_child(_transaction_cell("Counterparty", 88, true))
@@ -375,6 +1524,7 @@ func _transaction_header_row() -> HBoxContainer:
 
 func _transaction_row(transaction: Dictionary) -> HBoxContainer:
 	var row := _transaction_row_container()
+	row.add_child(_transaction_cell(str(transaction.get("turn", "?")), 48))
 	row.add_child(_transaction_cell(str(transaction.get("name", "?")), 80))
 	row.add_child(_action_badge(str(transaction.get("action", "?"))))
 	row.add_child(_transaction_cell(str(transaction.get("counterparty", "?")), 88))
@@ -395,8 +1545,10 @@ func _transaction_cell(text: String, min_width: int, bold := false) -> Label:
 	label.custom_minimum_size = Vector2(min_width, 30)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.add_theme_color_override("font_color", Color(0.18, 0.12, 0.07))
 	if bold:
 		label.add_theme_font_size_override("font_size", 15)
+		label.add_theme_color_override("font_color", Color(0.12, 0.08, 0.04))
 	return label
 
 
@@ -442,6 +1594,8 @@ func _action_color(action: String) -> Color:
 			return Color(0.63, 0.34, 0.12)
 		"Eat":
 			return Color(0.70, 0.26, 0.42)
+		"Pass Turn":
+			return Color(0.30, 0.36, 0.46)
 		_:
 			return Color(0.32, 0.32, 0.32)
 
@@ -453,23 +1607,54 @@ func _action_text_color(action: String) -> Color:
 
 
 func _on_create_pressed() -> void:
-	RecipesClient.server_url = _server_input.text.strip_edges()
+	RecipesClient.server_url = _selected_server_url()
 	if _current_viewer_is_host():
-		RecipesClient.send_intent({"type": "reset_table"})
+		RecipesClient.send_host_intent({"type": "reset_table"})
 		return
-	RecipesClient.create_table(_name_input.text.strip_edges(), _seed_input.text.strip_edges())
+	if _home_choice == "online" and not _server_is_ready():
+		_status_label.text = "Connect to a server before creating a table."
+		_status_label.visible = true
+		return
+	if _home_choice == "online" and not _invite_code_unique:
+		_status_label.text = "Use an available invite code before creating a table."
+		_status_label.visible = true
+		return
+	var requested_code := _normalized_invite_code()
+	if requested_code == "":
+		requested_code = _generate_invite_code()
+		_code_input.text = requested_code
+	RecipesClient.create_table("", "", requested_code)
 
 
 func _on_join_pressed() -> void:
-	RecipesClient.server_url = _server_input.text.strip_edges()
+	RecipesClient.server_url = _selected_server_url()
 	if _current_viewer_is_host():
 		_confirm_close_table()
 		return
-	var code := _code_input.text.strip_edges().to_upper()
+	if _home_choice == "online" and not _server_is_ready():
+		_status_label.text = "Connect to a server before joining a table."
+		_status_label.visible = true
+		return
+	var code := _normalized_invite_code()
+	if code == "":
+		_status_label.text = "Enter an invite code to join a table."
+		_status_label.visible = true
+		return
+	if _home_choice == "online" and _invite_code_exists and _resume_saved_online_session(code):
+		return
 	if RecipesClient.has_table_session(code):
 		RecipesClient.connect_socket()
 		return
-	RecipesClient.join_table(code, _name_input.text.strip_edges(), bool(_left_table_codes.get(code, false)))
+	if _home_choice == "online" and not _invite_code_joinable:
+		_status_label.text = "This Table is full or has already started cooking."
+		_status_label.visible = true
+		return
+	RecipesClient.join_table(code, "", bool(_left_table_codes.get(code, false)))
+
+
+func _start_offline_table() -> void:
+	_home_choice = "offline"
+	RecipesClient.start_offline_table(_name_input.text.strip_edges(), _seed_input.text.strip_edges())
 
 
 func _confirm_leave_table() -> void:
@@ -499,18 +1684,18 @@ func _confirm_close_table() -> void:
 
 
 func _on_confirm_close_table() -> void:
-	RecipesClient.send_intent({"type": "close_table"})
+	RecipesClient.send_host_intent({"type": "close_table"})
 
 
 func _download_transactions_csv() -> void:
 	var snapshot := RecipesClient.latest_snapshot
-	var transactions: Array = snapshot.get("transactionHistory", [])
+	var transactions: Array = RecipesClient.full_transaction_history()
 	if transactions.is_empty():
 		_status_label.text = "No transaction history to download."
 		return
 	var table_code := str(snapshot.get("tableCode", "table")).to_lower()
 	var filename := "recipes-transactions-%s.csv" % table_code
-	if RecipesClient.table_code != "" and RecipesClient.seat_token != "":
+	if not RecipesClient.offline_mode and RecipesClient.table_code != "" and RecipesClient.seat_token != "":
 		var endpoint := "%s/tables/%s/transactions.csv?seatToken=%s" % [
 			RecipesClient.server_url,
 			RecipesClient.table_code.uri_encode(),
@@ -666,10 +1851,11 @@ func _set_csv_export_status(message: String) -> void:
 
 func _transactions_csv(transactions: Array) -> String:
 	var lines: Array[String] = []
-	lines.append(",".join(["Name", "Action", "Counterparty", "Item out", "Item back"]))
+	lines.append(",".join(["Turn", "Name", "Action", "Counterparty", "Item out", "Item back"]))
 	for raw_transaction in transactions:
 		var transaction: Dictionary = raw_transaction
 		lines.append(",".join([
+			_csv_field(transaction.get("turn", "")),
 			_csv_field(transaction.get("name", "")),
 			_csv_field(transaction.get("action", "")),
 			_csv_field(transaction.get("counterparty", "")),
@@ -688,39 +1874,71 @@ func _csv_field(value: Variant) -> String:
 
 
 func _on_snapshot_received(snapshot: Dictionary) -> void:
+	_save_current_online_session(snapshot)
 	_render_snapshot(snapshot)
+	_maybe_advance_acting_as_after_deposit(snapshot)
+	_maybe_follow_controlled_turn(snapshot)
+	_track_last_controlled_turn(snapshot)
 
 
 func _render_snapshot(snapshot: Dictionary) -> void:
-	_code_input.text = str(snapshot.get("tableCode", RecipesClient.table_code))
-	_status_label.text = "Connected as %s" % RecipesClient.participant_id
 	var table_exists := _table_exists(snapshot)
 	var game_started := _game_started(snapshot)
+	if table_exists and not bool(snapshot.get("offline", false)):
+		_code_input.text = str(snapshot.get("tableCode", RecipesClient.table_code))
+	elif not table_exists and _home_choice == "online" and _online_code_needs_generation() and _server_is_ready():
+		_code_input.text = _generate_invite_code()
+	if table_exists:
+		_status_label.visible = false
+	else:
+		_status_label.text = "Choose offline pass-and-play or connect to an online Recipes server."
 	_refresh_connection_buttons(snapshot)
 	_set_lobby_ui_visible(table_exists)
 	_set_gameplay_ui_visible(game_started)
-	_summary_label.text = "Table %s\n%s%s. %s active seats. Turn %s.\nGoal: %s dishes each\nStock: %s units each\nTimer: %s\nWinners: %s" % [
+	if is_instance_valid(_table_visual):
+		_table_visual.visible = game_started
+		_table_visual.render(snapshot)
+		if game_started:
+			call_deferred("_scroll_to_visual_table")
+	_summary_label.text = "Table %s\n%s%s. %s active seats. Turn %s.\nMode: %s\nWinners: %s" % [
 		snapshot.get("tableCode", ""),
 		_phase_label(str(snapshot.get("phase", "unknown"))),
 		" - paused" if bool(snapshot.get("paused", false)) else "",
 		_active_count(snapshot),
 		int(snapshot.get("turn", 0)),
-		int(snapshot.get("targetDishCount", 4)),
-		int(snapshot.get("stockPerIngredient", 30)),
-		_timer_label(snapshot),
+		str(snapshot.get("turnMode", "round_robin")).replace("_", " ").capitalize(),
 		_winners_label(snapshot.get("winners", []))
 	]
 	_refresh_participants(snapshot)
-	_platter_label.text = "%s:\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]
+	_update_platter_summary_label(snapshot)
 	_hand_label.text = "Your inventory:\n%s" % _format_inventory_assets(snapshot)
+	_apply_default_section_collapse(snapshot)
 	_refresh_controls(snapshot)
+	_refresh_post_table_controls(snapshot)
 	_refresh_active_select_popup(snapshot)
+
+
+func _update_platter_summary_label(snapshot: Dictionary) -> void:
+	_platter_label.visible = false
 
 
 func _on_error_received(error: Dictionary) -> void:
 	var description := str(error.get("description", JSON.stringify(error)))
-	_status_label.text = "Error: %s" % description
+	var error_code := str(error.get("errorCode", ""))
+	var show_plain_message := false
+	if error_code == "invalid_seat_token":
+		_forget_online_session(RecipesClient.server_url, RecipesClient.table_code, RecipesClient.seat_token)
+	elif error_code == "missing_table":
+		_forget_online_session(RecipesClient.server_url, RecipesClient.table_code)
+	elif error_code == "seat_already_connected":
+		_ignore_online_session_for_process(RecipesClient.server_url, RecipesClient.table_code)
+		RecipesClient.disconnect_local()
+		description = "Your saved seat is already open in another client. You can join this table as another player."
+		show_plain_message = true
+	_status_label.text = description if show_plain_message or description.begins_with("The server") else "Error: %s" % description
+	_status_label.visible = true
 	_summary_label.text = "Last error: %s" % description
+	_refresh_online_setup_ready_state()
 
 
 func _on_connection_changed(status: String) -> void:
@@ -740,6 +1958,8 @@ func _on_connection_changed(status: String) -> void:
 			_status_label.text = "Connection: %s" % status
 			_set_lobby_ui_visible(false)
 			_set_gameplay_ui_visible(false)
+			if is_instance_valid(_table_visual):
+				_table_visual.visible = false
 			_refresh_connection_buttons({})
 	elif status == "reconnecting":
 		var close_detail := RecipesClient.last_close_description
@@ -767,15 +1987,29 @@ func _current_viewer_is_host() -> bool:
 	var snapshot := RecipesClient.latest_snapshot
 	if not _table_exists(snapshot):
 		return false
-	var viewer := _participant_by_id(snapshot, str(snapshot.get("viewerParticipantId", "")))
-	return bool(viewer.get("isHost", false))
+	return bool(snapshot.get("viewerCanUseHostControls", false))
 
 
 func _refresh_connection_buttons(snapshot: Dictionary) -> void:
 	var has_table := _table_exists(snapshot)
-	var viewer := _participant_by_id(snapshot, str(snapshot.get("viewerParticipantId", "")))
-	var is_host := has_table and bool(viewer.get("isHost", false))
+	var is_host := has_table and bool(snapshot.get("viewerCanUseHostControls", false))
+	var game_started := _game_started(snapshot)
+	var is_offline := bool(snapshot.get("offline", false)) or RecipesClient.offline_mode
+	_apply_layout_density(has_table and not game_started)
 
+	if is_instance_valid(_home_panel):
+		_home_panel.visible = not has_table and _home_choice == ""
+	if is_instance_valid(_online_setup_panel):
+		_online_setup_panel.visible = _home_choice == "online" and not has_table
+	if is_instance_valid(_status_label):
+		_status_label.visible = _home_choice == "online" and not has_table
+	if is_instance_valid(_main_menu_button):
+		_main_menu_button.visible = (_home_choice != "" or has_table) and not game_started
+		_main_menu_button.custom_minimum_size = Vector2(112, 34 if has_table and not game_started else 44)
+	if is_instance_valid(_main_menu_spacer):
+		_main_menu_spacer.visible = is_instance_valid(_main_menu_button) and _main_menu_button.visible and not (has_table and not game_started)
+
+	_offline_table_button.visible = not has_table
 	_create_table_button.visible = not has_table or is_host
 	_join_table_button.visible = not has_table or is_host
 	_leave_table_button.visible = has_table and not is_host
@@ -785,33 +2019,119 @@ func _refresh_connection_buttons(snapshot: Dictionary) -> void:
 		_join_table_button.text = "Close Table"
 	elif has_table and not RecipesClient.is_socket_connected():
 		_create_table_button.text = "Create Table"
-		_join_table_button.text = "Join"
+		_join_table_button.text = "Join Table"
 		_leave_table_button.text = "Reconnect"
 	else:
 		_create_table_button.text = "Create Table"
-		_join_table_button.text = "Join"
+		_join_table_button.text = "Join Table"
 		_leave_table_button.text = "Leave Table"
 
-	_create_table_button.disabled = false
-	_join_table_button.disabled = false
+	_offline_table_button.disabled = false
+	var online_requires_server := _home_choice == "online" and not has_table
+	_create_table_button.disabled = online_requires_server and not _server_is_ready()
+	_join_table_button.disabled = online_requires_server and not _server_is_ready()
 	_leave_table_button.disabled = false
+	_refresh_online_setup_ready_state()
+
+
+func _apply_layout_density(compact_lobby: bool) -> void:
+	if is_instance_valid(_root_margin):
+		_root_margin.add_theme_constant_override("margin_left", 8 if compact_lobby else 20)
+		_root_margin.add_theme_constant_override("margin_top", 4 if compact_lobby else 16)
+		_root_margin.add_theme_constant_override("margin_right", 8 if compact_lobby else 20)
+		_root_margin.add_theme_constant_override("margin_bottom", 4 if compact_lobby else 24)
+	if is_instance_valid(_root_container):
+		_root_container.add_theme_constant_override("separation", 4 if compact_lobby else 12)
+	if is_instance_valid(_table_section):
+		_table_section.add_theme_constant_override("separation", 1 if compact_lobby else 6)
+	if is_instance_valid(_phase_controls):
+		_phase_controls.add_theme_constant_override("separation", 2 if compact_lobby else 6)
+	if is_instance_valid(_root_scroll):
+		_root_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED if compact_lobby else ScrollContainer.SCROLL_MODE_AUTO
 
 
 func _set_lobby_ui_visible(visible: bool) -> void:
-	_summary_label.visible = visible
-	_participants_area.visible = visible
-	_table_section.visible = visible
+	var game_started := _game_started(RecipesClient.latest_snapshot)
+	_summary_label.visible = false
+	_participants_area.visible = false
+	_table_section.visible = visible and not game_started
+	_set_section_header_visible(_table_section, false)
+	if visible and not game_started:
+		_set_section_collapsed(_table_section, false)
 
 
 func _set_gameplay_ui_visible(visible: bool) -> void:
-	_hand_section.visible = visible
-	_recipe_section.visible = visible
-	_platter_section.visible = visible
-	_offer_section.visible = visible
-	_dish_section.visible = visible
+	_hand_section.visible = false
+	_recipe_section.visible = false
+	_platter_section.visible = false
+	_offer_section.visible = false
+	_dish_section.visible = false
 	_transaction_section.visible = visible
 	_platter_label.visible = false
 	_hand_label.visible = false
+
+
+func _refresh_post_table_controls(snapshot: Dictionary) -> void:
+	if not is_instance_valid(_post_table_controls):
+		return
+	_clear(_post_table_controls)
+	var phase := str(snapshot.get("phase", ""))
+	var show_controls := _game_started(snapshot) and phase != "complete" and bool(snapshot.get("viewerCanUseHostControls", false))
+	_post_table_controls.visible = show_controls
+	if not show_controls:
+		return
+	var paused := bool(snapshot.get("paused", false))
+	var row := _button_row()
+	_post_table_controls.add_child(row)
+	var pause_button := _button("Resume Game" if paused else "Pause Game", func() -> void:
+		RecipesClient.send_host_intent({"type": "set_pause", "paused": not bool(RecipesClient.latest_snapshot.get("paused", false))})
+	)
+	pause_button.custom_minimum_size = Vector2(112, 38)
+	row.add_child(pause_button)
+	var end_button := _button("End Game", func() -> void:
+		RecipesClient.send_host_intent({"type": "stop"})
+	)
+	end_button.custom_minimum_size = Vector2(112, 38)
+	row.add_child(end_button)
+
+
+func _scroll_to_visual_table() -> void:
+	if not is_instance_valid(_root_scroll) or not is_instance_valid(_table_visual) or not _table_visual.visible:
+		return
+	_root_scroll.scroll_vertical = maxi(0, int(_table_visual.position.y) - 12)
+
+
+func _apply_default_section_collapse(snapshot: Dictionary) -> void:
+	if not _table_exists(snapshot):
+		_collapsed_gameplay_for_table = ""
+		return
+	var code := str(snapshot.get("tableCode", ""))
+	if not _game_started(snapshot):
+		_collapsed_gameplay_for_table = ""
+		_set_section_header_visible(_table_section, false)
+		_set_section_collapsed(_table_section, false)
+		return
+	_set_section_header_visible(_table_section, false)
+	_set_section_collapsed(_table_section, false)
+	if _collapsed_gameplay_for_table == code:
+		return
+	for section in [_transaction_section]:
+		_set_section_collapsed(section, true)
+	_collapsed_gameplay_for_table = code
+
+
+func _on_table_visual_intent_requested(intent: Dictionary) -> void:
+	if str(intent.get("type", "")) == "deposit" or str(intent.get("type", "")) == "deposit_ingredient":
+		_pending_controlled_deposit_actor_id = str(RecipesClient.latest_snapshot.get("viewerParticipantId", ""))
+	RecipesClient.send_intent(intent)
+
+
+func _on_table_visual_view_requested(participant_id: String) -> void:
+	RecipesClient.view_as(participant_id)
+
+
+func _on_table_visual_status_requested(message: String) -> void:
+	_status_label.text = message
 
 
 func _on_participant_selected(index: int) -> void:
@@ -852,6 +2172,45 @@ func _refresh_participants(snapshot: Dictionary) -> void:
 			_participants_option.select(item_index)
 
 	_refresh_participant_detail(snapshot)
+	_refresh_acting_as(snapshot)
+
+
+func _refresh_acting_as(snapshot: Dictionary) -> void:
+	if not is_instance_valid(_acting_as_option):
+		return
+	_acting_as_option.clear()
+	var connection_id := str(snapshot.get("connectionParticipantId", snapshot.get("viewerParticipantId", "")))
+	var controlled_ids: Array = snapshot.get("controlledParticipantIds", [])
+	var available_ids: Array[String] = []
+	if connection_id != "":
+		available_ids.append(connection_id)
+	for raw_id in controlled_ids:
+		var controlled_id := str(raw_id)
+		if controlled_id != "" and not available_ids.has(controlled_id):
+			available_ids.append(controlled_id)
+	_acting_as_option.visible = available_ids.size() > 1
+	if available_ids.size() <= 1:
+		return
+	var viewer_id := str(snapshot.get("viewerParticipantId", connection_id))
+	for participant_id in available_ids:
+		var participant := _participant_by_id(snapshot, participant_id)
+		if participant.is_empty():
+			continue
+		var item_index := _acting_as_option.item_count
+		var prefix := "Acting as "
+		if participant_id == connection_id:
+			prefix = "Acting as self: "
+		_acting_as_option.add_item("%s%s" % [prefix, participant.get("name", "Player")])
+		_acting_as_option.set_item_metadata(item_index, participant_id)
+		if participant_id == viewer_id:
+			_acting_as_option.select(item_index)
+
+
+func _on_acting_as_selected(index: int) -> void:
+	var participant_id := str(_acting_as_option.get_item_metadata(index))
+	if participant_id == "":
+		return
+	RecipesClient.view_as(participant_id)
 
 
 func _refresh_participant_detail(snapshot: Dictionary) -> void:
@@ -872,10 +2231,10 @@ func _refresh_controls(snapshot: Dictionary) -> void:
 	_clear(_transaction_controls)
 
 	var phase := str(snapshot.get("phase", "lobby"))
-	var viewer := _participant_by_id(snapshot, str(snapshot.get("viewerParticipantId", "")))
-	if bool(viewer.get("isHost", false)):
+	if bool(snapshot.get("viewerCanUseHostControls", false)):
 		_add_host_admin_controls(snapshot)
 	if _game_started(snapshot):
+		_phase_controls.add_child(_wrapped_label(_turn_status_label(snapshot)))
 		_phase_controls.add_child(_wrapped_label(_stock_accounting_label(snapshot)))
 		_add_dish_summary_controls(snapshot)
 		_add_transaction_history_controls(snapshot)
@@ -889,6 +2248,8 @@ func _refresh_controls(snapshot: Dictionary) -> void:
 		_add_lobby_controls(snapshot)
 	elif _viewer_is_witness(snapshot):
 		_add_witness_controls(snapshot)
+	elif _round_robin_waiting(snapshot):
+		_add_read_only_turn_view(snapshot)
 	elif phase == "deposit":
 		_add_deposit_controls(snapshot)
 	elif phase == "playing":
@@ -901,67 +2262,379 @@ func _refresh_controls(snapshot: Dictionary) -> void:
 
 func _add_lobby_controls(snapshot: Dictionary) -> void:
 	var active_count := _active_count(snapshot)
-	_phase_controls.add_child(_wrapped_label("Active seats: %s. Timer: %s." % [active_count, _timer_label(snapshot)]))
+	var compact := _is_compact_lobby()
+	if _is_online_snapshot(snapshot):
+		_add_online_lobby_invite_controls(snapshot)
+	_phase_controls.add_child(_lobby_title("Who's Cooking?"))
 
-	var viewer_id := str(snapshot.get("viewerParticipantId", ""))
-	var viewer := _participant_by_id(snapshot, viewer_id)
-	if not bool(viewer.get("isHost", false)):
-		_phase_controls.add_child(_wrapped_label("Waiting for the host to start the table."))
+	var host_controls := bool(snapshot.get("viewerCanUseHostControls", false))
+	if not host_controls:
+		_add_seat_setup_grid(snapshot, false)
+		if _is_online_snapshot(snapshot):
+			_add_back_to_online_setup_button()
 		return
-	var next_role := "witness"
-	if str(viewer.get("role", "active")) == "witness":
-		next_role = "active"
-	_phase_controls.add_child(_button("Toggle My Role To %s" % next_role.capitalize(), func() -> void:
-		RecipesClient.send_intent({"type": "set_role", "participantId": viewer_id, "role": next_role})
-	))
 
-	var bot_row := _button_row()
-	_phase_controls.add_child(bot_row)
-	bot_row.add_child(_button("Add Pool Bot", func() -> void:
-		RecipesClient.send_intent({"type": "add_bot", "botType": "pool_only"})
-	))
-	bot_row.add_child(_button("Add Barter Bot", func() -> void:
-		RecipesClient.send_intent({"type": "add_bot", "botType": "barter_only"})
-	))
-	bot_row.add_child(_button("Add Mixed Bot", func() -> void:
-		RecipesClient.send_intent({"type": "add_bot", "botType": "mixed"})
-	))
+	_add_seat_setup_grid(snapshot, true)
 
-	var timer_row := _button_row()
-	_phase_controls.add_child(timer_row)
-	_timer_input = _line_edit("No limit", "" if not snapshot.has("timer") else str(int(snapshot.get("timer", {}).get("seconds", 0))))
-	timer_row.add_child(_timer_input)
-	timer_row.add_child(_button("Set Timer", _set_timer))
-	timer_row.add_child(_button("No Limit", func() -> void:
-		RecipesClient.send_intent({"type": "set_timer", "seconds": null})
-	))
-
-	var target_row := _button_row()
-	_phase_controls.add_child(target_row)
-	_target_dish_count_input = _line_edit("Dishes to finish", str(int(snapshot.get("targetDishCount", 4))))
-	target_row.add_child(_target_dish_count_input)
-	target_row.add_child(_button("Set Dish Goal", _set_target_dish_count))
-
-	var stock_row := _button_row()
-	_phase_controls.add_child(stock_row)
-	_stock_input = _line_edit("Stock units", str(int(snapshot.get("stockPerIngredient", 30))))
-	stock_row.add_child(_stock_input)
-	stock_row.add_child(_button("Set Stock", _set_stock))
-
-	var start_button := _button("Start Game", func() -> void:
-		RecipesClient.send_intent({"type": "start"})
+	var turn_row := _button_row()
+	_phase_controls.add_child(turn_row)
+	var round_button := _button("Round Robin", func() -> void:
+		RecipesClient.send_host_intent({"type": "set_turn_mode", "mode": "round_robin"})
 	)
-	start_button.disabled = active_count < 7 or active_count > 20
-	if active_count < 7:
-		start_button.text = "Waiting for %s Players" % (7 - active_count)
-	else:
-		start_button.text = "Start Game"
+	var market_button := _button("Market", func() -> void:
+		RecipesClient.send_host_intent({"type": "set_turn_mode", "mode": "market"})
+	)
+	round_button.disabled = str(snapshot.get("turnMode", "round_robin")) == "round_robin"
+	market_button.disabled = str(snapshot.get("turnMode", "round_robin")) == "market"
+	round_button.custom_minimum_size = Vector2(112, 32 if compact else 44)
+	market_button.custom_minimum_size = Vector2(112, 32 if compact else 44)
+	turn_row.add_child(round_button)
+	turn_row.add_child(market_button)
+
+	var start_button := _button("Start Cooking", func() -> void:
+		RecipesClient.send_host_intent({"type": "start"})
+	)
+	start_button.disabled = active_count != REQUIRED_ACTIVE_SEATS
+	start_button.text = "Start Cooking" if active_count == REQUIRED_ACTIVE_SEATS else "Waiting for %s Seats" % (REQUIRED_ACTIVE_SEATS - active_count)
+	start_button.custom_minimum_size = Vector2(112, 36 if compact else 48)
+	_style_start_cooking_button(start_button)
 	_phase_controls.add_child(start_button)
+	if _is_online_snapshot(snapshot):
+		_add_back_to_online_setup_button()
+
+
+func _is_online_snapshot(snapshot: Dictionary) -> bool:
+	return _table_exists(snapshot) and not bool(snapshot.get("offline", false)) and not RecipesClient.offline_mode
+
+
+func _add_online_lobby_invite_controls(snapshot: Dictionary) -> void:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override("panel", _seat_setup_row_style(false, _is_compact_lobby()))
+	_phase_controls.add_child(panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2 if _is_compact_lobby() else 4)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_child(box)
+
+	var server_label := _wrapped_label("Server: %s" % RecipesClient.server_url)
+	server_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if _is_compact_lobby():
+		server_label.add_theme_font_size_override("font_size", 13)
+	box.add_child(server_label)
+
+	var code_label := _wrapped_label("Invite Code: %s" % str(snapshot.get("tableCode", RecipesClient.table_code)))
+	code_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if _is_compact_lobby():
+		code_label.add_theme_font_size_override("font_size", 13)
+	box.add_child(code_label)
+
+	var invite_button := _button("Invite Others", func(snap := snapshot) -> void:
+		_invite_others(snap)
+	)
+	invite_button.custom_minimum_size = Vector2(112, 30 if _is_compact_lobby() else 44)
+	box.add_child(invite_button)
+
+
+func _add_back_to_online_setup_button() -> void:
+	var back_button := _button("Back to Create/Join Table", _back_to_online_setup)
+	back_button.custom_minimum_size = Vector2(112, 34 if _is_compact_lobby() else 44)
+	_phase_controls.add_child(back_button)
+
+
+func _back_to_online_setup() -> void:
+	RecipesClient.disconnect_local()
+	_home_choice = "online"
+	_mark_server_unconnected()
+	if is_instance_valid(_code_input):
+		_code_input.text = ""
+	_status_label.text = "Choose a server, then connect before creating or joining a table."
+	_refresh_connection_buttons({})
+
+
+func _invite_others(snapshot: Dictionary) -> void:
+	var message := "\n".join([
+		"Let's Cook some Recipes!",
+		"Client: %s" % CLIENT_INVITE_URL,
+		"Server: %s" % RecipesClient.server_url,
+		"Invite Code: %s" % str(snapshot.get("tableCode", RecipesClient.table_code))
+	])
+	if OS.get_name() == "Web":
+		var script := "\n".join([
+			"const text = %s;" % JSON.stringify(message),
+			"if (navigator.share) {",
+			"  navigator.share({ text });",
+			"} else if (navigator.clipboard) {",
+			"  navigator.clipboard.writeText(text);",
+			"}"
+		])
+		JavaScriptBridge.eval(script, true)
+		_status_label.text = "Invite text shared or copied."
+	else:
+		DisplayServer.clipboard_set(message)
+		_status_label.text = "Invite text copied to clipboard."
+	_status_label.visible = true
+
+
+func _is_compact_lobby() -> bool:
+	var snapshot := RecipesClient.latest_snapshot
+	return (_table_exists(snapshot) and not _game_started(snapshot)) or get_viewport_rect().size.y <= 900.0
+
+
+func _lobby_title(text: String) -> Label:
+	var compact := _is_compact_lobby()
+	var label := Label.new()
+	label.text = text
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.custom_minimum_size = Vector2(0, 24 if compact else 56)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.add_theme_font_size_override("font_size", 20 if compact else 34)
+	label.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
+	label.add_theme_color_override("font_outline_color", Color(1.0, 0.92, 0.70, 0.88))
+	label.add_theme_constant_override("outline_size", 2)
+	return label
+
+
+func _style_start_cooking_button(button: Button) -> void:
+	button.add_theme_font_size_override("font_size", 18 if _is_compact_lobby() else 24)
+	button.add_theme_color_override("font_color", Color(1.0, 0.92, 0.70))
+	button.add_theme_color_override("font_hover_color", Color(1.0, 0.98, 0.82))
+	button.add_theme_color_override("font_pressed_color", Color(1.0, 0.86, 0.58))
+	button.add_theme_color_override("font_disabled_color", Color(0.76, 0.68, 0.52, 0.75))
+	button.add_theme_color_override("font_outline_color", Color(0.18, 0.09, 0.03, 0.80))
+	button.add_theme_constant_override("outline_size", 2)
+	button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.42, 0.22, 0.10), Color(0.92, 0.68, 0.28), 2))
+	button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.52, 0.28, 0.13), Color(1.0, 0.78, 0.36), 2))
+	button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.30, 0.15, 0.07), Color(0.78, 0.52, 0.20), 2))
+	button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.58, 0.50, 0.38), Color(0.48, 0.40, 0.29), 1))
+	button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.52, 0.28, 0.13), Color(1.0, 0.96, 0.78), 3))
+
+
+func _style_server_connect_button(connected: bool) -> void:
+	if not is_instance_valid(_server_connect_button):
+		return
+	if connected:
+		_server_connect_button.add_theme_color_override("font_color", Color(0.17, 0.11, 0.05))
+		_server_connect_button.add_theme_color_override("font_hover_color", Color(0.17, 0.11, 0.05))
+		_server_connect_button.add_theme_color_override("font_pressed_color", Color(0.17, 0.11, 0.05))
+		_server_connect_button.add_theme_color_override("font_focus_color", Color(0.17, 0.11, 0.05))
+		_server_connect_button.add_theme_color_override("font_hover_pressed_color", Color(0.17, 0.11, 0.05))
+		_server_connect_button.add_theme_color_override("font_disabled_color", Color(0.25, 0.18, 0.10, 0.82))
+		_server_connect_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.98, 0.86, 0.54), Color(0.58, 0.40, 0.18), 2))
+		_server_connect_button.add_theme_stylebox_override("hover", _warm_button_style(Color(1.0, 0.90, 0.60), Color(0.66, 0.46, 0.20), 2))
+		_server_connect_button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.91, 0.76, 0.42), Color(0.44, 0.29, 0.12), 2))
+		_server_connect_button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.90, 0.78, 0.50), Color(0.55, 0.42, 0.23), 1))
+		_server_connect_button.add_theme_stylebox_override("focus", _warm_button_style(Color(1.0, 0.90, 0.60), Color(0.48, 0.32, 0.14), 3))
+	else:
+		_server_connect_button.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+		_server_connect_button.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
+		_server_connect_button.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
+		_server_connect_button.add_theme_color_override("font_focus_color", Color(0.17, 0.12, 0.07))
+		_server_connect_button.add_theme_color_override("font_hover_pressed_color", Color(0.10, 0.07, 0.04))
+		_server_connect_button.add_theme_color_override("font_disabled_color", Color(0.42, 0.37, 0.29, 0.70))
+		_server_connect_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.88, 0.80, 0.62), Color(0.47, 0.36, 0.22), 1))
+		_server_connect_button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.96, 0.88, 0.67), Color(0.58, 0.42, 0.21), 2))
+		_server_connect_button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.78, 0.68, 0.48), Color(0.34, 0.26, 0.17), 1))
+		_server_connect_button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.70, 0.66, 0.55), Color(0.54, 0.48, 0.36), 1))
+		_server_connect_button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.96, 0.88, 0.67), Color(1.0, 0.98, 0.84), 3))
+
+
+func _style_join_table_button(join_ready: bool) -> void:
+	if not is_instance_valid(_join_table_button):
+		return
+	if join_ready:
+		_join_table_button.add_theme_color_override("font_color", Color(0.08, 0.20, 0.08))
+		_join_table_button.add_theme_color_override("font_hover_color", Color(0.08, 0.20, 0.08))
+		_join_table_button.add_theme_color_override("font_pressed_color", Color(0.05, 0.16, 0.05))
+		_join_table_button.add_theme_color_override("font_focus_color", Color(0.08, 0.20, 0.08))
+		_join_table_button.add_theme_color_override("font_hover_pressed_color", Color(0.05, 0.16, 0.05))
+		_join_table_button.add_theme_color_override("font_disabled_color", Color(0.20, 0.28, 0.16, 0.75))
+		_join_table_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.64, 0.91, 0.43), Color(1.0, 0.98, 0.62), 3))
+		_join_table_button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.72, 0.98, 0.50), Color(1.0, 1.0, 0.76), 4))
+		_join_table_button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.52, 0.78, 0.33), Color(0.84, 0.78, 0.36), 3))
+		_join_table_button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.74, 0.82, 0.61), Color(0.50, 0.55, 0.36), 1))
+		_join_table_button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.72, 0.98, 0.50), Color(1.0, 1.0, 0.90), 4))
+	else:
+		_join_table_button.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+		_join_table_button.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
+		_join_table_button.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
+		_join_table_button.add_theme_color_override("font_focus_color", Color(0.17, 0.12, 0.07))
+		_join_table_button.add_theme_color_override("font_hover_pressed_color", Color(0.10, 0.07, 0.04))
+		_join_table_button.add_theme_color_override("font_disabled_color", Color(0.42, 0.37, 0.29, 0.70))
+		_join_table_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.88, 0.80, 0.62), Color(0.47, 0.36, 0.22), 1))
+		_join_table_button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.96, 0.88, 0.67), Color(0.58, 0.42, 0.21), 2))
+		_join_table_button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.78, 0.68, 0.48), Color(0.34, 0.26, 0.17), 1))
+		_join_table_button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.70, 0.66, 0.55), Color(0.54, 0.48, 0.36), 1))
+		_join_table_button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.96, 0.88, 0.67), Color(1.0, 0.98, 0.84), 3))
+
+
+func _add_seat_setup_grid(snapshot: Dictionary, host_editable: bool) -> void:
+	var grid := _seat_grid_container()
+	_phase_controls.add_child(grid)
+	var participants: Array = snapshot.get("participants", [])
+	var connection_participant_id := str(snapshot.get("connectionParticipantId", snapshot.get("viewerParticipantId", "")))
+	var seat_index := 0
+	for raw_participant in participants:
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		var participant_id := str(participant.get("id", ""))
+		var can_edit_name := host_editable or (participant_id == connection_participant_id and str(participant.get("kind", "")) == "human")
+		grid.add_child(_seat_setup_row(snapshot, participant, seat_index, can_edit_name, host_editable))
+		seat_index += 1
+
+
+func _seat_grid_container() -> GridContainer:
+	var grid := GridContainer.new()
+	var compact := _is_compact_lobby()
+	grid.columns = 2 if _use_two_column_lobby_seats() else 1
+	grid.add_theme_constant_override("h_separation", 8 if compact else 10)
+	grid.add_theme_constant_override("v_separation", 4 if compact else 8)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return grid
+
+
+func _use_two_column_lobby_seats() -> bool:
+	return _is_compact_lobby() and get_viewport_rect().size.x >= 980.0
+
+
+func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: int, name_editable: bool, kind_editable: bool) -> PanelContainer:
+	var compact := _is_compact_lobby()
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size = Vector2(0, 54 if compact else 78)
+	panel.add_theme_stylebox_override("panel", _seat_setup_row_style(str(participant.get("kind", "")) == "bot", compact))
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6 if compact else 10)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_child(row)
+
+	var ingredient_id := _seat_ingredient_id(snapshot, participant, seat_index)
+	var icon_box := VBoxContainer.new()
+	icon_box.custom_minimum_size = Vector2(78, 48) if compact else Vector2(108, 70)
+	icon_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	icon_box.add_theme_constant_override("separation", 0)
+	row.add_child(icon_box)
+
+	var texture_rect := TextureRect.new()
+	texture_rect.custom_minimum_size = Vector2(62, 35) if compact else Vector2(82, 50)
+	texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	var meta := VisualAssets.ingredient_meta(ingredient_id)
+	var texture = meta.get("texture", null)
+	if texture is Texture2D:
+		texture_rect.texture = texture
+	icon_box.add_child(texture_rect)
+
+	var ingredient_label := Label.new()
+	ingredient_label.text = _ingredient_display(snapshot, ingredient_id)
+	ingredient_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ingredient_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	ingredient_label.custom_minimum_size = Vector2(0, 13 if compact else 18)
+	ingredient_label.add_theme_font_size_override("font_size", 10 if compact else 14)
+	ingredient_label.add_theme_color_override("font_color", Color(0.20, 0.13, 0.07))
+	ingredient_label.add_theme_color_override("font_outline_color", Color(1.0, 0.93, 0.72, 0.70))
+	ingredient_label.add_theme_constant_override("outline_size", 1)
+	icon_box.add_child(ingredient_label)
+
+	var name_input := _line_edit("Seat name", str(participant.get("name", "")))
+	name_input.custom_minimum_size = Vector2(130, 38) if compact else Vector2(180, 50)
+	name_input.editable = name_editable
+	name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if compact:
+		name_input.add_theme_font_size_override("font_size", 18)
+	row.add_child(name_input)
+
+	var kind_toggle := _option_button()
+	kind_toggle.custom_minimum_size = Vector2(86, 38) if compact else Vector2(112, 50)
+	kind_toggle.size_flags_horizontal = Control.SIZE_SHRINK_END
+	if compact:
+		kind_toggle.add_theme_font_size_override("font_size", 17)
+	kind_toggle.add_item("Player")
+	kind_toggle.add_item("Bot")
+	var is_bot := str(participant.get("kind", "human")) == "bot"
+	kind_toggle.select(1 if is_bot else 0)
+	kind_toggle.disabled = not kind_editable or bool(participant.get("isHost", false))
+	row.add_child(kind_toggle)
+
+	var participant_id := str(participant.get("id", ""))
+	name_input.text_submitted.connect(func(_submitted: String, target_id := participant_id, input := name_input) -> void:
+		_rename_lobby_seat(target_id, input)
+	)
+	name_input.focus_exited.connect(func(target_id := participant_id, input := name_input) -> void:
+		_rename_lobby_seat(target_id, input)
+	)
+	kind_toggle.item_selected.connect(func(index: int, target_id := participant_id, input := name_input) -> void:
+		_change_lobby_seat_kind(target_id, index, input)
+	)
+	return panel
+
+
+func _seat_setup_row_style(is_bot: bool, compact := false) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.93, 0.90, 0.80, 0.84) if is_bot else Color(0.88, 0.94, 0.84, 0.92)
+	style.border_color = Color(0.43, 0.39, 0.30, 0.55)
+	style.border_width_left = 1
+	style.border_width_top = 1
+	style.border_width_right = 1
+	style.border_width_bottom = 1
+	style.corner_radius_top_left = 6
+	style.corner_radius_top_right = 6
+	style.corner_radius_bottom_left = 6
+	style.corner_radius_bottom_right = 6
+	style.content_margin_left = 3 if compact else 8
+	style.content_margin_top = 1 if compact else 6
+	style.content_margin_right = 3 if compact else 8
+	style.content_margin_bottom = 1 if compact else 6
+	return style
+
+
+func _seat_ingredient_id(snapshot: Dictionary, participant: Dictionary, seat_index: int) -> String:
+	var assigned := str(participant.get("ingredientId", ""))
+	if assigned != "":
+		return assigned
+	var ingredients: Array = snapshot.get("ingredients", [])
+	if seat_index >= 0 and seat_index < ingredients.size():
+		var ingredient: Dictionary = ingredients[seat_index]
+		return str(ingredient.get("id", ""))
+	return ""
+
+
+func _rename_lobby_seat(participant_id: String, input: LineEdit) -> void:
+	var name := input.text.strip_edges()
+	if participant_id == "":
+		return
+	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
+	if not participant.is_empty() and name == str(participant.get("name", "")).strip_edges():
+		return
+	RecipesClient.send_intent({"type": "rename_participant", "participantId": participant_id, "name": name})
+
+
+func _change_lobby_seat_kind(participant_id: String, selected_index: int, input: LineEdit) -> void:
+	if participant_id == "":
+		return
+	var snapshot := RecipesClient.latest_snapshot
+	var participant := _participant_by_id(snapshot, participant_id)
+	if participant.is_empty():
+		return
+	var wants_player := selected_index == 0
+	var is_bot := str(participant.get("kind", "human")) == "bot"
+	var name := input.text.strip_edges()
+	if wants_player and is_bot:
+		RecipesClient.send_host_intent({"type": "add_controlled_seat", "participantId": participant_id, "name": name})
+	elif not wants_player and not is_bot:
+		if bool(participant.get("isHost", false)):
+			return
+		RecipesClient.send_host_intent({"type": "convert_to_bot", "participantId": participant_id, "botType": "mixed"})
 
 
 func _add_deposit_controls(snapshot: Dictionary) -> void:
 	var hand: Array = snapshot.get("ownHand", [])
 	var viewer := _participant_by_id(snapshot, str(snapshot.get("viewerParticipantId", "")))
+	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
 	if str(viewer.get("role", "")) != "active":
 		_hand_controls.add_child(_wrapped_label("Witnessing the table offering."))
 		return
@@ -973,20 +2646,121 @@ func _add_deposit_controls(snapshot: Dictionary) -> void:
 		return
 
 	var voucher: Dictionary = hand[0]
-	_hand_controls.add_child(_wrapped_label("Give your offering to the table."))
-	_hand_controls.add_child(_button("Give %s" % _ingredient_display(snapshot, str(voucher.get("ingredientId", ""))), func(v: Dictionary = voucher) -> void:
+	_hand_controls.add_child(_wrapped_label("Offer your ingredient to the Common Basket."))
+	_hand_controls.add_child(_button("Offer %s to Common Basket" % _ingredient_display(snapshot, str(voucher.get("ingredientId", ""))), func(v: Dictionary = voucher, snap: Dictionary = snapshot) -> void:
+		_pending_controlled_deposit_actor_id = str(snap.get("viewerParticipantId", ""))
 		RecipesClient.send_intent({"type": "deposit", "voucherId": v.get("id", "")})
 	))
 
 
+func _maybe_advance_acting_as_after_deposit(snapshot: Dictionary) -> void:
+	if str(snapshot.get("phase", "")) != "deposit":
+		_pending_controlled_deposit_actor_id = ""
+		return
+	if not bool(snapshot.get("viewerCanUseHostControls", false)):
+		_pending_controlled_deposit_actor_id = ""
+		return
+	if _pending_controlled_deposit_actor_id == "":
+		return
+	var pending_actor := _participant_by_id(snapshot, _pending_controlled_deposit_actor_id)
+	if pending_actor.is_empty():
+		_pending_controlled_deposit_actor_id = ""
+		return
+	if not bool(pending_actor.get("depositedInitial", false)):
+		return
+
+	var next_actor_id := _next_controlled_undeposited_actor_id(snapshot, _pending_controlled_deposit_actor_id)
+	_pending_controlled_deposit_actor_id = ""
+	if next_actor_id == "":
+		_maybe_follow_controlled_turn(snapshot)
+		return
+
+	var current_viewer := str(snapshot.get("viewerParticipantId", ""))
+	if next_actor_id == current_viewer:
+		return
+	RecipesClient.view_as(next_actor_id)
+
+
+func _maybe_follow_controlled_turn(snapshot: Dictionary) -> void:
+	if not bool(snapshot.get("viewerCanUseHostControls", false)):
+		return
+	if _viewer_is_witness(snapshot):
+		return
+	if str(snapshot.get("turnMode", "round_robin")) != "round_robin":
+		return
+	var phase := str(snapshot.get("phase", ""))
+	if phase != "playing" && phase != "settlement" && phase != "eating":
+		return
+	var current_turn_id := str(snapshot.get("currentTurnParticipantId", ""))
+	if current_turn_id == "":
+		return
+	if _last_controlled_turn_participant_id == current_turn_id:
+		return
+	if current_turn_id == str(snapshot.get("viewerParticipantId", "")):
+		return
+	if not _is_controlled_by_viewer(snapshot, current_turn_id):
+		return
+	RecipesClient.view_as(current_turn_id)
+
+
+func _track_last_controlled_turn(snapshot: Dictionary) -> void:
+	var phase := str(snapshot.get("phase", ""))
+	if phase != "playing" && phase != "settlement" && phase != "eating":
+		_last_controlled_turn_participant_id = ""
+		return
+	var current_turn_id := str(snapshot.get("currentTurnParticipantId", ""))
+	if current_turn_id == "":
+		_last_controlled_turn_participant_id = ""
+		return
+	_last_controlled_turn_participant_id = current_turn_id
+
+
+func _is_controlled_by_viewer(snapshot: Dictionary, participant_id: String) -> bool:
+	if participant_id == "":
+		return false
+	var connection_id := str(snapshot.get("connectionParticipantId", snapshot.get("viewerParticipantId", "")))
+	if participant_id == connection_id:
+		return true
+	var controlled_ids: Array = snapshot.get("controlledParticipantIds", [])
+	return controlled_ids.has(participant_id)
+
+
+func _next_controlled_undeposited_actor_id(snapshot: Dictionary, after_participant_id: String) -> String:
+	var controlled_ids: Array = snapshot.get("controlledParticipantIds", [])
+	if controlled_ids.is_empty():
+		return ""
+
+	var start_index := controlled_ids.find(after_participant_id)
+	if start_index < 0:
+		start_index = 0
+
+	for offset in range(1, controlled_ids.size() + 1):
+		var index := (start_index + offset) % controlled_ids.size()
+		var candidate_id := str(controlled_ids[index])
+		var candidate := _participant_by_id(snapshot, candidate_id)
+		if candidate.is_empty():
+			continue
+		if str(candidate.get("role", "")) != "active":
+			continue
+		if bool(candidate.get("depositedInitial", false)):
+			continue
+		return candidate_id
+	return ""
+
+
 func _add_playing_controls(snapshot: Dictionary) -> void:
+	_add_pass_turn_button(snapshot)
 	_add_prepare_control(snapshot)
+	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
 	_add_hand_place_controls(snapshot)
 	_add_platter_swap_controls(snapshot)
+	if not snapshot.get("ownFoodParts", []).is_empty() or not snapshot.get("platterFoodParts", []).is_empty():
+		_add_platter_asset_swap_controls(snapshot)
 	_add_offer_controls(snapshot)
 
 
 func _add_settlement_controls(snapshot: Dictionary) -> void:
+	_add_pass_turn_button(snapshot)
 	_phase_controls.add_child(_wrapped_label("Settlement: clear the central platter before eating."))
 	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
 	_hand_controls.add_child(_wrapped_label("Your inventory\n%s" % _format_inventory_assets(snapshot)))
@@ -1001,11 +2775,11 @@ func _add_host_admin_controls(snapshot: Dictionary) -> void:
 		var game_row := _button_row()
 		_phase_controls.add_child(game_row)
 		game_row.add_child(_button("Resume Game" if paused else "Pause Game", func() -> void:
-			RecipesClient.send_intent({"type": "set_pause", "paused": not bool(RecipesClient.latest_snapshot.get("paused", false))})
+			RecipesClient.send_host_intent({"type": "set_pause", "paused": not bool(RecipesClient.latest_snapshot.get("paused", false))})
 		))
 		if not paused:
 			game_row.add_child(_button("End Game", func() -> void:
-				RecipesClient.send_intent({"type": "stop"})
+				RecipesClient.send_host_intent({"type": "stop"})
 			))
 
 	var selected := _participant_by_id(snapshot, _selected_participant_id)
@@ -1048,7 +2822,7 @@ func _add_witness_player_view(snapshot: Dictionary, participant: Dictionary) -> 
 func _add_prepare_control(snapshot: Dictionary) -> void:
 	var recipe: Dictionary = snapshot.get("ownRecipe", {})
 	if recipe.is_empty():
-		_recipe_controls.add_child(_wrapped_label("No recipe yet."))
+		_recipe_controls.add_child(_wrapped_label(_dish_count_summary_label(snapshot)))
 		return
 	_add_recipe_view(_recipe_controls, snapshot, recipe)
 	_recipe_controls.add_child(_wrapped_label(_recipe_progress_label(recipe)))
@@ -1060,6 +2834,7 @@ func _add_prepare_control(snapshot: Dictionary) -> void:
 
 
 func _add_eating_controls(snapshot: Dictionary) -> void:
+	_add_pass_turn_button(snapshot)
 	_recipe_controls.add_child(_wrapped_label("Dish goal reached."))
 	_hand_controls.add_child(_wrapped_label("Your inventory\n%s" % _format_inventory_assets(snapshot)))
 	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
@@ -1100,7 +2875,7 @@ func _add_transaction_history_controls(snapshot: Dictionary) -> void:
 	if has_history:
 		transactions = snapshot.get("transactionHistory", [])
 	var history_complete := bool(snapshot.get("transactionHistoryComplete", true))
-	var export_button := _button("Download CSV" if history_complete else "Download Visible CSV", _download_transactions_csv)
+	var export_button := _button("Download CSV", _download_transactions_csv)
 	export_button.disabled = not has_history or transactions.is_empty()
 	_transaction_controls.add_child(export_button)
 	_csv_export_status_label = _wrapped_label(_last_csv_export_status)
@@ -1142,15 +2917,18 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 		_hand_controls.add_child(_wrapped_label("Food parts you hold\n%s" % "\n".join(food_part_group_labels)))
 	elif not food_parts.is_empty():
 		_hand_controls.add_child(_wrapped_label("Food parts you hold\n%s" % _format_food_parts(food_parts)))
+	var card_group_labels := _voucher_group_labels_from_groups(snapshot, snapshot.get("ownHandGroups", []), true)
+	if card_group_labels.is_empty():
+		card_group_labels = _voucher_group_labels_from_vouchers(snapshot, hand, true)
+	if not card_group_labels.is_empty():
+		_hand_controls.add_child(_wrapped_label("Cards you hold\n%s" % "\n".join(card_group_labels)))
 	if hand.is_empty():
 		_hand_controls.add_child(_wrapped_label("Your hand is empty."))
 		return
-	for raw_voucher in hand:
-		var voucher: Dictionary = raw_voucher
-		var voucher_id := str(voucher.get("id", ""))
-		var ingredient_id := str(voucher.get("ingredientId", ""))
-		var ingredient_label := _ingredient_display(snapshot, ingredient_id)
-		var needed_requirement: Dictionary = {}
+	var useful_count := 0
+	for raw_group in _voucher_group_options(snapshot, hand, true, true, true):
+		var group: Dictionary = raw_group
+		var ingredient_id := str(group.get("ingredientId", ""))
 		for raw_requirement in requirements:
 			var requirement: Dictionary = raw_requirement
 			if str(requirement.get("ingredientId", "")) != ingredient_id:
@@ -1159,40 +2937,33 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 			var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - placed_ids.size()
 			if outstanding <= 0:
 				continue
-			needed_requirement = requirement
+			useful_count += mini(outstanding, int(group.get("count", 1)))
 			break
-		var voucher_label := _voucher_label(voucher)
-		var card_button := _button(voucher_label, func(req: Dictionary = needed_requirement, id: String = voucher_id, label: String = ingredient_label, card_label: String = voucher_label) -> void:
-			RecipesClient.send_intent({"type": "redeem_from_hand", "voucherId": id, "requirementId": req.get("id", "")})
-			_status_label.text = "Redeeming %s for %s." % [card_label, label]
-		)
-		if needed_requirement.is_empty():
-			card_button.disabled = true
-			card_button.text = "Held %s" % voucher_label
-		else:
-			card_button.text = "Redeem %s for %s" % [voucher_label, ingredient_label]
-		_hand_controls.add_child(card_button)
+	if useful_count > 0:
+		_hand_controls.add_child(_wrapped_label("%s useful held cards will redeem when you use Redeem Cards and Pass Turn." % useful_count))
+	else:
+		_hand_controls.add_child(_wrapped_label("No held cards match the open recipe slots right now."))
 
 
 func _add_platter_swap_controls(snapshot: Dictionary) -> void:
 	var hand: Array = snapshot.get("ownHand", [])
 	var platter: Array = snapshot.get("platter", [])
-	_prune_swap_selection(hand, platter)
+	_prune_swap_selection(snapshot, hand, platter)
 	if hand.is_empty() or platter.is_empty():
 		_platter_controls.add_child(_wrapped_label("Swap needs one hand voucher and one platter voucher."))
 		return
 	_platter_controls.add_child(_wrapped_label("Giving: %s\nTaking: %s" % [
-		_voucher_label_by_id(hand, _selected_hand_voucher_id),
-		_voucher_label_by_id(platter, _selected_platter_voucher_id)
+		_voucher_group_label_by_id(snapshot, hand, _selected_hand_voucher_id, false),
+		_voucher_resource_label_by_id(snapshot, platter, _selected_platter_voucher_id)
 	]))
 	_platter_controls.add_child(_wrapped_label("Give"))
 	_platter_controls.add_child(_select_button(
-		_voucher_label_by_id(hand, _selected_hand_voucher_id) if _selected_hand_voucher_id != "" else "Select card to give",
+		_voucher_group_label_by_id(snapshot, hand, _selected_hand_voucher_id, false) if _selected_hand_voucher_id != "" else "Select card to give",
 		"platter_give"
 	))
 	_platter_controls.add_child(_wrapped_label("Take"))
 	_platter_controls.add_child(_select_button(
-		_voucher_label_by_id(platter, _selected_platter_voucher_id) if _selected_platter_voucher_id != "" else "Select card to take",
+		_voucher_resource_label_by_id(snapshot, platter, _selected_platter_voucher_id) if _selected_platter_voucher_id != "" else "Select card to take",
 		"platter_take"
 	))
 
@@ -1213,8 +2984,8 @@ func _add_platter_swap_controls(snapshot: Dictionary) -> void:
 			_selected_platter_voucher_id = ""
 			_refresh_controls(latest)
 			return
-		var give_label := _voucher_label_by_id(latest_hand, _selected_hand_voucher_id)
-		var take_label := _voucher_label_by_id(latest_platter, _selected_platter_voucher_id)
+		var give_label := _voucher_group_label_by_id(latest, latest_hand, _selected_hand_voucher_id, false)
+		var take_label := _voucher_resource_label_by_id(latest, latest_platter, _selected_platter_voucher_id)
 		if RecipesClient.send_intent({"type": "platter_swap", "giveVoucherId": _selected_hand_voucher_id, "takeVoucherId": _selected_platter_voucher_id}):
 			_status_label.text = "Swapping %s for %s..." % [give_label, take_label]
 	)
@@ -1229,7 +3000,7 @@ func _add_platter_asset_swap_controls(snapshot: Dictionary) -> void:
 	var take_assets := _platter_asset_options(snapshot)
 	_prune_asset_selection(give_assets, take_assets)
 	if give_assets.is_empty() or take_assets.is_empty():
-		_platter_controls.add_child(_wrapped_label("Settlement swaps need one held card or food part and one platter card or food part."))
+		_platter_controls.add_child(_wrapped_label("Asset swaps need one held card or food part and one platter card or food part."))
 		return
 
 	_platter_controls.add_child(_wrapped_label("Giving: %s\nTaking: %s" % [
@@ -1308,13 +3079,15 @@ func _add_incoming_offer(snapshot: Dictionary, offer: Dictionary) -> void:
 			break
 	_offer_controls.add_child(_wrapped_label("%s offers %s for your %s." % [
 		from_name,
-		_offer_cards_label(offer),
+		_offer_cards_label(snapshot, offer),
 		wanted
 	]))
 	if matching.size() >= quantity:
 		_offer_controls.add_child(_button("Accept Offer", func(ids := matching.duplicate(), o := offer) -> void:
 			RecipesClient.send_intent({"type": "respond_offer", "offerId": o.get("id", ""), "response": "accept", "voucherIds": ids})
 		))
+	else:
+		_offer_controls.add_child(_wrapped_label("You do not have enough %s to accept." % _ingredient_display(snapshot, ingredient_id)))
 	_offer_controls.add_child(_button("Refuse Offer", func(o := offer) -> void:
 		RecipesClient.send_intent({"type": "respond_offer", "offerId": o.get("id", ""), "response": "refuse"})
 	))
@@ -1351,16 +3124,18 @@ func _add_create_offer_controls(snapshot: Dictionary) -> void:
 	)
 
 	var card_option := _option_button()
-	card_option.add_item("Select card to offer")
+	card_option.add_item("Select ingredient to offer")
 	card_option.set_item_metadata(0, "")
-	for voucher in hand:
-		var card_index := card_option.item_count
-		card_option.add_item(_voucher_label(voucher))
-		card_option.set_item_metadata(card_index, voucher.get("id", ""))
-		if str(voucher.get("id", "")) == _selected_offer_card_id:
-			card_option.select(card_index)
+	for raw_group in _voucher_group_options(snapshot, hand, false, false, true):
+		var group: Dictionary = raw_group
+		var ingredient_id := str(group.get("ingredientId", ""))
+		var group_index := card_option.item_count
+		card_option.add_item(_ingredient_display(snapshot, ingredient_id))
+		card_option.set_item_metadata(group_index, ingredient_id)
+		if ingredient_id == _selected_offer_ingredient_id:
+			card_option.select(group_index)
 	card_option.item_selected.connect(func(index: int) -> void:
-		_selected_offer_card_id = str(card_option.get_item_metadata(index))
+		_selected_offer_ingredient_id = str(card_option.get_item_metadata(index))
 		_refresh_controls(RecipesClient.latest_snapshot)
 	)
 
@@ -1377,30 +3152,34 @@ func _add_create_offer_controls(snapshot: Dictionary) -> void:
 
 	var create_button := _button("Create Offer", func() -> void:
 		var ingredient_id := _offer_requested_ingredient_id(RecipesClient.latest_snapshot)
-		if _selected_offer_target_id == "" or _selected_offer_card_id == "" or ingredient_id == "":
+		if _selected_offer_target_id == "" or _selected_offer_ingredient_id == "" or ingredient_id == "":
 			_on_error_received({"description": "Offer needs a player and a card."})
+			return
+		var voucher_id := _first_voucher_id_for_ingredient(snapshot, _selected_offer_ingredient_id)
+		if voucher_id == "":
+			_on_error_received({"description": "No matching card available for %s." % _ingredient_display(snapshot, _selected_offer_ingredient_id)})
 			return
 		RecipesClient.send_intent({
 			"type": "create_offer",
 			"toParticipantId": _selected_offer_target_id,
-			"offeredVoucherIds": [_selected_offer_card_id],
+			"offeredVoucherIds": [voucher_id],
 			"requested": {"ingredientId": ingredient_id, "quantity": 1}
 		})
-		_selected_offer_card_id = ""
+		_selected_offer_ingredient_id = ""
 	)
-	create_button.disabled = _selected_offer_target_id == "" or _selected_offer_card_id == "" or request_ingredient_id == ""
+	create_button.disabled = _selected_offer_target_id == "" or _selected_offer_ingredient_id == "" or request_ingredient_id == ""
 	form.add_child(create_button)
 
 
 func _set_timer() -> void:
 	if _timer_input.text.strip_edges() == "":
-		RecipesClient.send_intent({"type": "set_timer", "seconds": null})
+		RecipesClient.send_host_intent({"type": "set_timer", "seconds": null})
 		return
 	var seconds := int(_timer_input.text)
 	if seconds <= 0:
 		_on_error_received({"description": "Timer must be a positive number of seconds."})
 		return
-	RecipesClient.send_intent({"type": "set_timer", "seconds": seconds})
+	RecipesClient.send_host_intent({"type": "set_timer", "seconds": seconds})
 
 
 func _set_target_dish_count() -> void:
@@ -1408,7 +3187,7 @@ func _set_target_dish_count() -> void:
 	if count < 1 or count > 4:
 		_on_error_received({"description": "Dish goal must be between 1 and 4."})
 		return
-	RecipesClient.send_intent({"type": "set_target_dish_count", "count": count})
+	RecipesClient.send_host_intent({"type": "set_target_dish_count", "count": count})
 
 
 func _set_stock() -> void:
@@ -1416,7 +3195,7 @@ func _set_stock() -> void:
 	if count < 1:
 		_on_error_received({"description": "Stock must be at least 1."})
 		return
-	RecipesClient.send_intent({"type": "set_stock", "count": count})
+	RecipesClient.send_host_intent({"type": "set_stock", "count": count})
 
 
 func _participant_by_id(snapshot: Dictionary, participant_id: String) -> Dictionary:
@@ -1431,6 +3210,35 @@ func _participant_name(snapshot: Dictionary, participant_id: String) -> String:
 	if participant.is_empty():
 		return "Someone"
 	return str(participant.get("name", "Someone"))
+
+
+func _voucher_has_stock(snapshot: Dictionary, voucher: Dictionary) -> bool:
+	var owner := _participant_by_id(snapshot, str(voucher.get("ownerParticipantId", "")))
+	return int(owner.get("realIngredientStock", 0)) > 0
+
+
+func _next_turn_participant_name(snapshot: Dictionary) -> String:
+	var next_id := _next_turn_participant_id(snapshot)
+	return "" if next_id == "" else _participant_name(snapshot, next_id)
+
+
+func _next_turn_participant_id(snapshot: Dictionary) -> String:
+	var current_id := str(snapshot.get("currentTurnParticipantId", ""))
+	var participants: Array = snapshot.get("participants", [])
+	if participants.is_empty():
+		return ""
+	var current_index := -1
+	for index in range(participants.size()):
+		var participant: Dictionary = participants[index]
+		if str(participant.get("id", "")) == current_id:
+			current_index = index
+			break
+	for offset in range(1, participants.size() + 1):
+		var candidate_index := (current_index + offset) % participants.size()
+		var candidate: Dictionary = participants[candidate_index]
+		if str(candidate.get("role", "")) == "active":
+			return str(candidate.get("id", ""))
+	return ""
 
 
 func _viewer_can_act(snapshot: Dictionary) -> bool:
@@ -1464,6 +3272,68 @@ func _viewer_can_bite_dish(snapshot: Dictionary, dish: Dictionary) -> bool:
 	return false
 
 
+func _turn_status_label(snapshot: Dictionary) -> String:
+	if str(snapshot.get("turnMode", "round_robin")) != "round_robin":
+		return "Turn mode: market"
+	var current_id := str(snapshot.get("currentTurnParticipantId", ""))
+	if current_id == "":
+		return "Turn mode: round robin"
+	return "Turn mode: round robin. Current turn: %s" % _participant_name(snapshot, current_id)
+
+
+func _viewer_can_take_turn(snapshot: Dictionary) -> bool:
+	if str(snapshot.get("turnMode", "round_robin")) != "round_robin":
+		return true
+	var phase := str(snapshot.get("phase", "lobby"))
+	if phase == "lobby" or phase == "deposit" or phase == "complete":
+		return true
+	return str(snapshot.get("viewerParticipantId", "")) == str(snapshot.get("currentTurnParticipantId", ""))
+
+
+func _round_robin_waiting(snapshot: Dictionary) -> bool:
+	if _viewer_is_witness(snapshot):
+		return false
+	var phase := str(snapshot.get("phase", "lobby"))
+	if phase != "playing" and phase != "settlement" and phase != "eating":
+		return false
+	return not _viewer_can_take_turn(snapshot)
+
+
+func _add_read_only_turn_view(snapshot: Dictionary) -> void:
+	_phase_controls.add_child(_wrapped_label("Waiting for %s." % _participant_name(snapshot, str(snapshot.get("currentTurnParticipantId", "")))))
+	var recipe: Dictionary = snapshot.get("ownRecipe", {})
+	if not recipe.is_empty():
+		_add_recipe_view(_recipe_controls, snapshot, recipe)
+		_recipe_controls.add_child(_wrapped_label(_recipe_progress_label(recipe)))
+	else:
+		_recipe_controls.add_child(_wrapped_label(_dish_count_summary_label(snapshot)))
+	_hand_controls.add_child(_wrapped_label("Your inventory\n%s" % _format_inventory_assets(snapshot)))
+	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
+	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
+	_offer_controls.add_child(_wrapped_label(_open_offers_label(snapshot)))
+
+
+func _add_pass_turn_button(snapshot: Dictionary) -> void:
+	if str(snapshot.get("turnMode", "round_robin")) != "round_robin":
+		return
+	if not _viewer_can_take_turn(snapshot):
+		return
+	var phase := str(snapshot.get("phase", "lobby"))
+	if phase != "playing" and phase != "settlement" and phase != "eating":
+		return
+	var next_name := _next_turn_participant_name(snapshot)
+	var is_playing := phase == "playing"
+	var label := "Redeem Cards and Pass Turn" if is_playing else ("Pass Turn" if next_name == "" else "Pass Turn to %s" % next_name)
+	_phase_controls.add_child(_button(label, func() -> void:
+		if is_playing:
+			_status_label.text = "Redeeming useful cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
+			RecipesClient.send_intent({"type": "redeem_all_and_pass_turn"})
+		else:
+			_status_label.text = "Passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
+			RecipesClient.send_intent({"type": "pass_turn"})
+	))
+
+
 func _can_switch_to_bot(snapshot: Dictionary, participant: Dictionary) -> bool:
 	if participant.is_empty():
 		return false
@@ -1473,7 +3343,7 @@ func _can_switch_to_bot(snapshot: Dictionary, participant: Dictionary) -> bool:
 		return false
 	if bool(participant.get("isHost", false)):
 		return false
-	return bool(_participant_by_id(snapshot, str(snapshot.get("viewerParticipantId", ""))).get("isHost", false))
+	return bool(snapshot.get("viewerCanUseHostControls", false))
 
 
 func _confirm_switch_to_bot(participant_id: String, participant_name: String) -> void:
@@ -1487,7 +3357,7 @@ func _confirm_switch_to_bot(participant_id: String, participant_name: String) ->
 func _on_confirm_switch_to_bot() -> void:
 	if _pending_bot_participant_id == "":
 		return
-	RecipesClient.send_intent({"type": "convert_to_bot", "participantId": _pending_bot_participant_id, "botType": "mixed"})
+	RecipesClient.send_host_intent({"type": "convert_to_bot", "participantId": _pending_bot_participant_id, "botType": "mixed"})
 	_pending_bot_participant_id = ""
 
 
@@ -1519,8 +3389,7 @@ func _voucher_summary_labels_for_participant(snapshot: Dictionary, participant_i
 		if str(location.get("type", "")) != "hand" or str(location.get("participantId", "")) != participant_id:
 			continue
 		var count := int(summary.get("count", 0))
-		var ingredient := _ingredient_display(snapshot, str(summary.get("ingredientId", "")))
-		labels.append("%s x%s" % [ingredient, count])
+		labels.append(_voucher_group_label(snapshot, str(summary.get("ingredientId", "")), count, true))
 	return labels
 
 
@@ -1743,7 +3612,7 @@ func _open_offers_label(snapshot: Dictionary, participant_id := "") -> String:
 		count += 1
 		lines.append("%s offers %s to %s for %s x%s." % [
 			_participant_name(snapshot, from_id),
-			_offer_cards_label(offer),
+			_offer_cards_label(snapshot, offer),
 			_participant_name(snapshot, to_id),
 			_ingredient_display(snapshot, str(requested.get("ingredientId", ""))),
 			int(requested.get("quantity", 1))
@@ -1789,10 +3658,11 @@ func _transaction_history_label(snapshot: Dictionary) -> String:
 	var transactions: Array = snapshot.get("transactionHistory", [])
 	if transactions.is_empty():
 		return "No successful transactions yet. Deposits, swaps, exchanges, redemptions, preparation, settlement, and eating will appear here."
-	var lines: Array[String] = ["Name | Action | Counterparty | Item out | Item back"]
+	var lines: Array[String] = ["Turn | Name | Action | Counterparty | Item out | Item back"]
 	for raw_transaction in transactions:
 		var transaction: Dictionary = raw_transaction
-		lines.append("%s | %s | %s | %s | %s" % [
+		lines.append("%s | %s | %s | %s | %s | %s" % [
+			transaction.get("turn", "?"),
 			transaction.get("name", "?"),
 			transaction.get("action", "?"),
 			transaction.get("counterparty", "?"),
@@ -1828,8 +3698,17 @@ func _prune_offer_selection(snapshot: Dictionary, hand: Array) -> void:
 		var target := _participant_by_id(snapshot, _selected_offer_target_id)
 		if target.is_empty() or not _participant_can_receive_offer(target):
 			_selected_offer_target_id = ""
-	if _selected_offer_card_id != "" and not _contains_voucher_id(hand, _selected_offer_card_id):
-		_selected_offer_card_id = ""
+	if _selected_offer_ingredient_id != "":
+		var available := false
+		for raw_voucher in hand:
+			var voucher: Dictionary = raw_voucher
+			if str(voucher.get("ingredientId", "")) == _selected_offer_ingredient_id and _voucher_has_stock(snapshot, voucher):
+				available = true
+				break
+		if not available:
+			_selected_offer_ingredient_id = ""
+	if _selected_offer_ingredient_id == "":
+		_selected_offer_ingredient_id = _default_offer_give_ingredient_id(snapshot, hand)
 
 
 func _participant_can_receive_offer(participant: Dictionary) -> bool:
@@ -1849,6 +3728,41 @@ func _offer_requested_ingredient_id(snapshot: Dictionary) -> String:
 	return str(target.get("ingredientId", ""))
 
 
+func _first_voucher_id_for_ingredient(snapshot: Dictionary, ingredient_id: String) -> String:
+	if ingredient_id == "":
+		return ""
+	for voucher in snapshot.get("ownHand", []):
+		if str(voucher.get("ingredientId", "")) == ingredient_id and _voucher_has_stock(snapshot, voucher):
+			return str(voucher.get("id", ""))
+	return ""
+
+
+func _default_offer_give_ingredient_id(snapshot: Dictionary, hand: Array) -> String:
+	var groups := _voucher_group_options(snapshot, hand, false, false, true)
+	if groups.is_empty():
+		return ""
+
+	var main_ingredient_id := _viewer_main_ingredient_id(snapshot)
+	if main_ingredient_id != "":
+		for raw_group in groups:
+			var group: Dictionary = raw_group
+			if str(group.get("ingredientId", "")) == main_ingredient_id and int(group.get("count", 0)) > 0:
+				return main_ingredient_id
+
+	var best_ingredient := ""
+	var best_count := -1
+	for raw_group in groups:
+		var group: Dictionary = raw_group
+		var ingredient_id := str(group.get("ingredientId", ""))
+		var count := int(group.get("count", 0))
+		if count <= 0:
+			continue
+		if count > best_count or (count == best_count and ingredient_id < best_ingredient):
+			best_count = count
+			best_ingredient = ingredient_id
+	return best_ingredient
+
+
 func _offer_request_label(snapshot: Dictionary, ingredient_id: String) -> String:
 	if ingredient_id == "":
 		return "Select a player first."
@@ -1858,19 +3772,30 @@ func _offer_request_label(snapshot: Dictionary, ingredient_id: String) -> String
 func _ingredient_display(snapshot: Dictionary, ingredient_id: String) -> String:
 	if ingredient_id == "":
 		return "Unknown"
+	if ingredient_id == "vegetables":
+		return "Veggies"
 	for ingredient in snapshot.get("ingredients", []):
 		if str(ingredient.get("id", "")) == ingredient_id:
 			return str(ingredient.get("name", ingredient_id.capitalize()))
 	return ingredient_id.capitalize()
 
 
-func _offer_cards_label(offer: Dictionary) -> String:
+func _offer_cards_label(snapshot: Dictionary, offer: Dictionary) -> String:
 	var offered: Array = offer.get("offeredVouchers", [])
 	if not offered.is_empty():
 		var labels: Array[String] = []
+		var by_ingredient: Dictionary = {}
 		for raw_voucher in offered:
 			var voucher: Dictionary = raw_voucher
-			labels.append(_voucher_label(voucher))
+			var ingredient_id := str(voucher.get("ingredientId", ""))
+			by_ingredient[ingredient_id] = int(by_ingredient.get(ingredient_id, 0)) + 1
+		for raw_key in by_ingredient.keys():
+			var key: String = str(raw_key)
+			var count: int = int(by_ingredient[raw_key])
+			if count <= 1:
+				labels.append(_ingredient_display(snapshot, key))
+			else:
+				labels.append("%s x%s" % [_ingredient_display(snapshot, key), count])
 		return ", ".join(labels)
 	var ids: Array = offer.get("offeredVoucherIds", [])
 	if ids.is_empty():
@@ -1886,7 +3811,7 @@ func _outgoing_offer_label(snapshot: Dictionary, offer: Dictionary) -> String:
 		int(requested.get("quantity", 1))
 	]
 	return "You offer %s to %s for %s." % [
-		_offer_cards_label(offer),
+		_offer_cards_label(snapshot, offer),
 		to_name,
 		wanted
 	]
@@ -1898,6 +3823,15 @@ func _active_count(snapshot: Dictionary) -> int:
 		if str(participant.get("role", "")) == "active":
 			count += 1
 	return count
+
+
+func _available_bot_participants(snapshot: Dictionary) -> Array:
+	var bots: Array = []
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) == "active" and str(participant.get("kind", "")) == "bot":
+			bots.append(participant)
+	return bots
 
 
 func _timer_label(snapshot: Dictionary) -> String:
@@ -1989,6 +3923,72 @@ func _format_food_parts(parts: Array) -> String:
 	return "\n".join(labels)
 
 
+func _voucher_group_options(snapshot: Dictionary, vouchers: Array, held_prefix := false, show_count := true, require_stock := false) -> Array:
+	var by_ingredient := {}
+	var order: Array[String] = []
+	for raw_voucher in vouchers:
+		var voucher: Dictionary = raw_voucher
+		if require_stock and not _voucher_has_stock(snapshot, voucher):
+			continue
+		var ingredient_id := str(voucher.get("ingredientId", ""))
+		if ingredient_id == "":
+			continue
+		if not by_ingredient.has(ingredient_id):
+			by_ingredient[ingredient_id] = {"ingredientId": ingredient_id, "voucherId": str(voucher.get("id", "")), "count": 0}
+			order.append(ingredient_id)
+		var group: Dictionary = by_ingredient[ingredient_id]
+		group["count"] = int(group.get("count", 0)) + 1
+	var options: Array = []
+	for ingredient_id in order:
+		var group: Dictionary = by_ingredient[ingredient_id]
+		var count := int(group.get("count", 0))
+		group["count"] = count
+		group["label"] = _voucher_group_label(snapshot, ingredient_id, count, held_prefix) if show_count else _voucher_resource_label(snapshot, ingredient_id, held_prefix)
+		options.append(group)
+	return options
+
+
+func _voucher_group_labels_from_groups(snapshot: Dictionary, groups: Array, held_prefix := false) -> Array[String]:
+	var labels: Array[String] = []
+	for raw_group in groups:
+		var group: Dictionary = raw_group
+		var count := int(group.get("count", 0))
+		if count <= 0:
+			continue
+		labels.append(_voucher_group_label(snapshot, str(group.get("ingredientId", "")), count, held_prefix))
+	return labels
+
+
+func _voucher_group_labels_from_vouchers(snapshot: Dictionary, vouchers: Array, held_prefix := false) -> Array[String]:
+	var labels: Array[String] = []
+	for raw_group in _voucher_group_options(snapshot, vouchers, held_prefix):
+		var group: Dictionary = raw_group
+		labels.append(str(group.get("label", "")))
+	return labels
+
+
+func _voucher_group_label(snapshot: Dictionary, ingredient_id: String, count: int, held_prefix := false) -> String:
+	var prefix := "Held " if held_prefix else ""
+	return "%s%s - %s" % [
+		prefix,
+		_ingredient_display(snapshot, ingredient_id),
+		_voucher_count_label(count)
+	]
+
+
+func _voucher_resource_label(snapshot: Dictionary, ingredient_id: String, held_prefix := false) -> String:
+	var prefix := "Held " if held_prefix else ""
+	return "%s%s Card" % [prefix, _ingredient_display(snapshot, ingredient_id)]
+
+
+func _ingredient_count_label(snapshot: Dictionary, ingredient_id: String, count: int) -> String:
+	return "%s: %s" % [_ingredient_display(snapshot, ingredient_id), count]
+
+
+func _voucher_count_label(count: int) -> String:
+	return "%s %s" % [count, "Card" if count == 1 else "Cards"]
+
+
 func _food_part_group_labels(groups: Array) -> Array[String]:
 	var labels: Array[String] = []
 	for raw_group in groups:
@@ -1996,8 +3996,7 @@ func _food_part_group_labels(groups: Array) -> Array[String]:
 		var count := int(group.get("count", 0))
 		if count <= 0:
 			continue
-		var unit := str(group.get("unitSingular", "part")) if count == 1 else str(group.get("unitPlural", "parts"))
-		labels.append("%s: %s %s" % [group.get("dishName", "Dish"), count, unit])
+		labels.append(_food_part_group_label(group, true))
 	return labels
 
 
@@ -2009,11 +4008,60 @@ func _food_part_group_count(groups: Array) -> int:
 	return count
 
 
+func _food_part_group_options(parts: Array) -> Array:
+	var by_dish := {}
+	var order: Array[String] = []
+	for raw_part in parts:
+		var part: Dictionary = raw_part
+		var dish_id := str(part.get("dishId", ""))
+		if dish_id == "":
+			continue
+		if not by_dish.has(dish_id):
+			by_dish[dish_id] = {
+				"dishId": dish_id,
+				"partId": str(part.get("id", "")),
+				"dishName": str(part.get("dishName", "Dish")),
+				"unitSingular": str(part.get("unitSingular", "part")),
+				"unitPlural": str(part.get("unitPlural", "parts")),
+				"count": 0
+			}
+			order.append(dish_id)
+		var group: Dictionary = by_dish[dish_id]
+		group["count"] = int(group.get("count", 0)) + 1
+	var options: Array = []
+	for dish_id in order:
+		var group: Dictionary = by_dish[dish_id]
+		group["label"] = _food_part_group_label(group, true)
+		options.append(group)
+	return options
+
+
+func _food_part_group_labels_from_parts(parts: Array) -> Array[String]:
+	var labels: Array[String] = []
+	for raw_group in _food_part_group_options(parts):
+		var group: Dictionary = raw_group
+		labels.append(str(group.get("label", "")))
+	return labels
+
+
+func _food_part_group_label(group: Dictionary, held_prefix := false) -> String:
+	var count := int(group.get("count", 0))
+	var prefix := "Held " if held_prefix else ""
+	return "%s%s x%s" % [prefix, VisualAssets.short_dish_name(str(group.get("dishName", "Dish"))), count]
+
+
 func _format_platter_assets(snapshot: Dictionary) -> String:
 	var labels: Array[String] = []
-	for raw_voucher in snapshot.get("platter", []):
-		var voucher: Dictionary = raw_voucher
-		labels.append(_voucher_label(voucher))
+	var platter_voucher_summary: Array = snapshot.get("platterVoucherGroups", [])
+	if not platter_voucher_summary.is_empty():
+		for raw_summary in platter_voucher_summary:
+			var summary: Dictionary = raw_summary
+			labels.append(_ingredient_count_label(snapshot, str(summary.get("ingredientId", "")), int(summary.get("count", 0))))
+	else:
+		var grouped_vouchers := _voucher_group_options(snapshot, snapshot.get("platter", []), false, false)
+		for raw_group in grouped_vouchers:
+			var group: Dictionary = raw_group
+			labels.append(_ingredient_count_label(snapshot, str(group.get("ingredientId", "")), int(group.get("count", 0))))
 	var food_group_labels := _food_part_group_labels(snapshot.get("platterFoodPartGroups", []))
 	if not food_group_labels.is_empty():
 		labels.append_array(food_group_labels)
@@ -2041,9 +4089,10 @@ func _platter_title(snapshot: Dictionary) -> String:
 
 func _format_inventory_assets(snapshot: Dictionary) -> String:
 	var labels: Array[String] = []
-	for raw_voucher in snapshot.get("ownHand", []):
-		var voucher: Dictionary = raw_voucher
-		labels.append(_voucher_label(voucher))
+	var hand_group_labels := _voucher_group_labels_from_groups(snapshot, snapshot.get("ownHandGroups", []), true)
+	if hand_group_labels.is_empty():
+		hand_group_labels = _voucher_group_labels_from_vouchers(snapshot, snapshot.get("ownHand", []), true)
+	labels.append_array(hand_group_labels)
 	var food_group_labels := _food_part_group_labels(snapshot.get("ownFoodPartGroups", []))
 	if not food_group_labels.is_empty():
 		labels.append_array(food_group_labels)
@@ -2059,14 +4108,10 @@ func _format_inventory_assets(snapshot: Dictionary) -> String:
 func _format_participant_inventory(snapshot: Dictionary, participant_id: String) -> String:
 	var labels: Array[String] = []
 	var hand := _hand_for_participant(snapshot, participant_id)
-	for raw_voucher in hand:
-		var voucher: Dictionary = raw_voucher
-		labels.append(_voucher_label(voucher))
+	labels.append_array(_voucher_group_labels_from_vouchers(snapshot, hand, true))
 	if hand.is_empty():
 		labels.append_array(_voucher_summary_labels_for_participant(snapshot, participant_id))
-	for raw_part in _food_parts_for_participant(snapshot, participant_id):
-		var part: Dictionary = raw_part
-		labels.append(_food_part_label(part))
+	labels.append_array(_food_part_group_labels_from_parts(_food_parts_for_participant(snapshot, participant_id)))
 	for summary_label in _food_part_summary_labels_for_participant(snapshot, participant_id):
 		labels.append(summary_label)
 	if labels.is_empty():
@@ -2076,12 +4121,12 @@ func _format_participant_inventory(snapshot: Dictionary, participant_id: String)
 
 func _inventory_asset_options(snapshot: Dictionary) -> Array:
 	var assets: Array = []
-	for raw_voucher in snapshot.get("ownHand", []):
-		var voucher: Dictionary = raw_voucher
-		assets.append(_asset_option("voucher", str(voucher.get("id", "")), _voucher_label(voucher)))
-	for raw_part in snapshot.get("ownFoodParts", []):
-		var part: Dictionary = raw_part
-		assets.append(_asset_option("dish_part", str(part.get("id", "")), _food_part_label(part)))
+	for raw_group in _voucher_group_options(snapshot, snapshot.get("ownHand", []), true, true, true):
+		var voucher_group: Dictionary = raw_group
+		assets.append(_asset_option("voucher", str(voucher_group.get("voucherId", "")), str(voucher_group.get("label", ""))))
+	for raw_part_group in _food_part_group_options(snapshot.get("ownFoodParts", [])):
+		var part_group: Dictionary = raw_part_group
+		assets.append(_asset_option("dish_part", str(part_group.get("partId", "")), str(part_group.get("label", ""))))
 	return assets
 
 
@@ -2118,6 +4163,8 @@ func _asset_label_by_key(assets: Array, key: String) -> String:
 
 
 func _open_select_popup(select_key: String, anchor: Control) -> void:
+	if _select_popup.visible:
+		_select_popup.hide()
 	_active_select_key = select_key
 	_refresh_active_select_popup(RecipesClient.latest_snapshot, true)
 	var width := maxi(280, int(anchor.size.x))
@@ -2128,6 +4175,18 @@ func _open_select_popup(select_key: String, anchor: Control) -> void:
 	var height: int = clampi(content_height + panel_padding, min_height, max_height)
 	var position := Vector2i(int(anchor.global_position.x), int(anchor.global_position.y + anchor.size.y + 4))
 	_select_popup.popup(Rect2i(position, Vector2i(width, height)))
+
+
+func _toggle_select_popup(select_key: String, anchor: Control) -> void:
+	var now_ms := Time.get_ticks_msec()
+	if _last_popup_close_key == select_key and now_ms - _last_popup_close_ms < 200:
+		_last_popup_close_key = ""
+		_last_popup_close_ms = -1
+		return
+	if _select_popup.visible and _active_select_key == select_key:
+		_select_popup.hide()
+		return
+	_open_select_popup(select_key, anchor)
 
 
 func _refresh_active_select_popup(snapshot: Dictionary, force := false) -> void:
@@ -2154,13 +4213,16 @@ func _select_options(snapshot: Dictionary, select_key: String) -> Array:
 	var options: Array = []
 	match select_key:
 		"platter_give":
-			for raw_voucher in snapshot.get("ownHand", []):
-				var voucher: Dictionary = raw_voucher
-				options.append({"label": _voucher_label(voucher), "value": str(voucher.get("id", ""))})
+			for raw_group in _voucher_group_options(snapshot, snapshot.get("ownHand", []), false, false, true):
+				var group: Dictionary = raw_group
+				options.append({"label": str(group.get("label", "")), "value": str(group.get("voucherId", ""))})
 		"platter_take":
-			for raw_voucher in snapshot.get("platter", []):
-				var voucher: Dictionary = raw_voucher
-				options.append({"label": _voucher_label(voucher), "value": str(voucher.get("id", ""))})
+			var selected_give_ingredient_id := _voucher_ingredient_for_id(snapshot.get("ownHand", []), _selected_hand_voucher_id)
+			for raw_group in _voucher_group_options(snapshot, snapshot.get("platter", []), false, false, true):
+				var group: Dictionary = raw_group
+				if selected_give_ingredient_id != "" and str(group.get("ingredientId", "")) == selected_give_ingredient_id:
+					continue
+				options.append({"label": str(group.get("label", "")), "value": str(group.get("voucherId", ""))})
 		"asset_give":
 			for raw_asset in _inventory_asset_options(snapshot):
 				var asset: Dictionary = raw_asset
@@ -2203,7 +4265,7 @@ func _contains_asset_key(assets: Array, key: String) -> bool:
 
 
 func _food_part_label(part: Dictionary) -> String:
-	var dish_name := str(part.get("dishName", "Dish"))
+	var dish_name := VisualAssets.short_dish_name(str(part.get("dishName", "Dish")))
 	var unit := str(part.get("unitSingular", "part"))
 	var part_id := str(part.get("id", ""))
 	var pieces := part_id.split("_")
@@ -2240,14 +4302,14 @@ func _food_part_summary_labels_for_participant(snapshot: Dictionary, participant
 		var location: Dictionary = summary.get("location", {})
 		if str(location.get("type", "")) != "inventory" or str(location.get("participantId", "")) != participant_id:
 			continue
-		labels.append(_food_part_summary_label(summary))
+		labels.append(_food_part_summary_label(summary, true))
 	return labels
 
 
-func _food_part_summary_label(summary: Dictionary) -> String:
+func _food_part_summary_label(summary: Dictionary, held_prefix := false) -> String:
 	var count := int(summary.get("count", 0))
-	var unit := str(summary.get("unitSingular", "part")) if count == 1 else str(summary.get("unitPlural", "parts"))
-	return "%s: %s %s" % [summary.get("dishName", "Dish"), count, unit]
+	var prefix := "Held " if held_prefix else ""
+	return "%s%s x%s" % [prefix, VisualAssets.short_dish_name(str(summary.get("dishName", "Dish"))), count]
 
 
 func _all_food_part_locations_label(snapshot: Dictionary) -> String:
@@ -2357,11 +4419,75 @@ func _unit_for_count(dish: Dictionary, count: int) -> String:
 	return str(dish.get("unitPlural", "parts"))
 
 
-func _prune_swap_selection(hand: Array, platter: Array) -> void:
+func _prune_swap_selection(snapshot: Dictionary, hand: Array, platter: Array) -> void:
 	if _selected_hand_voucher_id != "" and not _contains_voucher_id(hand, _selected_hand_voucher_id):
 		_selected_hand_voucher_id = ""
+	if _selected_hand_voucher_id == "":
+		_selected_hand_voucher_id = _default_swap_give_voucher_id(snapshot, hand, _voucher_ingredient_for_id(platter, _selected_platter_voucher_id))
 	if _selected_platter_voucher_id != "" and not _contains_voucher_id(platter, _selected_platter_voucher_id):
 		_selected_platter_voucher_id = ""
+	var selected_give_ingredient_id := _voucher_ingredient_for_id(hand, _selected_hand_voucher_id)
+	if _selected_platter_voucher_id != "":
+		var selected_take_ingredient_id := _voucher_ingredient_for_id(platter, _selected_platter_voucher_id)
+		if selected_take_ingredient_id != "" and selected_take_ingredient_id == selected_give_ingredient_id:
+			_selected_platter_voucher_id = ""
+
+
+func _viewer_main_ingredient_id(snapshot: Dictionary) -> String:
+	var viewer_id := str(snapshot.get("viewerParticipantId", ""))
+	if viewer_id == "":
+		viewer_id = str(snapshot.get("connectionParticipantId", ""))
+	if viewer_id == "":
+		return ""
+	var viewer := _participant_by_id(snapshot, viewer_id)
+	return str(viewer.get("ingredientId", ""))
+
+
+func _default_swap_give_voucher_id(snapshot: Dictionary, hand: Array, forbidden_ingredient_id := "") -> String:
+	if hand.is_empty():
+		return ""
+	var groups := _voucher_group_options(snapshot, hand, false, false, true)
+	if groups.is_empty():
+		return ""
+	var main_ingredient_id := _viewer_main_ingredient_id(snapshot)
+	if main_ingredient_id != "":
+		for raw_group in groups:
+			var group: Dictionary = raw_group
+			var group_ingredient_id := str(group.get("ingredientId", ""))
+			if group_ingredient_id != main_ingredient_id:
+				continue
+			if int(group.get("count", 0)) <= 0:
+				break
+			if forbidden_ingredient_id != "" and group_ingredient_id == forbidden_ingredient_id:
+				break
+			return str(group.get("voucherId", ""))
+
+	var best_id := ""
+	var best_count := -1
+	var best_ingredient := ""
+	for raw_group in groups:
+		var group: Dictionary = raw_group
+		var ingredient_id := str(group.get("ingredientId", ""))
+		var count := int(group.get("count", 0))
+		if ingredient_id == forbidden_ingredient_id:
+			continue
+		if count <= 0:
+			continue
+		if count > best_count or (count == best_count and ingredient_id < best_ingredient):
+			best_count = count
+			best_ingredient = ingredient_id
+			best_id = str(group.get("voucherId", ""))
+	return best_id
+
+
+func _voucher_ingredient_for_id(vouchers: Array, voucher_id: String) -> String:
+	if voucher_id == "":
+		return ""
+	for raw_voucher in vouchers:
+		var voucher: Dictionary = raw_voucher
+		if str(voucher.get("id", "")) == voucher_id:
+			return str(voucher.get("ingredientId", ""))
+	return ""
 
 
 func _contains_voucher_id(vouchers: Array, voucher_id: String) -> bool:
@@ -2380,6 +4506,32 @@ func _voucher_label_by_id(vouchers: Array, voucher_id: String) -> String:
 		if str(voucher.get("id", "")) == voucher_id:
 			return _voucher_label(voucher)
 	return "nothing selected"
+
+
+func _voucher_group_label_by_id(snapshot: Dictionary, vouchers: Array, voucher_id: String, show_count := true) -> String:
+	if voucher_id == "":
+		return "nothing selected"
+	for raw_voucher in vouchers:
+		var voucher: Dictionary = raw_voucher
+		if str(voucher.get("id", "")) != voucher_id:
+			continue
+		var ingredient_id := str(voucher.get("ingredientId", ""))
+		var count := 0
+		for raw_candidate in vouchers:
+			var candidate: Dictionary = raw_candidate
+			if str(candidate.get("ingredientId", "")) == ingredient_id:
+				count += 1
+		return _voucher_group_label(snapshot, ingredient_id, count) if show_count else _voucher_resource_label(snapshot, ingredient_id)
+	return "nothing selected"
+
+
+func _voucher_resource_label_by_id(snapshot: Dictionary, vouchers: Array, voucher_id: String) -> String:
+	if voucher_id == "":
+		return "nothing selected"
+	var ingredient_id := _voucher_ingredient_for_id(vouchers, voucher_id)
+	if ingredient_id == "":
+		return "nothing selected"
+	return _voucher_resource_label(snapshot, ingredient_id)
 
 
 func _voucher_label(voucher: Dictionary) -> String:
@@ -2413,12 +4565,33 @@ func _format_recipe(snapshot: Dictionary, recipe: Dictionary) -> String:
 
 func _add_recipe_view(root: VBoxContainer, snapshot: Dictionary, recipe: Dictionary) -> void:
 	if recipe.is_empty():
-		root.add_child(_wrapped_label("-"))
+		root.add_child(_wrapped_label(_dish_count_summary_label(snapshot)))
 		return
 	root.add_child(_wrapped_label(str(recipe.get("name", "Recipe"))))
 	for raw_requirement in recipe.get("requirements", []):
 		var requirement: Dictionary = raw_requirement
 		root.add_child(_recipe_requirement_row(snapshot, requirement))
+
+
+func _dish_count_summary_label(snapshot: Dictionary) -> String:
+	var target := int(snapshot.get("targetDishCount", 0))
+	var lines: Array[String] = ["Dishes made"]
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		var count := int(participant.get("dishCount", 0))
+		var suffix := ""
+		if target > 0:
+			suffix = "/%s" % target
+		lines.append("%s: %s%s" % [
+			str(participant.get("name", "Player")),
+			count,
+			suffix
+		])
+	if lines.size() == 1:
+		lines.append("No dishes made yet.")
+	return "\n".join(lines)
 
 
 func _recipe_requirement_row(snapshot: Dictionary, requirement: Dictionary) -> Control:

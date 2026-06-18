@@ -12,7 +12,7 @@ import {
   platterVoucherIds
 } from "../src/game.js";
 import { TableStore } from "../src/store.js";
-import type { Intent, Snapshot, SnapshotDelta, Table } from "../src/types.js";
+import type { Intent, Snapshot, SnapshotDelta, Table, TablePhase, TurnMode } from "../src/types.js";
 
 type NetworkProfile = "local" | "jitter" | "disconnect" | "bad";
 
@@ -45,6 +45,7 @@ interface SimulationOptions {
   maxDurationMs: number;
   suiteMaxDurationMs: number;
   seed: string;
+  turnMode: TurnMode;
 }
 
 interface AckMessage {
@@ -91,6 +92,9 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
     table = store.requireTable(host.tableCode);
     await Promise.all(clients.map((client) => client.connect()));
 
+    if (table.turnMode !== simulationOptions.turnMode) {
+      await sendIntent(host, { type: "set_turn_mode", mode: simulationOptions.turnMode });
+    }
     if (simulationOptions.dishGoal !== table.targetDishCount) {
       await sendIntent(host, { type: "set_target_dish_count", count: simulationOptions.dishGoal });
     }
@@ -129,6 +133,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
       profile: simulationOptions.profile,
       playerCount: simulationOptions.playerCount,
       dishGoal: simulationOptions.dishGoal,
+      turnMode: simulationOptions.turnMode,
       phase: table?.phase ?? "unknown",
       totalIntents,
       totalTurns: table?.turn ?? 0,
@@ -145,6 +150,13 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
   }
 
   async function sendIntent(client: SimClient, intent: Intent, allowFailure = false): Promise<void> {
+    if (shouldAutoAdvanceTurn(intent)) {
+      await advanceToParticipantTurn(client.participantId);
+    }
+    await sendIntentDirect(client, intent, allowFailure);
+  }
+
+  async function sendIntentDirect(client: SimClient, intent: Intent, allowFailure = false): Promise<void> {
     lastStage = `${client.name} ${intent.type}`;
     checkDeadline(lastStage);
     totalIntents += 1;
@@ -172,6 +184,23 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
     const retryResult = await client.send(intent, false);
     if (retryResult !== "ok") {
       throw new Error(`Intent failed for ${client.name}: ${JSON.stringify(intent)} (${retryResult}; ${client.lastAckError})`);
+    }
+  }
+
+  async function advanceToParticipantTurn(participantId: string): Promise<void> {
+    const table = currentTable();
+    if (table.turnMode !== "round_robin" || !phaseUsesTurnGate(table.phase)) {
+      return;
+    }
+    let guard = 0;
+    while (currentTable().currentTurnParticipantId && currentTable().currentTurnParticipantId !== participantId) {
+      guard += 1;
+      if (guard > activeParticipants(currentTable()).length * 4 + 10) {
+        throw new Error(`Could not advance round-robin turn to ${participantId}.`);
+      }
+      const currentParticipantId = currentTable().currentTurnParticipantId;
+      const currentClient = clientFor(clients, currentParticipantId);
+      await sendIntentDirect(currentClient, { type: "pass_turn" });
     }
   }
 
@@ -346,6 +375,7 @@ interface CompactGameReport {
   profile: NetworkProfile;
   playerCount: number;
   dishGoal: number;
+  turnMode: TurnMode;
   phase: string;
   totalIntents: number;
   totalTurns: number;
@@ -402,6 +432,7 @@ async function runSimulationSuite(baseUrl: string, options: SimulationOptions) {
   return {
     ok: failedGames.length === 0 && incompleteGames === 0 && !suiteTimedOut,
     profile: options.profile,
+    turnMode: options.turnMode,
     gameCount: options.gameCount,
     concurrency: options.concurrency,
     playerMin: options.playerMin,
@@ -440,6 +471,7 @@ function compactGameReport(index: number, report: SimulationReport): CompactGame
     lastStage: report.lastStage,
     tableCode: report.tableCode,
     profile: report.profile,
+    turnMode: report.turnMode,
     playerCount: report.playerCount,
     dishGoal: report.dishGoal,
     phase: report.phase,
@@ -463,6 +495,30 @@ function playerCountForGame(options: SimulationOptions, index: number): number {
   }
   const width = options.playerMax - options.playerMin + 1;
   return options.playerMin + (index % width);
+}
+
+function phaseUsesTurnGate(phase: TablePhase): boolean {
+  return phase === "playing" || phase === "settlement" || phase === "eating";
+}
+
+function shouldAutoAdvanceTurn(intent: Intent): boolean {
+  switch (intent.type) {
+    case "platter_swap":
+    case "platter_swap_ingredient":
+    case "platter_asset_swap":
+    case "platter_asset_swap_aggregate":
+    case "create_offer":
+    case "respond_offer":
+    case "cancel_offer":
+    case "place_voucher":
+    case "redeem_voucher":
+    case "redeem_from_hand":
+    case "prepare":
+    case "bite":
+      return true;
+    default:
+      return false;
+  }
 }
 
 class SimClient {
@@ -746,11 +802,15 @@ function parseOptions(args: string[]): SimulationOptions {
   if (!["local", "jitter", "disconnect", "bad"].includes(profile)) {
     throw new Error(`Unknown profile ${profile}.`);
   }
+  const turnMode = getValue("turn-mode", process.env.SIM_TURN_MODE ?? "market") as TurnMode;
+  if (!["round_robin", "market"].includes(turnMode)) {
+    throw new Error(`Unknown turn mode ${turnMode}.`);
+  }
   const gameCount = parsePositiveInt(getValue("games", process.env.SIM_GAMES ?? "1"), "Simulation game count");
   const explicitPlayers = hasValue("players") || Boolean(process.env.SIM_PLAYERS);
-  const playerCount = parsePlayerCount(getValue("players", process.env.SIM_PLAYERS ?? "7"));
-  const defaultPlayerMin = explicitPlayers ? String(playerCount) : gameCount > 1 ? "7" : String(playerCount);
-  const defaultPlayerMax = explicitPlayers ? String(playerCount) : gameCount > 1 ? "20" : String(playerCount);
+  const playerCount = parsePlayerCount(getValue("players", process.env.SIM_PLAYERS ?? "8"));
+  const defaultPlayerMin = explicitPlayers ? String(playerCount) : "8";
+  const defaultPlayerMax = explicitPlayers ? String(playerCount) : "8";
   const playerMin = parsePlayerCount(getValue("player-min", process.env.SIM_PLAYER_MIN ?? defaultPlayerMin));
   const playerMax = parsePlayerCount(getValue("player-max", process.env.SIM_PLAYER_MAX ?? defaultPlayerMax));
   if (playerMin > playerMax) {
@@ -775,14 +835,15 @@ function parseOptions(args: string[]): SimulationOptions {
     maxIntents: Number.parseInt(getValue("max-intents", process.env.SIM_MAX_INTENTS ?? "5000"), 10),
     maxDurationMs,
     suiteMaxDurationMs,
-    seed: getValue("seed", process.env.SIM_SEED ?? "simulation")
+    seed: getValue("seed", process.env.SIM_SEED ?? "simulation"),
+    turnMode
   };
 }
 
 function parsePlayerCount(value: string): number {
   const playerCount = Number.parseInt(value, 10);
-  if (!Number.isInteger(playerCount) || playerCount < 7 || playerCount > 20) {
-    throw new Error("Simulation player count must be between 7 and 20.");
+  if (!Number.isInteger(playerCount) || playerCount !== 8) {
+    throw new Error("Simulation player count must be 8 for the fixed-seat MVP.");
   }
   return playerCount;
 }
@@ -882,6 +943,7 @@ function singleSummary(report: SimulationReport): Record<string, unknown> {
     lastStage: report.lastStage,
     tableCode: report.tableCode,
     profile: report.profile,
+    turnMode: report.turnMode,
     playerCount: report.playerCount,
     phase: report.phase,
     totalIntents: report.totalIntents,
@@ -898,6 +960,7 @@ function suiteSummary(suite: Awaited<ReturnType<typeof runSimulationSuite>>): Re
   return {
     ok: suite.ok,
     profile: suite.profile,
+    turnMode: suite.turnMode,
     gameCount: suite.gameCount,
     concurrency: suite.concurrency,
     playerMin: suite.playerMin,

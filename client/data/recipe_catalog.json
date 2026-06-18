@@ -1,0 +1,4479 @@
+{
+  "generatorVersion": "4",
+  "ingredients": [
+    {
+      "id": "cheese",
+      "name": "Cheese",
+      "description": "Melts, toppings, fillings, casseroles",
+      "imagePath": "art/ingredients/cheese_64.png"
+    },
+    {
+      "id": "flour",
+      "name": "Flour",
+      "description": "Bread, tortillas, pancakes, dumplings, thickening",
+      "imagePath": "art/ingredients/flour_open_sack_64.png"
+    },
+    {
+      "id": "herbs",
+      "name": "Herbs",
+      "description": "Basil, parsley, cilantro, oregano, thyme",
+      "imagePath": "art/ingredients/herbs_64.png"
+    },
+    {
+      "id": "vegetables",
+      "name": "Vegetables",
+      "description": "Onions, peppers, carrots, tomatoes, spinach, etc.",
+      "imagePath": "art/ingredients/vegetables_64.png"
+    },
+    {
+      "id": "rice",
+      "name": "Rice",
+      "description": "Bowls, fried rice, casseroles, sides",
+      "imagePath": "art/ingredients/rice_64.png"
+    },
+    {
+      "id": "beans",
+      "name": "Beans",
+      "description": "Chili, tacos, stews, bowls, dips",
+      "imagePath": "art/ingredients/beans_64.png"
+    },
+    {
+      "id": "spices",
+      "name": "Spices",
+      "description": "Salt, pepper, cumin, paprika, chili powder, curry powder",
+      "imagePath": "art/ingredients/spices_64.png"
+    },
+    {
+      "id": "eggs",
+      "name": "Eggs",
+      "description": "Breakfasts, fried rice, baking, binders, toppings",
+      "imagePath": "art/ingredients/eggs_64.png"
+    }
+  ],
+  "dishTemplates": [
+    {
+      "templateId": "cheese_initial",
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "slot": "initial",
+      "dishName": "Cheese Frittata",
+      "dishFamily": "egg bake",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "cheese",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices",
+        "flour"
+      ]
+    },
+    {
+      "templateId": "cheese_followup_1",
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "slot": "followup_1",
+      "dishName": "Cheese Quesadilla",
+      "dishFamily": "flatbread",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "cheese",
+        "flour",
+        "vegetables",
+        "beans",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "cheese_followup_2",
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "slot": "followup_2",
+      "dishName": "Cheesy Rice Bake",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "cheese",
+        "rice",
+        "vegetables",
+        "herbs"
+      ]
+    },
+    {
+      "templateId": "cheese_followup_3",
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "slot": "followup_3",
+      "dishName": "Bean Enchilada Bake",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "cheese",
+        "beans",
+        "flour",
+        "vegetables",
+        "spices",
+        "herbs"
+      ]
+    },
+    {
+      "templateId": "flour_initial",
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "slot": "initial",
+      "dishName": "Vegetable Flatbread",
+      "dishFamily": "flatbread",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "flour",
+        "vegetables",
+        "herbs",
+        "rice",
+        "beans",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "flour_followup_1",
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "slot": "followup_1",
+      "dishName": "Bean Pupusa",
+      "dishFamily": "stuffed bread",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "flour",
+        "beans",
+        "cheese",
+        "vegetables",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "flour_followup_2",
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "slot": "followup_2",
+      "dishName": "Herb Dumplings",
+      "dishFamily": "dumplings",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "flour",
+        "herbs",
+        "vegetables",
+        "eggs"
+      ]
+    },
+    {
+      "templateId": "flour_followup_3",
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "slot": "followup_3",
+      "dishName": "Rice Pancakes",
+      "dishFamily": "pancakes",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "flour",
+        "rice",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "herbs_initial",
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "slot": "initial",
+      "dishName": "Herb Rice Bowl",
+      "dishFamily": "rice bowl",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "realIngredientIds": [
+        "herbs",
+        "eggs",
+        "cheese",
+        "vegetables",
+        "rice",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "herbs_followup_1",
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "slot": "followup_1",
+      "dishName": "Green Rice",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "realIngredientIds": [
+        "herbs",
+        "rice",
+        "vegetables",
+        "cheese",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "herbs_followup_2",
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "slot": "followup_2",
+      "dishName": "Bean Herb Salad",
+      "dishFamily": "salad",
+      "partUnitSingular": "cup",
+      "partUnitPlural": "cups",
+      "realIngredientIds": [
+        "herbs",
+        "beans",
+        "vegetables",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "herbs_followup_3",
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "slot": "followup_3",
+      "dishName": "Herb Casserole",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "herbs",
+        "vegetables",
+        "cheese",
+        "flour",
+        "eggs",
+        "rice"
+      ]
+    },
+    {
+      "templateId": "vegetables_initial",
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "slot": "initial",
+      "dishName": "Veg Fried Rice",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "realIngredientIds": [
+        "vegetables",
+        "rice",
+        "eggs",
+        "spices",
+        "cheese",
+        "beans"
+      ]
+    },
+    {
+      "templateId": "vegetables_followup_1",
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "slot": "followup_1",
+      "dishName": "Vegetable Chili",
+      "dishFamily": "chili",
+      "partUnitSingular": "cup",
+      "partUnitPlural": "cups",
+      "realIngredientIds": [
+        "beans",
+        "vegetables",
+        "spices",
+        "cheese",
+        "herbs"
+      ]
+    },
+    {
+      "templateId": "vegetables_followup_2",
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "slot": "followup_2",
+      "dishName": "Veggie Omelet",
+      "dishFamily": "omelet",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "cheese",
+        "herbs",
+        "vegetables",
+        "eggs"
+      ]
+    },
+    {
+      "templateId": "vegetables_followup_3",
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "slot": "followup_3",
+      "dishName": "Vegetable Pot Pie",
+      "dishFamily": "pie",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "vegetables",
+        "flour",
+        "cheese",
+        "herbs",
+        "rice",
+        "beans"
+      ]
+    },
+    {
+      "templateId": "rice_initial",
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "slot": "initial",
+      "dishName": "Fried Rice",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "realIngredientIds": [
+        "rice",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices",
+        "beans"
+      ]
+    },
+    {
+      "templateId": "rice_followup_1",
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "slot": "followup_1",
+      "dishName": "Rice Bean Bowl",
+      "dishFamily": "rice bowl",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "realIngredientIds": [
+        "rice",
+        "beans",
+        "vegetables",
+        "spices",
+        "cheese"
+      ]
+    },
+    {
+      "templateId": "rice_followup_2",
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "slot": "followup_2",
+      "dishName": "Rice Cakes",
+      "dishFamily": "rice cake",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "rice",
+        "cheese",
+        "eggs",
+        "herbs"
+      ]
+    },
+    {
+      "templateId": "rice_followup_3",
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "slot": "followup_3",
+      "dishName": "Rice Casserole",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "rice",
+        "vegetables",
+        "cheese",
+        "flour",
+        "herbs",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "beans_initial",
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "slot": "initial",
+      "dishName": "Bean Shakshuka",
+      "dishFamily": "bean stew",
+      "partUnitSingular": "cup",
+      "partUnitPlural": "cups",
+      "realIngredientIds": [
+        "beans",
+        "vegetables",
+        "spices",
+        "eggs",
+        "herbs",
+        "cheese"
+      ]
+    },
+    {
+      "templateId": "beans_followup_1",
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "slot": "followup_1",
+      "dishName": "Bean Burrito",
+      "dishFamily": "wrap",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "beans",
+        "flour",
+        "cheese",
+        "vegetables",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "beans_followup_2",
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "slot": "followup_2",
+      "dishName": "Bean Dip",
+      "dishFamily": "dip",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "realIngredientIds": [
+        "beans",
+        "cheese",
+        "spices",
+        "herbs"
+      ]
+    },
+    {
+      "templateId": "beans_followup_3",
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "slot": "followup_3",
+      "dishName": "Bean Egg Skillet",
+      "dishFamily": "skillet",
+      "partUnitSingular": "serving",
+      "partUnitPlural": "servings",
+      "realIngredientIds": [
+        "beans",
+        "eggs",
+        "vegetables",
+        "cheese",
+        "flour",
+        "herbs"
+      ]
+    },
+    {
+      "templateId": "spices_initial",
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "slot": "initial",
+      "dishName": "Spiced Rice Pilaf",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "realIngredientIds": [
+        "spices",
+        "rice",
+        "vegetables",
+        "herbs",
+        "beans",
+        "cheese"
+      ]
+    },
+    {
+      "templateId": "spices_followup_1",
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "slot": "followup_1",
+      "dishName": "Bean Tacos",
+      "dishFamily": "tacos",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "spices",
+        "beans",
+        "flour",
+        "vegetables",
+        "cheese"
+      ]
+    },
+    {
+      "templateId": "spices_followup_2",
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "slot": "followup_2",
+      "dishName": "Masala Omelet",
+      "dishFamily": "omelet",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "spices",
+        "eggs",
+        "vegetables",
+        "herbs"
+      ]
+    },
+    {
+      "templateId": "spices_followup_3",
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "slot": "followup_3",
+      "dishName": "Spiced Pancakes",
+      "dishFamily": "pancakes",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "spices",
+        "flour",
+        "eggs",
+        "vegetables",
+        "rice",
+        "beans"
+      ]
+    },
+    {
+      "templateId": "eggs_initial",
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "slot": "initial",
+      "dishName": "Breakfast Burrito",
+      "dishFamily": "wrap",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "realIngredientIds": [
+        "eggs",
+        "flour",
+        "cheese",
+        "vegetables",
+        "beans",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "eggs_followup_1",
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "slot": "followup_1",
+      "dishName": "Egg Fried Rice",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "realIngredientIds": [
+        "eggs",
+        "rice",
+        "vegetables",
+        "herbs",
+        "spices"
+      ]
+    },
+    {
+      "templateId": "eggs_followup_2",
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "slot": "followup_2",
+      "dishName": "Cheese Omelet",
+      "dishFamily": "omelet",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "eggs",
+        "cheese",
+        "herbs",
+        "vegetables"
+      ]
+    },
+    {
+      "templateId": "eggs_followup_3",
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "slot": "followup_3",
+      "dishName": "Egg Casserole",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "realIngredientIds": [
+        "eggs",
+        "cheese",
+        "vegetables",
+        "flour",
+        "rice",
+        "beans"
+      ]
+    }
+  ],
+  "configurations": [
+    {
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "ingredients": [
+        {
+          "id": "cheese",
+          "name": "Cheese",
+          "description": "Melts, toppings, fillings, casseroles",
+          "imagePath": "art/ingredients/cheese_64.png"
+        },
+        {
+          "id": "flour",
+          "name": "Flour",
+          "description": "Bread, tortillas, pancakes, dumplings, thickening",
+          "imagePath": "art/ingredients/flour_open_sack_64.png"
+        },
+        {
+          "id": "herbs",
+          "name": "Herbs",
+          "description": "Basil, parsley, cilantro, oregano, thyme",
+          "imagePath": "art/ingredients/herbs_64.png"
+        },
+        {
+          "id": "vegetables",
+          "name": "Vegetables",
+          "description": "Onions, peppers, carrots, tomatoes, spinach, etc.",
+          "imagePath": "art/ingredients/vegetables_64.png"
+        },
+        {
+          "id": "rice",
+          "name": "Rice",
+          "description": "Bowls, fried rice, casseroles, sides",
+          "imagePath": "art/ingredients/rice_64.png"
+        },
+        {
+          "id": "beans",
+          "name": "Beans",
+          "description": "Chili, tacos, stews, bowls, dips",
+          "imagePath": "art/ingredients/beans_64.png"
+        },
+        {
+          "id": "spices",
+          "name": "Spices",
+          "description": "Salt, pepper, cumin, paprika, chili powder, curry powder",
+          "imagePath": "art/ingredients/spices_64.png"
+        },
+        {
+          "id": "eggs",
+          "name": "Eggs",
+          "description": "Breakfasts, fried rice, baking, binders, toppings",
+          "imagePath": "art/ingredients/eggs_64.png"
+        }
+      ],
+      "requiredItemsPerRecipe": 6,
+      "minDistinctIngredients": 4,
+      "maxDistinctIngredients": 6,
+      "recipesPerIngredient": 4
+    }
+  ],
+  "recipes": [
+    {
+      "recipeId": "players_8_cheese_initial",
+      "templateId": "cheese_initial",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "initial",
+      "ownerIngredientId": "cheese",
+      "ownerIngredientName": "Cheese",
+      "dishName": "Cheese Frittata",
+      "dishFamily": "egg bake",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "cheese",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices",
+        "flour"
+      ],
+      "matchedRealIngredientIds": [
+        "cheese",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices",
+        "flour"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_cheese_initial",
+          "position": 1,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_initial",
+          "position": 2,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_initial",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_initial",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_initial",
+          "position": 5,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_initial",
+          "position": 6,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_cheese_followup_1",
+      "templateId": "cheese_followup_1",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_1",
+      "ownerIngredientId": "cheese",
+      "ownerIngredientName": "Cheese",
+      "dishName": "Cheese Quesadilla",
+      "dishFamily": "flatbread",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 5,
+      "quantityShape": "one_double_four_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "cheese",
+        "flour",
+        "vegetables",
+        "beans",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "cheese",
+        "flour",
+        "vegetables",
+        "beans",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_cheese_followup_1",
+          "position": 1,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_cheese_followup_1",
+          "position": 2,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_1",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_1",
+          "position": 4,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_1",
+          "position": 5,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_cheese_followup_2",
+      "templateId": "cheese_followup_2",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_2",
+      "ownerIngredientId": "cheese",
+      "ownerIngredientName": "Cheese",
+      "dishName": "Cheesy Rice Bake",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 4,
+      "quantityShape": "two_doubles_two_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "cheese",
+        "rice",
+        "vegetables",
+        "herbs"
+      ],
+      "matchedRealIngredientIds": [
+        "cheese",
+        "rice",
+        "vegetables",
+        "herbs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_cheese_followup_2",
+          "position": 1,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_cheese_followup_2",
+          "position": 2,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_cheese_followup_2",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_2",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_cheese_followup_3",
+      "templateId": "cheese_followup_3",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_3",
+      "ownerIngredientId": "cheese",
+      "ownerIngredientName": "Cheese",
+      "dishName": "Bean Enchilada Bake",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "cheese",
+        "beans",
+        "flour",
+        "vegetables",
+        "spices",
+        "herbs"
+      ],
+      "matchedRealIngredientIds": [
+        "cheese",
+        "beans",
+        "flour",
+        "vegetables",
+        "spices",
+        "herbs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_cheese_followup_3",
+          "position": 1,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_3",
+          "position": 2,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_3",
+          "position": 3,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_3",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_3",
+          "position": 5,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_cheese_followup_3",
+          "position": 6,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_flour_initial",
+      "templateId": "flour_initial",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "initial",
+      "ownerIngredientId": "flour",
+      "ownerIngredientName": "Flour",
+      "dishName": "Vegetable Flatbread",
+      "dishFamily": "flatbread",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "flour",
+        "vegetables",
+        "herbs",
+        "rice",
+        "beans",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "flour",
+        "vegetables",
+        "herbs",
+        "rice",
+        "beans",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_flour_initial",
+          "position": 1,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_initial",
+          "position": 2,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_initial",
+          "position": 3,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_initial",
+          "position": 4,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_initial",
+          "position": 5,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_initial",
+          "position": 6,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_flour_followup_1",
+      "templateId": "flour_followup_1",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_1",
+      "ownerIngredientId": "flour",
+      "ownerIngredientName": "Flour",
+      "dishName": "Bean Pupusa",
+      "dishFamily": "stuffed bread",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 5,
+      "quantityShape": "one_double_four_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "flour",
+        "beans",
+        "cheese",
+        "vegetables",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "flour",
+        "beans",
+        "cheese",
+        "vegetables",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_flour_followup_1",
+          "position": 1,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_flour_followup_1",
+          "position": 2,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_1",
+          "position": 3,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_1",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_1",
+          "position": 5,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_flour_followup_2",
+      "templateId": "flour_followup_2",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_2",
+      "ownerIngredientId": "flour",
+      "ownerIngredientName": "Flour",
+      "dishName": "Herb Dumplings",
+      "dishFamily": "dumplings",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 4,
+      "quantityShape": "two_doubles_two_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "flour",
+        "herbs",
+        "vegetables",
+        "eggs"
+      ],
+      "matchedRealIngredientIds": [
+        "flour",
+        "herbs",
+        "vegetables",
+        "eggs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_flour_followup_2",
+          "position": 1,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_flour_followup_2",
+          "position": 2,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_flour_followup_2",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_2",
+          "position": 4,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_flour_followup_3",
+      "templateId": "flour_followup_3",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_3",
+      "ownerIngredientId": "flour",
+      "ownerIngredientName": "Flour",
+      "dishName": "Rice Pancakes",
+      "dishFamily": "pancakes",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "flour",
+        "rice",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "flour",
+        "rice",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_flour_followup_3",
+          "position": 1,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_3",
+          "position": 2,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_3",
+          "position": 3,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_3",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_3",
+          "position": 5,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_flour_followup_3",
+          "position": 6,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_herbs_initial",
+      "templateId": "herbs_initial",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "initial",
+      "ownerIngredientId": "herbs",
+      "ownerIngredientName": "Herbs",
+      "dishName": "Herb Rice Bowl",
+      "dishFamily": "rice bowl",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "herbs",
+        "eggs",
+        "cheese",
+        "vegetables",
+        "rice",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "herbs",
+        "eggs",
+        "cheese",
+        "vegetables",
+        "rice",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_herbs_initial",
+          "position": 1,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_initial",
+          "position": 2,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_initial",
+          "position": 3,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_initial",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_initial",
+          "position": 5,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_initial",
+          "position": 6,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_herbs_followup_1",
+      "templateId": "herbs_followup_1",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_1",
+      "ownerIngredientId": "herbs",
+      "ownerIngredientName": "Herbs",
+      "dishName": "Green Rice",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 5,
+      "quantityShape": "one_double_four_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "herbs",
+        "rice",
+        "vegetables",
+        "cheese",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "herbs",
+        "rice",
+        "vegetables",
+        "cheese",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_herbs_followup_1",
+          "position": 1,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_herbs_followup_1",
+          "position": 2,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_1",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_1",
+          "position": 4,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_1",
+          "position": 5,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_herbs_followup_2",
+      "templateId": "herbs_followup_2",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_2",
+      "ownerIngredientId": "herbs",
+      "ownerIngredientName": "Herbs",
+      "dishName": "Bean Herb Salad",
+      "dishFamily": "salad",
+      "partUnitSingular": "cup",
+      "partUnitPlural": "cups",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 4,
+      "quantityShape": "two_doubles_two_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "herbs",
+        "beans",
+        "vegetables",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "herbs",
+        "beans",
+        "vegetables",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_herbs_followup_2",
+          "position": 1,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_herbs_followup_2",
+          "position": 2,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_herbs_followup_2",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_2",
+          "position": 4,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_herbs_followup_3",
+      "templateId": "herbs_followup_3",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_3",
+      "ownerIngredientId": "herbs",
+      "ownerIngredientName": "Herbs",
+      "dishName": "Herb Casserole",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "herbs",
+        "vegetables",
+        "cheese",
+        "flour",
+        "eggs",
+        "rice"
+      ],
+      "matchedRealIngredientIds": [
+        "herbs",
+        "vegetables",
+        "cheese",
+        "flour",
+        "eggs",
+        "rice"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_herbs_followup_3",
+          "position": 1,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_3",
+          "position": 2,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_3",
+          "position": 3,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_3",
+          "position": 4,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_3",
+          "position": 5,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_herbs_followup_3",
+          "position": 6,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_vegetables_initial",
+      "templateId": "vegetables_initial",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "initial",
+      "ownerIngredientId": "vegetables",
+      "ownerIngredientName": "Vegetables",
+      "dishName": "Veg Fried Rice",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "vegetables",
+        "rice",
+        "eggs",
+        "spices",
+        "cheese",
+        "beans"
+      ],
+      "matchedRealIngredientIds": [
+        "vegetables",
+        "rice",
+        "eggs",
+        "spices",
+        "cheese",
+        "beans"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_vegetables_initial",
+          "position": 1,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_initial",
+          "position": 2,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_initial",
+          "position": 3,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_initial",
+          "position": 4,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_initial",
+          "position": 5,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_initial",
+          "position": 6,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_1",
+      "templateId": "vegetables_followup_1",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_1",
+      "ownerIngredientId": "vegetables",
+      "ownerIngredientName": "Vegetables",
+      "dishName": "Vegetable Chili",
+      "dishFamily": "chili",
+      "partUnitSingular": "cup",
+      "partUnitPlural": "cups",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 5,
+      "quantityShape": "one_double_four_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "beans",
+        "vegetables",
+        "spices",
+        "cheese",
+        "herbs"
+      ],
+      "matchedRealIngredientIds": [
+        "beans",
+        "vegetables",
+        "spices",
+        "cheese",
+        "herbs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_vegetables_followup_1",
+          "position": 1,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_1",
+          "position": 2,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_1",
+          "position": 3,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_1",
+          "position": 4,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_1",
+          "position": 5,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_2",
+      "templateId": "vegetables_followup_2",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_2",
+      "ownerIngredientId": "vegetables",
+      "ownerIngredientName": "Vegetables",
+      "dishName": "Veggie Omelet",
+      "dishFamily": "omelet",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 4,
+      "quantityShape": "two_doubles_two_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "cheese",
+        "herbs",
+        "vegetables",
+        "eggs"
+      ],
+      "matchedRealIngredientIds": [
+        "cheese",
+        "herbs",
+        "vegetables",
+        "eggs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_vegetables_followup_2",
+          "position": 1,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_2",
+          "position": 2,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_2",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_2",
+          "position": 4,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_3",
+      "templateId": "vegetables_followup_3",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_3",
+      "ownerIngredientId": "vegetables",
+      "ownerIngredientName": "Vegetables",
+      "dishName": "Vegetable Pot Pie",
+      "dishFamily": "pie",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "vegetables",
+        "flour",
+        "cheese",
+        "herbs",
+        "rice",
+        "beans"
+      ],
+      "matchedRealIngredientIds": [
+        "vegetables",
+        "flour",
+        "cheese",
+        "herbs",
+        "rice",
+        "beans"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_vegetables_followup_3",
+          "position": 1,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_3",
+          "position": 2,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_3",
+          "position": 3,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_3",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_3",
+          "position": 5,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_vegetables_followup_3",
+          "position": 6,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_rice_initial",
+      "templateId": "rice_initial",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "initial",
+      "ownerIngredientId": "rice",
+      "ownerIngredientName": "Rice",
+      "dishName": "Fried Rice",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "rice",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices",
+        "beans"
+      ],
+      "matchedRealIngredientIds": [
+        "rice",
+        "eggs",
+        "vegetables",
+        "herbs",
+        "spices",
+        "beans"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_rice_initial",
+          "position": 1,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_initial",
+          "position": 2,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_initial",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_initial",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_initial",
+          "position": 5,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_initial",
+          "position": 6,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_rice_followup_1",
+      "templateId": "rice_followup_1",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_1",
+      "ownerIngredientId": "rice",
+      "ownerIngredientName": "Rice",
+      "dishName": "Rice Bean Bowl",
+      "dishFamily": "rice bowl",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 5,
+      "quantityShape": "one_double_four_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "rice",
+        "beans",
+        "vegetables",
+        "spices",
+        "cheese"
+      ],
+      "matchedRealIngredientIds": [
+        "rice",
+        "beans",
+        "vegetables",
+        "spices",
+        "cheese"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_rice_followup_1",
+          "position": 1,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_rice_followup_1",
+          "position": 2,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_1",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_1",
+          "position": 4,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_1",
+          "position": 5,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_rice_followup_2",
+      "templateId": "rice_followup_2",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_2",
+      "ownerIngredientId": "rice",
+      "ownerIngredientName": "Rice",
+      "dishName": "Rice Cakes",
+      "dishFamily": "rice cake",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 4,
+      "quantityShape": "two_doubles_two_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "rice",
+        "cheese",
+        "eggs",
+        "herbs"
+      ],
+      "matchedRealIngredientIds": [
+        "rice",
+        "cheese",
+        "eggs",
+        "herbs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_rice_followup_2",
+          "position": 1,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_rice_followup_2",
+          "position": 2,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_rice_followup_2",
+          "position": 3,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_2",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_rice_followup_3",
+      "templateId": "rice_followup_3",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_3",
+      "ownerIngredientId": "rice",
+      "ownerIngredientName": "Rice",
+      "dishName": "Rice Casserole",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "rice",
+        "vegetables",
+        "cheese",
+        "flour",
+        "herbs",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "rice",
+        "vegetables",
+        "cheese",
+        "flour",
+        "herbs",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_rice_followup_3",
+          "position": 1,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_3",
+          "position": 2,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_3",
+          "position": 3,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_3",
+          "position": 4,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_3",
+          "position": 5,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_rice_followup_3",
+          "position": 6,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_beans_initial",
+      "templateId": "beans_initial",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "initial",
+      "ownerIngredientId": "beans",
+      "ownerIngredientName": "Beans",
+      "dishName": "Bean Shakshuka",
+      "dishFamily": "bean stew",
+      "partUnitSingular": "cup",
+      "partUnitPlural": "cups",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "beans",
+        "vegetables",
+        "spices",
+        "eggs",
+        "herbs",
+        "cheese"
+      ],
+      "matchedRealIngredientIds": [
+        "beans",
+        "vegetables",
+        "spices",
+        "eggs",
+        "herbs",
+        "cheese"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_beans_initial",
+          "position": 1,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_initial",
+          "position": 2,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_initial",
+          "position": 3,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_initial",
+          "position": 4,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_initial",
+          "position": 5,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_initial",
+          "position": 6,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_beans_followup_1",
+      "templateId": "beans_followup_1",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_1",
+      "ownerIngredientId": "beans",
+      "ownerIngredientName": "Beans",
+      "dishName": "Bean Burrito",
+      "dishFamily": "wrap",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 5,
+      "quantityShape": "one_double_four_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "beans",
+        "flour",
+        "cheese",
+        "vegetables",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "beans",
+        "flour",
+        "cheese",
+        "vegetables",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_beans_followup_1",
+          "position": 1,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_beans_followup_1",
+          "position": 2,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_1",
+          "position": 3,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_1",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_1",
+          "position": 5,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_beans_followup_2",
+      "templateId": "beans_followup_2",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_2",
+      "ownerIngredientId": "beans",
+      "ownerIngredientName": "Beans",
+      "dishName": "Bean Dip",
+      "dishFamily": "dip",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 4,
+      "quantityShape": "two_doubles_two_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "beans",
+        "cheese",
+        "spices",
+        "herbs"
+      ],
+      "matchedRealIngredientIds": [
+        "beans",
+        "cheese",
+        "spices",
+        "herbs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_beans_followup_2",
+          "position": 1,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_beans_followup_2",
+          "position": 2,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_beans_followup_2",
+          "position": 3,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_2",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_beans_followup_3",
+      "templateId": "beans_followup_3",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_3",
+      "ownerIngredientId": "beans",
+      "ownerIngredientName": "Beans",
+      "dishName": "Bean Egg Skillet",
+      "dishFamily": "skillet",
+      "partUnitSingular": "serving",
+      "partUnitPlural": "servings",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "beans",
+        "eggs",
+        "vegetables",
+        "cheese",
+        "flour",
+        "herbs"
+      ],
+      "matchedRealIngredientIds": [
+        "beans",
+        "eggs",
+        "vegetables",
+        "cheese",
+        "flour",
+        "herbs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_beans_followup_3",
+          "position": 1,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_3",
+          "position": 2,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_3",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_3",
+          "position": 4,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_3",
+          "position": 5,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_beans_followup_3",
+          "position": 6,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_spices_initial",
+      "templateId": "spices_initial",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "initial",
+      "ownerIngredientId": "spices",
+      "ownerIngredientName": "Spices",
+      "dishName": "Spiced Rice Pilaf",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "spices",
+        "rice",
+        "vegetables",
+        "herbs",
+        "beans",
+        "cheese"
+      ],
+      "matchedRealIngredientIds": [
+        "spices",
+        "rice",
+        "vegetables",
+        "herbs",
+        "beans",
+        "cheese"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_spices_initial",
+          "position": 1,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_initial",
+          "position": 2,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_initial",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_initial",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_initial",
+          "position": 5,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_initial",
+          "position": 6,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_spices_followup_1",
+      "templateId": "spices_followup_1",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_1",
+      "ownerIngredientId": "spices",
+      "ownerIngredientName": "Spices",
+      "dishName": "Bean Tacos",
+      "dishFamily": "tacos",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 5,
+      "quantityShape": "one_double_four_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "spices",
+        "beans",
+        "flour",
+        "vegetables",
+        "cheese"
+      ],
+      "matchedRealIngredientIds": [
+        "spices",
+        "beans",
+        "flour",
+        "vegetables",
+        "cheese"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_spices_followup_1",
+          "position": 1,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_spices_followup_1",
+          "position": 2,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_1",
+          "position": 3,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_1",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_1",
+          "position": 5,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_spices_followup_2",
+      "templateId": "spices_followup_2",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_2",
+      "ownerIngredientId": "spices",
+      "ownerIngredientName": "Spices",
+      "dishName": "Masala Omelet",
+      "dishFamily": "omelet",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 4,
+      "quantityShape": "two_doubles_two_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "spices",
+        "eggs",
+        "vegetables",
+        "herbs"
+      ],
+      "matchedRealIngredientIds": [
+        "spices",
+        "eggs",
+        "vegetables",
+        "herbs"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_spices_followup_2",
+          "position": 1,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_spices_followup_2",
+          "position": 2,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_spices_followup_2",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_2",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_spices_followup_3",
+      "templateId": "spices_followup_3",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_3",
+      "ownerIngredientId": "spices",
+      "ownerIngredientName": "Spices",
+      "dishName": "Spiced Pancakes",
+      "dishFamily": "pancakes",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "spices",
+        "flour",
+        "eggs",
+        "vegetables",
+        "rice",
+        "beans"
+      ],
+      "matchedRealIngredientIds": [
+        "spices",
+        "flour",
+        "eggs",
+        "vegetables",
+        "rice",
+        "beans"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_spices_followup_3",
+          "position": 1,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_3",
+          "position": 2,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_3",
+          "position": 3,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_3",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_3",
+          "position": 5,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_spices_followup_3",
+          "position": 6,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_eggs_initial",
+      "templateId": "eggs_initial",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "initial",
+      "ownerIngredientId": "eggs",
+      "ownerIngredientName": "Eggs",
+      "dishName": "Breakfast Burrito",
+      "dishFamily": "wrap",
+      "partUnitSingular": "piece",
+      "partUnitPlural": "pieces",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "eggs",
+        "flour",
+        "cheese",
+        "vegetables",
+        "beans",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "eggs",
+        "flour",
+        "cheese",
+        "vegetables",
+        "beans",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_eggs_initial",
+          "position": 1,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_initial",
+          "position": 2,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_initial",
+          "position": 3,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_initial",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_initial",
+          "position": 5,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_initial",
+          "position": 6,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_eggs_followup_1",
+      "templateId": "eggs_followup_1",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_1",
+      "ownerIngredientId": "eggs",
+      "ownerIngredientName": "Eggs",
+      "dishName": "Egg Fried Rice",
+      "dishFamily": "rice dish",
+      "partUnitSingular": "scoop",
+      "partUnitPlural": "scoops",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 5,
+      "quantityShape": "one_double_four_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "eggs",
+        "rice",
+        "vegetables",
+        "herbs",
+        "spices"
+      ],
+      "matchedRealIngredientIds": [
+        "eggs",
+        "rice",
+        "vegetables",
+        "herbs",
+        "spices"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_eggs_followup_1",
+          "position": 1,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_eggs_followup_1",
+          "position": 2,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_1",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_1",
+          "position": 4,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_1",
+          "position": 5,
+          "ingredientId": "spices",
+          "ingredientName": "Spices",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_eggs_followup_2",
+      "templateId": "eggs_followup_2",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_2",
+      "ownerIngredientId": "eggs",
+      "ownerIngredientName": "Eggs",
+      "dishName": "Cheese Omelet",
+      "dishFamily": "omelet",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 4,
+      "quantityShape": "two_doubles_two_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "eggs",
+        "cheese",
+        "herbs",
+        "vegetables"
+      ],
+      "matchedRealIngredientIds": [
+        "eggs",
+        "cheese",
+        "herbs",
+        "vegetables"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_eggs_followup_2",
+          "position": 1,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_eggs_followup_2",
+          "position": 2,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 2
+        },
+        {
+          "recipeId": "players_8_eggs_followup_2",
+          "position": 3,
+          "ingredientId": "herbs",
+          "ingredientName": "Herbs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_2",
+          "position": 4,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        }
+      ]
+    },
+    {
+      "recipeId": "players_8_eggs_followup_3",
+      "templateId": "eggs_followup_3",
+      "configurationId": "players_8",
+      "playerCount": 8,
+      "slot": "followup_3",
+      "ownerIngredientId": "eggs",
+      "ownerIngredientName": "Eggs",
+      "dishName": "Egg Casserole",
+      "dishFamily": "casserole",
+      "partUnitSingular": "slice",
+      "partUnitPlural": "slices",
+      "totalRequiredQty": 6,
+      "distinctIngredientCount": 6,
+      "quantityShape": "six_singles",
+      "minDistinctIngredientCount": 4,
+      "maxDistinctIngredientCount": 6,
+      "activeIngredientIds": [
+        "cheese",
+        "flour",
+        "herbs",
+        "vegetables",
+        "rice",
+        "beans",
+        "spices",
+        "eggs"
+      ],
+      "realIngredientIds": [
+        "eggs",
+        "cheese",
+        "vegetables",
+        "flour",
+        "rice",
+        "beans"
+      ],
+      "matchedRealIngredientIds": [
+        "eggs",
+        "cheese",
+        "vegetables",
+        "flour",
+        "rice",
+        "beans"
+      ],
+      "fallbackIngredientIds": [],
+      "requirements": [
+        {
+          "recipeId": "players_8_eggs_followup_3",
+          "position": 1,
+          "ingredientId": "eggs",
+          "ingredientName": "Eggs",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_3",
+          "position": 2,
+          "ingredientId": "cheese",
+          "ingredientName": "Cheese",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_3",
+          "position": 3,
+          "ingredientId": "vegetables",
+          "ingredientName": "Vegetables",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_3",
+          "position": 4,
+          "ingredientId": "flour",
+          "ingredientName": "Flour",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_3",
+          "position": 5,
+          "ingredientId": "rice",
+          "ingredientName": "Rice",
+          "requiredQty": 1
+        },
+        {
+          "recipeId": "players_8_eggs_followup_3",
+          "position": 6,
+          "ingredientId": "beans",
+          "ingredientName": "Beans",
+          "requiredQty": 1
+        }
+      ]
+    }
+  ],
+  "requirements": [
+    {
+      "recipeId": "players_8_cheese_initial",
+      "position": 1,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_initial",
+      "position": 2,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_initial",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_initial",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_initial",
+      "position": 5,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_initial",
+      "position": 6,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_1",
+      "position": 1,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_cheese_followup_1",
+      "position": 2,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_1",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_1",
+      "position": 4,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_1",
+      "position": 5,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_2",
+      "position": 1,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_cheese_followup_2",
+      "position": 2,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_cheese_followup_2",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_2",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_3",
+      "position": 1,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_3",
+      "position": 2,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_3",
+      "position": 3,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_3",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_3",
+      "position": 5,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_cheese_followup_3",
+      "position": 6,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_initial",
+      "position": 1,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_initial",
+      "position": 2,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_initial",
+      "position": 3,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_initial",
+      "position": 4,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_initial",
+      "position": 5,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_initial",
+      "position": 6,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_1",
+      "position": 1,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_flour_followup_1",
+      "position": 2,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_1",
+      "position": 3,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_1",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_1",
+      "position": 5,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_2",
+      "position": 1,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_flour_followup_2",
+      "position": 2,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_flour_followup_2",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_2",
+      "position": 4,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_3",
+      "position": 1,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_3",
+      "position": 2,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_3",
+      "position": 3,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_3",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_3",
+      "position": 5,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_flour_followup_3",
+      "position": 6,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_initial",
+      "position": 1,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_initial",
+      "position": 2,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_initial",
+      "position": 3,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_initial",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_initial",
+      "position": 5,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_initial",
+      "position": 6,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_1",
+      "position": 1,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_herbs_followup_1",
+      "position": 2,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_1",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_1",
+      "position": 4,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_1",
+      "position": 5,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_2",
+      "position": 1,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_herbs_followup_2",
+      "position": 2,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_herbs_followup_2",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_2",
+      "position": 4,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_3",
+      "position": 1,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_3",
+      "position": 2,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_3",
+      "position": 3,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_3",
+      "position": 4,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_3",
+      "position": 5,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_herbs_followup_3",
+      "position": 6,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_initial",
+      "position": 1,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_initial",
+      "position": 2,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_initial",
+      "position": 3,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_initial",
+      "position": 4,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_initial",
+      "position": 5,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_initial",
+      "position": 6,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_1",
+      "position": 1,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_1",
+      "position": 2,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_1",
+      "position": 3,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_1",
+      "position": 4,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_1",
+      "position": 5,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_2",
+      "position": 1,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_2",
+      "position": 2,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_2",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_2",
+      "position": 4,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_3",
+      "position": 1,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_3",
+      "position": 2,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_3",
+      "position": 3,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_3",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_3",
+      "position": 5,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_vegetables_followup_3",
+      "position": 6,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_initial",
+      "position": 1,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_initial",
+      "position": 2,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_initial",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_initial",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_initial",
+      "position": 5,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_initial",
+      "position": 6,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_1",
+      "position": 1,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_rice_followup_1",
+      "position": 2,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_1",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_1",
+      "position": 4,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_1",
+      "position": 5,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_2",
+      "position": 1,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_rice_followup_2",
+      "position": 2,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_rice_followup_2",
+      "position": 3,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_2",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_3",
+      "position": 1,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_3",
+      "position": 2,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_3",
+      "position": 3,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_3",
+      "position": 4,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_3",
+      "position": 5,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_rice_followup_3",
+      "position": 6,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_initial",
+      "position": 1,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_initial",
+      "position": 2,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_initial",
+      "position": 3,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_initial",
+      "position": 4,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_initial",
+      "position": 5,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_initial",
+      "position": 6,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_1",
+      "position": 1,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_beans_followup_1",
+      "position": 2,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_1",
+      "position": 3,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_1",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_1",
+      "position": 5,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_2",
+      "position": 1,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_beans_followup_2",
+      "position": 2,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_beans_followup_2",
+      "position": 3,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_2",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_3",
+      "position": 1,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_3",
+      "position": 2,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_3",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_3",
+      "position": 4,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_3",
+      "position": 5,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_beans_followup_3",
+      "position": 6,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_initial",
+      "position": 1,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_initial",
+      "position": 2,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_initial",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_initial",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_initial",
+      "position": 5,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_initial",
+      "position": 6,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_1",
+      "position": 1,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_spices_followup_1",
+      "position": 2,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_1",
+      "position": 3,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_1",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_1",
+      "position": 5,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_2",
+      "position": 1,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_spices_followup_2",
+      "position": 2,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_spices_followup_2",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_2",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_3",
+      "position": 1,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_3",
+      "position": 2,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_3",
+      "position": 3,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_3",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_3",
+      "position": 5,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_spices_followup_3",
+      "position": 6,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_initial",
+      "position": 1,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_initial",
+      "position": 2,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_initial",
+      "position": 3,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_initial",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_initial",
+      "position": 5,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_initial",
+      "position": 6,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_1",
+      "position": 1,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_eggs_followup_1",
+      "position": 2,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_1",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_1",
+      "position": 4,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_1",
+      "position": 5,
+      "ingredientId": "spices",
+      "ingredientName": "Spices",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_2",
+      "position": 1,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_eggs_followup_2",
+      "position": 2,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 2
+    },
+    {
+      "recipeId": "players_8_eggs_followup_2",
+      "position": 3,
+      "ingredientId": "herbs",
+      "ingredientName": "Herbs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_2",
+      "position": 4,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_3",
+      "position": 1,
+      "ingredientId": "eggs",
+      "ingredientName": "Eggs",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_3",
+      "position": 2,
+      "ingredientId": "cheese",
+      "ingredientName": "Cheese",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_3",
+      "position": 3,
+      "ingredientId": "vegetables",
+      "ingredientName": "Vegetables",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_3",
+      "position": 4,
+      "ingredientId": "flour",
+      "ingredientName": "Flour",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_3",
+      "position": 5,
+      "ingredientId": "rice",
+      "ingredientName": "Rice",
+      "requiredQty": 1
+    },
+    {
+      "recipeId": "players_8_eggs_followup_3",
+      "position": 6,
+      "ingredientId": "beans",
+      "ingredientName": "Beans",
+      "requiredQty": 1
+    }
+  ]
+}

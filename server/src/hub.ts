@@ -5,6 +5,7 @@ export interface HubConnection {
   id: string;
   tableCode: string;
   participantId: string;
+  connectionParticipantId: string;
   send: (payload: string) => void;
   lastVersion?: number;
   lastTransactionCursor?: number;
@@ -15,10 +16,11 @@ export class ConnectionHub {
   private readonly tableConnections = new Map<string, Map<string, HubConnection>>();
   private nextId = 1;
 
-  register(connection: Omit<HubConnection, "id">): HubConnection {
+  register(connection: Omit<HubConnection, "id" | "connectionParticipantId"> & { connectionParticipantId?: string }): HubConnection {
     const registered: HubConnection = {
       ...connection,
       tableCode: connection.tableCode.toUpperCase(),
+      connectionParticipantId: connection.connectionParticipantId ?? connection.participantId,
       id: `conn_${this.nextId}`
     };
     this.nextId += 1;
@@ -46,7 +48,7 @@ export class ConnectionHub {
       return;
     }
     for (const connection of connections.values()) {
-      const snapshot = buildSnapshot(table, connection.participantId);
+      const snapshot = buildSnapshot(table, connection.participantId, connection.connectionParticipantId);
       if (shouldSendSnapshot(connection, table)) {
         connection.send(JSON.stringify({ type: "snapshot", snapshot }));
       } else {
@@ -60,6 +62,27 @@ export class ConnectionHub {
 
   connectionCount(tableCode: string): number {
     return this.tableConnections.get(tableCode.toUpperCase())?.size ?? 0;
+  }
+
+  hasConnectionForParticipant(tableCode: string, connectionParticipantId: string): boolean {
+    const connections = this.tableConnections.get(tableCode.toUpperCase());
+    if (!connections) {
+      return false;
+    }
+    for (const connection of connections.values()) {
+      if (connection.connectionParticipantId === connectionParticipantId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  sendSnapshot(table: Table, connection: HubConnection): void {
+    const snapshot = buildSnapshot(table, connection.participantId, connection.connectionParticipantId);
+    connection.send(JSON.stringify({ type: "snapshot", snapshot }));
+    connection.lastVersion = table.version;
+    connection.lastTransactionCursor = table.transactionHistory?.length ?? 0;
+    connection.lastSnapshot = snapshot;
   }
 }
 

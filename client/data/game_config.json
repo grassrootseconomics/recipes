@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "minActiveParticipants": 8,
+  "maxActiveParticipants": 8,
+  "vouchersPerIngredient": 7,
+  "realUnitsPerIngredient": 40,
+  "minStockPerIngredient": 1,
+  "maxStockPerIngredient": 999,
+  "dishPartsPerDish": 10,
+  "minTargetDishCount": 1,
+  "maxTargetDishCount": 4,
+  "defaultTargetDishCount": 4,
+  "defaultTurnMode": "round_robin",
+  "turnModes": [
+    "round_robin",
+    "market"
+  ],
+  "phases": [
+    "lobby",
+    "deposit",
+    "playing",
+    "settlement",
+    "eating",
+    "complete"
+  ],
+  "botTypes": [
+    "pool_only",
+    "barter_only",
+    "mixed"
+  ],
+  "intentTypes": [
+    "close_table",
+    "reset_table",
+    "set_role",
+    "add_bot",
+    "add_controlled_seat",
+    "convert_to_bot",
+    "set_timer",
+    "set_target_dish_count",
+    "set_stock",
+    "set_turn_mode",
+    "set_pause",
+    "start",
+    "stop",
+    "pass_turn",
+    "deposit",
+    "deposit_ingredient",
+    "platter_swap",
+    "platter_swap_ingredient",
+    "platter_asset_swap",
+    "platter_asset_swap_aggregate",
+    "create_offer",
+    "respond_offer",
+    "cancel_offer",
+    "place_voucher",
+    "redeem_voucher",
+    "redeem_from_hand",
+    "redeem_all_and_pass_turn",
+    "prepare",
+    "bite"
+  ]
+}

@@ -9,14 +9,14 @@ Authoritative multiplayer recipe-trading MVP with a Node TypeScript server and a
 Implemented:
 
 - Server-owned tables, participants, ingredients, vouchers, recipes, platter, offers, dishes, transaction history, timers, bots, filtered snapshots, and WebSocket updates.
-- Godot client for creating/joining a table, adding bots, manually switching selected players to bots, pausing/resuming, starting, depositing, swapping with the platter, creating/responding to offers, preparing dishes, viewing dish totals/transaction history, ending the game, and eating.
+- Godot client for `Play Offline`, `Play Online`, joining online tables, taking over prefilled bot seats, choosing `round_robin` or `market`, pausing/resuming, starting, depositing, swapping with the platter, creating/responding to offers, preparing dishes, viewing dish totals/transaction history, ending the game, and eating.
+- Online host-controlled seats with filtered per-seat views and explicit acting-seat intents.
+- Server-enforced `round_robin` and `market` turn modes. New tables default to `round_robin`.
+- Offline pass-and-play rules runtime for one-device local seats and bots, using the same snapshot/intent UI path as online play.
 - Deterministic tests for the core game rules.
 
 Not implemented yet:
 
-- Offline bot-only mode.
-- Host-controlled multi-seat play.
-- Explicit `round_robin` turn mode.
 - Polished production UI/art pass.
 
 ## Requirements
@@ -93,12 +93,13 @@ godot4 --path client
 Manual smoke path:
 
 1. Leave `Name (auto)` blank or enter a custom name.
-2. Click `Create`.
-3. Add 6 bots so the table has 7 active seats.
-4. Optionally set a timer.
-5. Click `Start Game`.
-6. Deposit one card from your hand.
-7. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, recipe placement/redeem, dish totals, transaction history, `Prepare Dish`, `End Game`, and dish bites.
+2. Click `Play Offline` for pass-and-play or `Play Online` to create a hosted table.
+3. The table starts with 8 seats: you plus 7 bots.
+4. Use the seat grid to edit seat names and switch available bot seats between `Player` and `Bot` before start.
+5. Choose `round_robin` or `market`; `round_robin` is the default.
+6. Click `Start Game`.
+7. Deposit one card from each controlled seat.
+8. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem Cards and Pass Turn`, dish totals, transaction history, `Prepare Dish`, `End Game`, and dish bites.
 
 To test multiple humans locally, open another Godot client and join using the invite code.
 
@@ -108,7 +109,14 @@ To test multiple humans locally, open another Godot client and join using the in
 cd /home/wor/src/recipes
 npm run typecheck
 npm run test:run
-godot4 --headless --path client --quit-after 5
+npm run test:offline
+godot4 --headless --log-file /tmp/recipes-godot-headless.log --path client --quit-after 5
+```
+
+Full local regression pass:
+
+```bash
+npm run test:all
 ```
 
 Vitest watch mode:
@@ -119,14 +127,14 @@ npm test
 
 ## Load Simulation
 
-Run a seven-seat game through the real HTTP/WebSocket API:
+Run an 8-seat game through the real HTTP/WebSocket API:
 
 ```bash
 cd /home/wor/src/recipes
-npm run simulate:game -- --dish-goal=4 --profile=local
-npm run simulate:game -- --players=20 --dish-goal=1 --profile=local
-npm run simulate:game -- --games=100 --player-min=7 --player-max=20 --concurrency=10 --dish-goal=1 --profile=local
-npm run simulate:game -- --games=100 --player-min=7 --player-max=20 --concurrency=10 --dish-goal=1 --profile=local --suite-max-duration-ms=300000
+npm run simulate:game -- --players=8 --dish-goal=1 --profile=local --turn-mode=market
+npm run simulate:game -- --players=8 --dish-goal=1 --profile=local --turn-mode=round_robin
+npm run simulate:game -- --games=100 --player-min=8 --player-max=8 --concurrency=10 --dish-goal=1 --profile=local --turn-mode=market
+npm run simulate:game -- --games=100 --player-min=8 --player-max=8 --concurrency=10 --dish-goal=1 --profile=local --turn-mode=market --suite-max-duration-ms=300000
 ```
 
 Profiles:
@@ -143,25 +151,26 @@ tmp/simulations/
 ```
 
 Single-game reports include full per-client frame arrays for debugging. Multi-game suite reports keep compact per-game rows and aggregate frame/byte metrics so 100+ table runs stay readable.
+Use `--turn-mode=market` or `--turn-mode=round_robin` to choose the scripted table mode. The simulator defaults to `market` for load-test continuity even though new game tables default to `round_robin`.
 Use `--suite-max-duration-ms` to bound the entire multi-game run; per-game `--max-duration-ms` still applies inside the suite.
 
 ## Recipe Catalog
 
-The recipe catalog generator creates named recipe sets for player counts 7 through 20. For each player count it uses one committed ingredient set generated once from the 20 common ingredients, then creates four recipes per ingredient: one initial recipe and three followups.
+The recipe catalog generator creates one committed 8-player recipe set using the generalized ingredients Cheese, Flour, Herbs, Vegetables, Rice, Beans, Spices, and Eggs. It creates four short, unique, real-dish-inspired recipes per ingredient: one initial recipe and three followups, for 32 recipes total.
 
-The live server uses the same committed player-count ingredient sets when it assigns ingredients during a game. Runtime tables do not randomly choose ingredients. In `docs/recipes-catalog.ods`, the `Player Count Ingredient Sets` sheet shows the committed sets, and the recipe, requirement, and validation sheets show the generated playable catalog. A generated recipe only keeps a known dish name such as `Jollof Rice` when its requirements match that dish target; adapted rows get short descriptive names based on their actual required ingredients.
+The live server uses the same committed ingredient set when it assigns ingredients during a game. Runtime tables do not randomly choose ingredients. In `docs/recipes-catalog.ods`, the `Player Count Ingredient Sets` sheet shows the committed set, and the recipe, requirement, and validation sheets show the playable catalog.
 
 Rules enforced by tests:
 
 - each recipe includes the owner's ingredient,
 - total required quantity is exactly 6,
-- distinct ingredient count is 3, 4, or 6,
-- quantity shape is `2+2+2`, `2+2+1+1`, or `1+1+1+1+1+1`,
+- distinct ingredient count is 4, 5, or 6,
+- quantity shape is `2+2+1+1`, `2+1+1+1+1`, or `1+1+1+1+1+1`,
 - every required ingredient belongs to the active ingredient set,
-- recipe names are unique within each player-count set,
-- ingredient/quantity requirement signatures are unique within each player-count set,
-- generated recipe names do not reuse a known dish name when requirements omit that dish's ingredients,
-- every generated recipe has an accurate displayed name for its actual requirements.
+- recipe names are unique within the 8-player set,
+- ingredient/quantity requirement signatures are unique within the 8-player set,
+- every recipe uses its committed real-dish-inspired name directly,
+- every ingredient has image metadata for cards, recipe slots, and inventory.
 
 Generate the spreadsheet:
 

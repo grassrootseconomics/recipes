@@ -2,6 +2,7 @@ export type ParticipantRole = "active" | "witness";
 export type ParticipantKind = "human" | "bot";
 export type BotType = "pool_only" | "barter_only" | "mixed";
 export type TablePhase = "lobby" | "deposit" | "playing" | "settlement" | "eating" | "complete";
+export type TurnMode = "round_robin" | "market";
 export type VoucherLocationType = "hand" | "platter" | "placed" | "holding" | "offer_lock";
 export type DishPartLocationType = "inventory" | "platter" | "eaten";
 export type OfferStatus = "pending" | "accepted" | "refused" | "cancelled";
@@ -11,6 +12,8 @@ export type AggregateAssetKind = "voucher" | "dish_part";
 export interface Ingredient {
   id: string;
   name: string;
+  description?: string;
+  imagePath?: string;
 }
 
 export interface VoucherLocation {
@@ -58,6 +61,7 @@ export interface Participant {
   role: ParticipantRole;
   isHost: boolean;
   seatToken: string;
+  controllerParticipantId?: string;
   botType?: BotType;
   ingredientId?: string;
   realIngredientStock?: number;
@@ -143,7 +147,7 @@ export interface DishPartGroup {
   count: number;
 }
 
-export type TransactionAction = "Deposit" | "Swap" | "Settlement Swap" | "Exchange" | "Redeem" | "Prepare" | "Eat";
+export type TransactionAction = "Deposit" | "Swap" | "Settlement Swap" | "Exchange" | "Redeem" | "Prepare" | "Eat" | "Pass Turn";
 
 export interface TransactionRecord {
   id: string;
@@ -184,6 +188,8 @@ export interface Table {
   winnerParticipantIds: string[];
   targetDishCount: number;
   stockPerIngredient: number;
+  turnMode: TurnMode;
+  currentTurnParticipantId?: string;
   timer?: TableTimer;
   turn: number;
   nextId: number;
@@ -195,6 +201,7 @@ export interface PublicParticipant {
   kind: ParticipantKind;
   role: ParticipantRole;
   isHost: boolean;
+  controllerParticipantId?: string;
   botType?: BotType;
   ingredientId?: string;
   realIngredientStock?: number;
@@ -204,6 +211,7 @@ export interface PublicParticipant {
   platterShortfall: number;
   cleared: boolean;
   dishCount: number;
+  heldFoodPartCount: number;
   depositedInitial: boolean;
   connected: boolean;
 }
@@ -215,9 +223,14 @@ export interface Snapshot {
   phase: TablePhase;
   paused: boolean;
   viewerParticipantId?: string;
+  connectionParticipantId?: string;
   viewerRole?: ParticipantRole;
+  controlledParticipantIds: string[];
+  viewerCanUseHostControls: boolean;
   hostParticipantId: string;
   turn: number;
+  turnMode: TurnMode;
+  currentTurnParticipantId?: string;
   participants: PublicParticipant[];
   ingredients: Ingredient[];
   platter: Voucher[];
@@ -277,14 +290,19 @@ export type Intent =
   | { type: "close_table" }
   | { type: "reset_table" }
   | { type: "set_role"; participantId: string; role: ParticipantRole }
+  | { type: "rename_participant"; participantId: string; name: string }
   | { type: "add_bot"; name?: string; botType: BotType }
+  | { type: "add_controlled_seat"; name?: string; participantId?: string }
   | { type: "convert_to_bot"; participantId: string; botType?: BotType }
   | { type: "set_timer"; seconds: number | null }
   | { type: "set_target_dish_count"; count: number }
   | { type: "set_stock"; count: number }
+  | { type: "set_turn_mode"; mode: TurnMode }
   | { type: "set_pause"; paused: boolean }
   | { type: "start" }
   | { type: "stop" }
+  | { type: "pass_turn" }
+  | { type: "redeem_all_and_pass_turn" }
   | { type: "deposit"; voucherId: string }
   | { type: "deposit_ingredient"; ingredientId?: string }
   | { type: "platter_swap"; giveVoucherId: string; takeVoucherId: string }
