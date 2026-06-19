@@ -3,6 +3,7 @@ extends PanelContainer
 signal intent_requested(intent: Dictionary)
 signal view_requested(participant_id: String)
 signal status_requested(message: String)
+signal menu_requested(action: String)
 
 const VisualAssets := preload("res://scripts/visual_asset_registry.gd")
 
@@ -16,6 +17,15 @@ const DEFAULT_INGREDIENT_ORDER := ["cheese", "flour", "herbs", "vegetables", "ri
 # [8] [3] [4] [7]
 # [5] [1] [2] [6]
 const BASKET_CENTER_OUT_SLOTS := [5, 6, 1, 2, 4, 7, 3, 0]
+const TABLE_CONTENT_WIDTH := 680
+const BASKET_BACKDROP_SIZE := Vector2(668, 230)
+const BASKET_SLOT_SIZE := Vector2(118, 82)
+const BASKET_GRID_GAP := 7
+const BASKET_GRID_SIZE := Vector2(BASKET_SLOT_SIZE.x * 4.0 + BASKET_GRID_GAP * 3.0, BASKET_SLOT_SIZE.y * 2.0 + BASKET_GRID_GAP)
+const RECIPE_SLOT_SIZE := Vector2(138, 92)
+const RECIPE_GRID_GAP := 6
+const RECIPE_GRID_SIZE := Vector2(RECIPE_SLOT_SIZE.x * 3.0 + RECIPE_GRID_GAP * 2.0, RECIPE_SLOT_SIZE.y * 2.0 + RECIPE_GRID_GAP)
+const COOK_TILE_SIZE := Vector2(152, 108)
 
 
 class BasketBackdrop:
@@ -26,6 +36,7 @@ class BasketBackdrop:
 	const WEAVE_LIGHT := Color(0.92, 0.72, 0.43, 0.30)
 	const RIM := Color(0.34, 0.20, 0.09)
 	const RIM_LIGHT := Color(0.90, 0.68, 0.40, 0.72)
+	const DRAW_SIZE := Vector2(668, 230)
 
 	func _notification(what: int) -> void:
 		if what == NOTIFICATION_RESIZED:
@@ -34,8 +45,9 @@ class BasketBackdrop:
 	func _draw() -> void:
 		if size.x <= 8.0 or size.y <= 8.0:
 			return
+		var draw_size := Vector2(minf(size.x, DRAW_SIZE.x), minf(size.y, DRAW_SIZE.y))
 		var center := size * 0.5
-		var radius := Vector2(maxf(1.0, size.x * 0.5 - 4.0), maxf(1.0, size.y * 0.5 - 7.0))
+		var radius := Vector2(maxf(1.0, draw_size.x * 0.5 - 4.0), maxf(1.0, draw_size.y * 0.5 - 7.0))
 		var ellipse := _ellipse_points(center, radius, 72)
 		draw_colored_polygon(ellipse, BASE)
 		_draw_weave(center, radius, 0.34, WEAVE_DARK)
@@ -44,6 +56,18 @@ class BasketBackdrop:
 		closed.append(ellipse[0])
 		draw_polyline(closed, RIM_LIGHT, 2.0, true)
 		draw_polyline(closed, RIM, 3.0, true)
+		_draw_title()
+
+	func _draw_title() -> void:
+		var font := get_theme_default_font()
+		if font == null:
+			return
+		var text := "Common Basket"
+		var font_size := 20
+		var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size)
+		var position := Vector2((size.x - text_size.x) * 0.5, 28.0)
+		draw_string(font, position + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, Color(0.98, 0.90, 0.70, 0.80))
+		draw_string(font, position, text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, Color(0.20, 0.13, 0.06))
 
 	func _ellipse_points(center: Vector2, radius: Vector2, steps: int) -> PackedVector2Array:
 		var points := PackedVector2Array()
@@ -76,6 +100,22 @@ class BasketBackdrop:
 		return dx * dx + dy * dy <= 1.0
 
 
+class MenuBarsIcon:
+	extends Control
+
+	const BAR_COLOR := Color(0.18, 0.12, 0.07)
+
+	func _notification(what: int) -> void:
+		if what == NOTIFICATION_RESIZED:
+			queue_redraw()
+
+	func _draw() -> void:
+		var left := 8.0
+		var right := maxf(left + 1.0, size.x - 8.0)
+		for y in [10.0, 16.0, 22.0]:
+			draw_line(Vector2(left, y), Vector2(right, y), BAR_COLOR, 2.5, true)
+
+
 var debug_stats := {}
 
 var _snapshot: Dictionary = {}
@@ -86,6 +126,7 @@ var _selected_platter_asset_key := ""
 var _animation_queue: Array = []
 var _animation_running := false
 var _current_animation_event: Dictionary = {}
+var _animation_actor_participant_id := ""
 var _last_animation_types: Array[String] = []
 var _pending_visual_snapshot: Dictionary = {}
 var _has_pending_visual_snapshot := false
@@ -104,10 +145,19 @@ var _animation_layer: Control
 var _offer_popup: PopupPanel
 var _offer_popup_scroller: ScrollContainer
 var _offer_popup_list: VBoxContainer
+var _overlay_layer: Control
+var _menu_canvas: CanvasLayer
+var _menu_button: Button
+var _menu_popup: PopupPanel
+var _menu_popup_list: VBoxContainer
+var _basket_slot_by_ingredient := {}
+var _basket_slot_table_key := ""
 
 
 func _ready() -> void:
 	_build()
+	set_process_input(true)
+	set_process(true)
 
 
 func _exit_tree() -> void:
@@ -139,7 +189,8 @@ func render(snapshot: Dictionary) -> void:
 
 
 func _apply_snapshot(snapshot: Dictionary) -> void:
-	_snapshot = snapshot
+	_snapshot = snapshot.duplicate(true)
+	snapshot = _snapshot
 	if not is_instance_valid(_root):
 		return
 
@@ -158,15 +209,22 @@ func _apply_snapshot(snapshot: Dictionary) -> void:
 		"completeCelebration": false,
 		"completeBiteSummaryCount": 0,
 		"offerPopupHeight": 0,
+		"menuButtonVisible": false,
+		"menuActions": [],
 		"incomingOfferCount": _offer_count(true),
 		"outgoingOfferCount": _offer_count(false),
 		"currentTurnParticipantId": str(snapshot.get("currentTurnParticipantId", "")),
 		"phase": str(snapshot.get("phase", "")),
 		"animationEventCount": 0,
+		"animationActorParticipantId": _animation_actor_participant_id,
 		"lastAnimationTypes": [],
-		"lastDepositBasketSlots": []
+		"lastAnimationEvents": [],
+		"lastDepositBasketSlots": [],
+		"actionButtonTexts": [],
+		"disabledActionButtonTexts": []
 	}
 
+	_render_menu()
 	_render_turn_action()
 	_render_participants()
 	_render_basket()
@@ -230,6 +288,22 @@ func debug_press_swap_selected() -> void:
 	_swap_selected_playing_asset()
 
 
+func debug_confirm_swap_popup() -> void:
+	_confirm_swap_popup(str(_snapshot.get("phase", "")))
+
+
+func debug_open_table_menu() -> void:
+	_open_table_menu()
+
+
+func debug_table_menu_visible() -> bool:
+	return is_instance_valid(_menu_popup) and _menu_popup.visible
+
+
+func debug_close_table_menu_at(global_point: Vector2) -> void:
+	_close_menu_if_click_outside(global_point)
+
+
 func debug_press_offer_selected_to_common_basket() -> void:
 	_offer_selected_to_common_basket()
 
@@ -242,6 +316,7 @@ func debug_flush_animations() -> void:
 	_animation_queue.clear()
 	_animation_running = false
 	_current_animation_event = {}
+	_animation_actor_participant_id = ""
 	_apply_pending_visual_snapshot()
 
 
@@ -249,6 +324,7 @@ func debug_apply_snapshot(snapshot: Dictionary) -> void:
 	_animation_queue.clear()
 	_animation_running = false
 	_current_animation_event = {}
+	_animation_actor_participant_id = ""
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
 	_apply_snapshot(snapshot)
@@ -264,6 +340,7 @@ func debug_apply_next_animation_milestone() -> String:
 		event = _animation_queue.pop_front()
 	if event.is_empty():
 		return ""
+	_animation_actor_participant_id = ""
 	_apply_animation_event_snapshot(event)
 	if _animation_queue.is_empty():
 		_apply_pending_visual_snapshot()
@@ -274,15 +351,77 @@ func debug_visible_snapshot() -> Dictionary:
 	return _snapshot.duplicate(true)
 
 
+func preferred_visual_size() -> Vector2:
+	var preferred_height := 620.0
+	if is_instance_valid(_root):
+		preferred_height = maxf(preferred_height, _root.get_combined_minimum_size().y + 24.0)
+	return Vector2(TABLE_CONTENT_WIDTH + 20.0, preferred_height)
+
+
+func debug_deposit_animation_anchors() -> Array:
+	var anchors: Array = []
+	var events: Array = []
+	if not _current_animation_event.is_empty() and str(_current_animation_event.get("type", "")) == "deposit":
+		events.append(_current_animation_event)
+	for raw_event in _animation_queue:
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) == "deposit":
+			events.append(event)
+	for raw_event in events:
+		var event: Dictionary = raw_event
+		var ingredient_id := str(event.get("ingredientId", ""))
+		var start = event.get("startPoint", _participant_or_hand_center(str(event.get("participantId", "")), ingredient_id))
+		var end = event.get("endPoint", _platter_voucher_center(ingredient_id))
+		if end == Vector2.INF:
+			end = _basket_slot_center_for_visual_slot(int(event.get("basketSlotIndex", -1)))
+		anchors.append({
+			"participantId": str(event.get("participantId", "")),
+			"ingredientId": ingredient_id,
+			"basketSlotIndex": int(event.get("basketSlotIndex", -1)),
+			"start": start,
+			"end": end
+		})
+	return anchors
+
+
+func debug_animation_path_points(event: Dictionary) -> Dictionary:
+	match str(event.get("type", "")):
+		"swap", "settlement_swap":
+			var actor_id := _swap_actor_id(event)
+			return {
+				"giveStart": _asset_start_center(event, "give"),
+				"giveEnd": _asset_platter_target_center(event, "give"),
+				"takeStart": _asset_start_center(event, "take"),
+				"takeEnd": _asset_inventory_target_center(event, "take", actor_id) if actor_id != "" else Vector2.INF
+			}
+		"public_redeem":
+			var actor_target := _control_for_participant_or_viewer(str(event.get("participantId", "")))
+			var owner_target := _control_for_participant_or_viewer(str(event.get("ownerParticipantId", "")))
+			var owner_center := _control_global_center(owner_target)
+			if owner_center == Vector2.INF:
+				owner_center = _ingredient_owner_global_center(str(event.get("ingredientId", "")))
+			return {
+				"cardStart": _control_global_center(actor_target),
+				"cardEnd": owner_center,
+				"ingredientStart": owner_center,
+				"ingredientEnd": _control_global_center(actor_target)
+			}
+		_:
+			return {}
+
+
 func _build() -> void:
 	add_theme_stylebox_override("panel", _panel_style(TABLE_BG, PANEL_BORDER, 2, 8))
-	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	custom_minimum_size = Vector2(0, 620)
+	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH + 20, 620)
 
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 10)
+	margin.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	margin.add_theme_constant_override("margin_left", 6)
 	margin.add_theme_constant_override("margin_top", 4)
-	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_right", 6)
 	margin.add_theme_constant_override("margin_bottom", 4)
 	add_child(margin)
 
@@ -290,37 +429,69 @@ func _build() -> void:
 	_root.add_theme_constant_override("separation", 4)
 	_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.add_child(_root)
+
+	_overlay_layer = Control.new()
+	_overlay_layer.name = "TableOverlayLayer"
+	_overlay_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_overlay_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_overlay_layer)
+
 	_animation_layer = Control.new()
+	_animation_layer.name = "AnimationLayer"
 	_animation_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_animation_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	margin.add_child(_animation_layer)
+	_overlay_layer.add_child(_animation_layer)
+
+	_menu_canvas = CanvasLayer.new()
+	_menu_canvas.layer = 9
+	add_child(_menu_canvas)
+	_menu_button = _menu_button_control()
+	_menu_button.pressed.connect(_open_table_menu)
+	_menu_canvas.add_child(_menu_button)
+	_position_menu_button()
 
 	var participant_panel := _titled_panel("Cooks", true)
 	_root.add_child(participant_panel)
 	_participant_row = VBoxContainer.new()
-	_participant_row.add_theme_constant_override("separation", 1)
-	_participant_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	participant_panel.add_child(_scroll_wrap(_participant_row, 192))
+	_participant_row.add_theme_constant_override("separation", 2)
+	_participant_row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	participant_panel.add_child(_center_wrap(_participant_row, 222))
 
-	var basket_panel := _titled_panel("Common Basket", true)
+	var basket_panel := VBoxContainer.new()
+	basket_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_root.add_child(basket_panel)
 	var basket_backdrop := BasketBackdrop.new()
 	basket_backdrop.name = "BasketBackdrop"
-	basket_backdrop.custom_minimum_size = Vector2(0, 184)
-	basket_backdrop.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	basket_backdrop.custom_minimum_size = BASKET_BACKDROP_SIZE
+	basket_backdrop.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	basket_backdrop.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	basket_backdrop.add_theme_stylebox_override("panel", _basket_backdrop_style())
+	var basket_margin := MarginContainer.new()
+	basket_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	basket_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	basket_margin.add_theme_constant_override("margin_left", 0)
+	basket_margin.add_theme_constant_override("margin_top", 32)
+	basket_margin.add_theme_constant_override("margin_right", 0)
+	basket_margin.add_theme_constant_override("margin_bottom", 8)
+	var basket_center := CenterContainer.new()
+	basket_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	basket_center.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_basket_grid = GridContainer.new()
 	_basket_grid.columns = 4
-	_basket_grid.custom_minimum_size = Vector2(0, 169)
-	_basket_grid.add_theme_constant_override("h_separation", 5)
-	_basket_grid.add_theme_constant_override("v_separation", 5)
-	_basket_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	basket_backdrop.add_child(_basket_grid)
+	_basket_grid.custom_minimum_size = BASKET_GRID_SIZE
+	_basket_grid.add_theme_constant_override("h_separation", BASKET_GRID_GAP)
+	_basket_grid.add_theme_constant_override("v_separation", BASKET_GRID_GAP)
+	_basket_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_basket_grid.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	basket_center.add_child(_basket_grid)
+	basket_margin.add_child(basket_center)
+	basket_backdrop.add_child(basket_margin)
 	basket_panel.add_child(basket_backdrop)
 
 	var middle := HBoxContainer.new()
-	middle.add_theme_constant_override("separation", 8)
+	middle.add_theme_constant_override("separation", 10)
 	middle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	middle.alignment = BoxContainer.ALIGNMENT_CENTER
 	_root.add_child(middle)
 
 	_redeem_box = VBoxContainer.new()
@@ -328,13 +499,13 @@ func _build() -> void:
 	_redeem_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_redeem_box.add_theme_constant_override("separation", 5)
 	var action_panel := _framed_box(_redeem_box)
-	action_panel.custom_minimum_size = Vector2(176, 0)
+	action_panel.custom_minimum_size = Vector2(226, 0)
 	action_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	middle.add_child(action_panel)
 
 	var recipe_panel := VBoxContainer.new()
 	recipe_panel.add_theme_constant_override("separation", 4)
-	recipe_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	recipe_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	middle.add_child(recipe_panel)
 	_recipe_name_label = _label("")
 	_recipe_name_label.add_theme_font_size_override("font_size", 16)
@@ -342,35 +513,40 @@ func _build() -> void:
 	recipe_panel.add_child(_recipe_name_label)
 	_recipe_grid = GridContainer.new()
 	_recipe_grid.columns = 3
-	_recipe_grid.add_theme_constant_override("h_separation", 5)
-	_recipe_grid.add_theme_constant_override("v_separation", 5)
-	_recipe_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_recipe_grid.custom_minimum_size = RECIPE_GRID_SIZE
+	_recipe_grid.add_theme_constant_override("h_separation", RECIPE_GRID_GAP)
+	_recipe_grid.add_theme_constant_override("v_separation", RECIPE_GRID_GAP)
+	_recipe_grid.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	recipe_panel.add_child(_recipe_grid)
 
 	var bottom := HBoxContainer.new()
 	bottom.add_theme_constant_override("separation", 8)
 	bottom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_root.add_child(bottom)
 
 	var inventory_panel := _titled_panel("Inventory")
 	_inventory_title_label = inventory_panel.get_child(0) as Label
-	inventory_panel.custom_minimum_size = Vector2(116, 0)
+	inventory_panel.custom_minimum_size = Vector2(150, 0)
 	inventory_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	bottom.add_child(inventory_panel)
 	_inventory_row = HBoxContainer.new()
 	_inventory_row.add_theme_constant_override("separation", 6)
-	inventory_panel.add_child(_scroll_wrap(_inventory_row, 92))
+	inventory_panel.add_child(_scroll_wrap(_inventory_row, 104))
 
 	var hand_panel := _titled_panel("Promise Cards")
+	hand_panel.custom_minimum_size = Vector2(330, 0)
 	hand_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom.add_child(hand_panel)
 	_hand_row = HBoxContainer.new()
 	_hand_row.add_theme_constant_override("separation", 7)
-	hand_panel.add_child(_scroll_wrap(_hand_row, 92))
+	hand_panel.add_child(_scroll_wrap(_hand_row, 104))
 
 	_offer_popup = PopupPanel.new()
+	_configure_persistent_popup(_offer_popup)
 	_offer_popup.add_theme_stylebox_override("panel", _offer_popup_panel_style())
 	_offer_popup_scroller = ScrollContainer.new()
+	_offer_popup_scroller.name = "OfferPopupScroller"
 	_offer_popup_scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_offer_popup_scroller.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_offer_popup_scroller.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -382,11 +558,121 @@ func _build() -> void:
 	_offer_popup.add_child(_offer_popup_scroller)
 	add_child(_offer_popup)
 
+	_menu_popup = PopupPanel.new()
+	_configure_persistent_popup(_menu_popup)
+	_menu_popup.add_theme_stylebox_override("panel", _offer_popup_panel_style())
+	_menu_popup_list = VBoxContainer.new()
+	_menu_popup_list.add_theme_constant_override("separation", 4)
+	_menu_popup_list.custom_minimum_size = Vector2(196, 0)
+	_menu_popup.add_child(_menu_popup_list)
+	add_child(_menu_popup)
+
+
+func _render_menu() -> void:
+	if not is_instance_valid(_menu_button):
+		return
+	_sync_menu_visibility()
+	debug_stats["menuActions"] = _table_menu_actions()
+
+
+func _process(_delta: float) -> void:
+	_sync_menu_visibility(false)
+
+
+func _menu_should_be_visible() -> bool:
+	var has_table := str(_snapshot.get("tableCode", "")) != ""
+	var phase := str(_snapshot.get("phase", ""))
+	return has_table and phase != "lobby" and is_visible_in_tree()
+
+
+func _sync_menu_visibility(update_debug := true) -> void:
+	if not is_instance_valid(_menu_button):
+		return
+	_position_menu_button()
+	var should_show := _menu_should_be_visible()
+	_menu_button.visible = should_show
+	if is_instance_valid(_menu_canvas):
+		_menu_canvas.visible = should_show
+	if not should_show and is_instance_valid(_menu_popup):
+		_menu_popup.hide()
+	if update_debug:
+		debug_stats["menuButtonVisible"] = should_show
+
+
+func _position_menu_button() -> void:
+	if not is_instance_valid(_menu_button):
+		return
+	_menu_button.position = get_global_rect().position + Vector2(10, 10)
+
+
+func _table_menu_actions() -> Array[String]:
+	var actions: Array[String] = ["View History"]
+	var phase := str(_snapshot.get("phase", ""))
+	if bool(_snapshot.get("viewerCanUseHostControls", false)) and phase != "complete" and phase != "lobby":
+		actions.append("End Game")
+	return actions
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT:
+			_close_menu_if_click_outside(mouse_event.position)
+
+
+func _close_menu_if_click_outside(global_point: Vector2) -> void:
+	if not is_instance_valid(_menu_popup) or not _menu_popup.visible:
+		return
+	if is_instance_valid(_menu_button) and _menu_button.get_global_rect().has_point(global_point):
+		return
+	var popup_rect := Rect2(Vector2(_menu_popup.position), Vector2(_menu_popup.size))
+	if popup_rect.has_point(global_point):
+		return
+	_menu_popup.hide()
+
+
+func _open_table_menu() -> void:
+	if not is_instance_valid(_menu_popup) or not is_instance_valid(_menu_popup_list):
+		return
+	if _menu_popup.visible:
+		_menu_popup.hide()
+		return
+	_clear(_menu_popup_list)
+	var actions := _table_menu_actions()
+	for action in actions:
+		_menu_popup_list.add_child(_menu_popup_button(action))
+	var width := 210
+	var height := maxi(48, actions.size() * 42 + 10)
+	var button_rect := _menu_button.get_global_rect()
+	var popup_position := Vector2i(int(button_rect.position.x), int(button_rect.end.y + 4.0))
+	_menu_popup.popup(Rect2i(popup_position, Vector2i(width, height)))
+
+
+func _menu_popup_button(action: String) -> Button:
+	var button := _button(action, func(selected_action := action) -> void:
+		if is_instance_valid(_menu_popup):
+			_menu_popup.hide()
+		menu_requested.emit(selected_action)
+	)
+	button.custom_minimum_size = Vector2(196, 38)
+	button.add_theme_font_size_override("font_size", 15)
+	if action == "End Game":
+		_apply_button_style(button, Color(0.62, 0.24, 0.14), Color(0.34, 0.12, 0.06), 2)
+	else:
+		_apply_button_style(button, Color(0.90, 0.78, 0.55), Color(0.48, 0.34, 0.18), 1)
+	return button
+
+
+func _configure_persistent_popup(window: Window) -> void:
+	if not is_instance_valid(window):
+		return
+	window.set("popup_window", false)
+
 
 func _render_participants() -> void:
 	_clear(_participant_row)
 	var viewer_id := _viewer_id()
-	var current_turn_id := str(_snapshot.get("currentTurnParticipantId", ""))
+	var visual_actor_id := _current_visual_actor_id()
 	var visible_participants: Array = []
 	for raw_participant in _snapshot.get("participants", []):
 		var participant: Dictionary = raw_participant
@@ -397,9 +683,9 @@ func _render_participants() -> void:
 
 	for row_start in range(0, visible_participants.size(), 4):
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 4)
+		row.add_theme_constant_override("separation", 5)
 		row.alignment = BoxContainer.ALIGNMENT_CENTER
-		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		_participant_row.add_child(row)
 
 		var row_end = mini(row_start + 4, visible_participants.size())
@@ -416,11 +702,12 @@ func _render_participants() -> void:
 				bottom_label = _ingredient_display(ingredient_id)
 				if participant.has("realIngredientStock"):
 					bottom_label = "%s x%s" % [bottom_label, int(participant.get("realIngredientStock", 0))]
-			var button := _player_tile(top_label, bottom_label, meta, indicator, Vector2(104, 94), func(id := participant_id) -> void:
+			var is_visually_acting := participant_id == visual_actor_id
+			var button := _player_tile(top_label, bottom_label, meta, indicator, is_visually_acting, COOK_TILE_SIZE, func(id := participant_id) -> void:
 				_on_participant_pressed(id)
 			)
 			button.name = "Participant_%s" % participant_id
-			if participant_id == current_turn_id:
+			if is_visually_acting:
 				button.modulate = Color(1.05, 1.0, 0.86)
 			row.add_child(button)
 
@@ -431,6 +718,16 @@ func _render_participants() -> void:
 
 func _render_turn_action() -> void:
 	return
+
+
+func _current_visual_actor_id() -> String:
+	if _animation_actor_participant_id != "":
+		return _animation_actor_participant_id
+	return str(_snapshot.get("currentTurnParticipantId", ""))
+
+
+func _viewer_is_visually_acting() -> bool:
+	return _current_visual_actor_id() == _viewer_id()
 
 
 func _render_basket() -> void:
@@ -453,10 +750,10 @@ func _render_basket() -> void:
 		var dish_name := str(group.get("dishName", "Dish"))
 		var meta := VisualAssets.dish_meta(dish_name, unit)
 		var label := "%s x%s" % [VisualAssets.short_dish_name(dish_name), int(group.get("count", 0))]
-		var button := _visual_card("", label, meta, Vector2(100, 82), func(g := group) -> void:
+		var button := _visual_card("", label, meta, BASKET_SLOT_SIZE, func(g := group) -> void:
 			_on_platter_food_group_pressed(g)
 		)
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		button.name = "PlatterFood_%s" % str(group.get("dishId", "dish"))
 		if _selected_platter_asset_key == "dish_part:%s" % str(group.get("partId", "")):
 			_apply_button_style(button, meta.get("color", Color(0.8, 0.8, 0.8)), Color(0.08, 0.28, 0.60), 3)
@@ -466,13 +763,14 @@ func _render_basket() -> void:
 
 
 func _basket_ingredient_slot(ingredient_id: String, group: Dictionary, visual_slot_index: int) -> Control:
-	var slot := Control.new()
+	var slot := CenterContainer.new()
 	slot.name = "BasketSlot_%s" % ingredient_id
 	slot.set_meta("basket_slot_index", visual_slot_index)
-	slot.custom_minimum_size = Vector2(100, 82)
-	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	slot.custom_minimum_size = BASKET_SLOT_SIZE
+	slot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	slot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot.clip_contents = true
 	if group.is_empty():
 		return slot
 
@@ -481,16 +779,12 @@ func _basket_ingredient_slot(ingredient_id: String, group: Dictionary, visual_sl
 		_ingredient_display(ingredient_id),
 		int(group.get("count", 0))
 	]
-	var button := _visual_card("", label, meta, Vector2(100, 82), func(g := group) -> void:
+	var button := _visual_card("", label, meta, BASKET_SLOT_SIZE, func(g := group) -> void:
 		_on_platter_voucher_group_pressed(g)
 	)
 	button.name = "PlatterVoucher_%s" % ingredient_id
-	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	button.set_anchors_preset(Control.PRESET_FULL_RECT)
-	button.offset_left = 0
-	button.offset_top = 0
-	button.offset_right = 0
-	button.offset_bottom = 0
+	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	if _selected_platter_asset_key == "voucher:%s" % str(group.get("voucherId", "")):
 		_apply_button_style(button, meta.get("color", Color(0.8, 0.8, 0.8)), Color(0.08, 0.28, 0.60), 3)
 	slot.add_child(button)
@@ -508,16 +802,53 @@ func _voucher_groups_by_ingredient(vouchers: Array) -> Dictionary:
 
 
 func _basket_ingredients_by_visual_slot() -> Array[String]:
+	_ensure_basket_slot_mapping()
 	var ingredient_order := _basket_ingredient_order()
 	var by_slot := {}
-	for ingredient_index in range(mini(ingredient_order.size(), BASKET_CENTER_OUT_SLOTS.size())):
-		by_slot[int(BASKET_CENTER_OUT_SLOTS[ingredient_index])] = ingredient_order[ingredient_index]
+	for raw_ingredient_id in ingredient_order:
+		var ingredient_id := str(raw_ingredient_id)
+		if _basket_slot_by_ingredient.has(ingredient_id):
+			by_slot[int(_basket_slot_by_ingredient.get(ingredient_id))] = ingredient_id
 
 	var visual_order: Array[String] = []
 	for slot_index in range(BASKET_CENTER_OUT_SLOTS.size()):
 		if by_slot.has(slot_index):
 			visual_order.append(str(by_slot[slot_index]))
 	return visual_order
+
+
+func _ensure_basket_slot_mapping() -> void:
+	var key := _basket_slot_mapping_key(_snapshot)
+	if key != _basket_slot_table_key:
+		_basket_slot_table_key = key
+		_basket_slot_by_ingredient.clear()
+
+	for raw_ingredient_id in _basket_ingredient_order():
+		var ingredient_id := str(raw_ingredient_id)
+		if ingredient_id == "" or _basket_slot_by_ingredient.has(ingredient_id):
+			continue
+		var rank := _basket_slot_by_ingredient.size()
+		if rank >= BASKET_CENTER_OUT_SLOTS.size():
+			return
+		_basket_slot_by_ingredient[ingredient_id] = int(BASKET_CENTER_OUT_SLOTS[rank])
+
+
+func _reset_basket_slot_mapping() -> void:
+	_basket_slot_by_ingredient.clear()
+	_basket_slot_table_key = ""
+
+
+func _basket_slot_mapping_key(snapshot: Dictionary) -> String:
+	var code := str(snapshot.get("tableCode", ""))
+	var ingredients: Array[String] = []
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		var ingredient_id := str(participant.get("ingredientId", ""))
+		if ingredient_id != "":
+			ingredients.append(ingredient_id)
+	return "%s:%s" % [code, ",".join(ingredients)]
 
 
 func _basket_ingredient_order() -> Array[String]:
@@ -588,36 +919,17 @@ func _render_deposit_action_controls() -> void:
 		_redeem_box.add_child(_action_label("Offering given. Waiting for the table."))
 		return
 	if _selected_hand_voucher_id == "":
-		_redeem_box.add_child(_action_label("Select a glowing card to offer it to the Common Basket."))
+		_redeem_box.add_child(_action_label("Tap a promise card to select it."))
 		return
 	_redeem_box.add_child(_action_label("Selected: %s" % _ingredient_display(_selected_hand_ingredient_id)))
 	_redeem_box.add_child(_action_button("Offer", _offer_selected_to_common_basket))
-	_redeem_box.add_child(_action_button("Clear", func() -> void:
-		_clear_selections()
-		render(_snapshot)
-	))
 
 
 func _render_playing_action_controls() -> void:
 	if _selected_hand_voucher_id == "" and _selected_inventory_asset_key == "":
-		_redeem_box.add_child(_action_label("Tap a card to select it. Then redeem, swap, or offer it."))
+		_redeem_box.add_child(_action_label("Tap a promise card to select it."))
 	else:
-		var selected_label := _asset_label_from_key(_selected_inventory_asset_key)
-		if selected_label == "":
-			selected_label = _ingredient_display(_selected_hand_ingredient_id)
-		_redeem_box.add_child(_action_label("Selected: %s" % selected_label))
-		if _selected_hand_voucher_id != "" and not _outstanding_requirement_for_ingredient(_selected_hand_ingredient_id).is_empty():
-			_redeem_box.add_child(_action_label("Needed cards redeem when you end your turn."))
-
-		var take_label := _asset_label_from_key(_selected_platter_asset_key)
-		var swap_button := _action_button("Swap%s" % ("" if take_label == "" else " for %s" % take_label), _swap_selected_playing_asset)
-		swap_button.disabled = _selected_platter_asset_key == "" or _selected_inventory_asset_key == "" or not _can_act_now("playing")
-		_redeem_box.add_child(swap_button)
-
-		_redeem_box.add_child(_action_button("Clear", func() -> void:
-			_clear_selections()
-			render(_snapshot)
-		))
+		_redeem_box.add_child(_action_label("Choose a needed card in basket or from another player."))
 	_render_prepare_action_control()
 
 
@@ -626,11 +938,13 @@ func _render_prepare_action_control() -> void:
 	if recipe.is_empty():
 		return
 	var ready := _recipe_ready(recipe)
+	if not ready or not _can_act_now("playing"):
+		_prepare_button = null
+		return
 	_prepare_button = _action_button("Prepare Dish", func() -> void:
 		if _can_act_now("playing"):
 			intent_requested.emit({"type": "prepare"})
 	)
-	_prepare_button.disabled = not ready or not _can_act_now("playing")
 	_redeem_box.add_child(_prepare_button)
 
 
@@ -638,19 +952,9 @@ func _render_settlement_action_controls() -> void:
 	var give_label := _asset_label_from_key(_selected_inventory_asset_key)
 	var take_label := _asset_label_from_key(_selected_platter_asset_key)
 	if give_label == "" and take_label == "":
-		_redeem_box.add_child(_action_label("Select one held card or food part, then one basket item."))
+		_redeem_box.add_child(_action_label("Tap a promise card or dish piece to select it."))
 	else:
-		_redeem_box.add_child(_action_label("Give: %s\nTake: %s" % [
-			"-" if give_label == "" else give_label,
-			"-" if take_label == "" else take_label
-		]))
-	var swap_button := _action_button("Settlement Swap", _try_settlement_swap)
-	swap_button.disabled = give_label == "" or take_label == "" or not _can_act_now("settlement")
-	_redeem_box.add_child(swap_button)
-	_redeem_box.add_child(_action_button("Clear", func() -> void:
-		_clear_selections()
-		render(_snapshot)
-	))
+		_redeem_box.add_child(_action_label("Choose an item in the basket."))
 
 
 func _render_eating_action_controls() -> void:
@@ -684,7 +988,8 @@ func _render_recipe() -> void:
 	var recipe_name := _recipe_name(recipe)
 	debug_stats["recipeName"] = recipe_name
 	_recipe_name_label.visible = true
-	_recipe_name_label.text = "Recipe: %s" % recipe_name if recipe_name != "" else "Dishes Made"
+	_recipe_name_label.text = _recipe_title(recipe_name) if recipe_name != "" else "Dishes Made"
+	debug_stats["recipeTitle"] = _recipe_name_label.text
 	var slots := _recipe_slots(recipe)
 	debug_stats["recipeSlotCount"] = slots.size()
 	if slots.is_empty():
@@ -861,12 +1166,20 @@ func _render_inventory() -> void:
 	if is_instance_valid(_inventory_title_label):
 		var viewer_name := str(viewer.get("name", "")).strip_edges()
 		_inventory_title_label.text = "%s Inv." % viewer_name if viewer_name != "" else "Inv."
+		if _viewer_is_visually_acting():
+			_inventory_title_label.add_theme_color_override("font_color", Color(0.34, 0.18, 0.04))
+			_inventory_title_label.add_theme_color_override("font_outline_color", Color(1.0, 0.78, 0.18, 0.85))
+			_inventory_title_label.add_theme_constant_override("outline_size", 2)
+		else:
+			_inventory_title_label.add_theme_color_override("font_color", TEXT_DARK)
+			_inventory_title_label.add_theme_constant_override("outline_size", 0)
 		debug_stats["inventoryTitle"] = _inventory_title_label.text
 	if not viewer.is_empty() and viewer.has("realIngredientStock") and str(viewer.get("ingredientId", "")) != "" and str(_snapshot.get("phase", "lobby")) != "lobby":
 		var ingredient_id := str(viewer.get("ingredientId", ""))
 		var meta := VisualAssets.ingredient_meta(ingredient_id)
 		var stock_label := "%s x%s" % [_ingredient_display(ingredient_id), int(viewer.get("realIngredientStock", 0))]
-		var stock_item := _plain_asset_item(stock_label, meta, Vector2(96, 88), Callable())
+		var stock_item := _plain_asset_item(stock_label, meta, Vector2(96, 88), Callable(), _viewer_is_visually_acting())
+		stock_item.name = "InventoryStock_%s" % ingredient_id
 		stock_item.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_inventory_row.add_child(stock_item)
 
@@ -920,22 +1233,27 @@ func _on_platter_voucher_group_pressed(group: Dictionary) -> void:
 			status_requested.emit("This is not your turn.")
 			return
 		if _selected_inventory_asset_key == "":
-			if not _auto_select_give_card(take_ingredient_id):
-				_selected_platter_asset_key = "voucher:%s" % take_id
-				status_requested.emit("Select a card or food part from your inventory, then tap a basket item.")
-				render(_snapshot)
+			if not _auto_select_give_asset(take_ingredient_id, "playing"):
+				status_requested.emit("No swappable card or dish piece is available.")
 				return
 		_selected_platter_asset_key = "voucher:%s" % take_id
 		if _selected_inventory_asset_key.begins_with("voucher:") and take_ingredient_id == _selected_hand_ingredient_id:
 			status_requested.emit("Choose a different ingredient to take.")
 			render(_snapshot)
 			return
-		status_requested.emit("Selected %s from the basket. Press Swap to confirm." % _ingredient_display(take_ingredient_id))
 		render(_snapshot)
+		_open_swap_popup("playing")
 	elif phase == "settlement":
+		if not _can_act_now("settlement"):
+			status_requested.emit("This is not your turn.")
+			return
+		if _selected_inventory_asset_key == "":
+			if not _auto_select_give_asset(take_ingredient_id, "settlement"):
+				status_requested.emit("No swappable card or dish piece is available.")
+				return
 		_selected_platter_asset_key = "voucher:%s" % take_id
-		status_requested.emit("Selected %s from the basket." % _ingredient_display(take_ingredient_id))
 		render(_snapshot)
+		_open_swap_popup("settlement")
 	else:
 		status_requested.emit("Basket swaps open after offerings are complete.")
 
@@ -948,13 +1266,16 @@ func _on_platter_food_group_pressed(group: Dictionary) -> void:
 	if phase == "playing" and not _can_act_now("playing"):
 		status_requested.emit("This is not your turn.")
 		return
-	if phase == "playing" and _selected_inventory_asset_key == "":
-		if not _auto_select_give_card(""):
-			status_requested.emit("Select a card or food part from your inventory, then tap a basket item.")
+	if not _can_act_now(phase):
+		status_requested.emit("This is not your turn.")
+		return
+	if _selected_inventory_asset_key == "":
+		if not _auto_select_give_asset("", phase):
+			status_requested.emit("No swappable card or dish piece is available.")
 			return
 	_selected_platter_asset_key = "dish_part:%s" % str(group.get("partId", ""))
-	status_requested.emit("Selected %s from the basket." % VisualAssets.short_dish_name(str(group.get("dishName", "Dish"))))
 	render(_snapshot)
+	_open_swap_popup(phase)
 
 
 func _pass_turn_action() -> void:
@@ -1002,11 +1323,22 @@ func _swap_selected_platter_vouchers() -> void:
 	var take_ingredient_id := _ingredient_id_for_platter_voucher(take_id)
 	if take_ingredient_id == "" or take_ingredient_id == _selected_hand_ingredient_id:
 		status_requested.emit("Choose a different ingredient to take.")
+		render(_snapshot)
 		return
 	intent_requested.emit({"type": "platter_swap", "giveVoucherId": _selected_hand_voucher_id, "takeVoucherId": take_id})
 	status_requested.emit("Swapping %s for %s." % [_ingredient_display(_selected_hand_ingredient_id), _ingredient_display(take_ingredient_id)])
 	_clear_selections()
 	render(_snapshot)
+
+
+func _same_ingredient_voucher_swap_selected() -> bool:
+	if not _selected_inventory_asset_key.begins_with("voucher:") or not _selected_platter_asset_key.begins_with("voucher:"):
+		return false
+	if _selected_hand_ingredient_id == "":
+		return false
+	var take_id := _selected_platter_asset_key.substr("voucher:".length())
+	var take_ingredient_id := _ingredient_id_for_platter_voucher(take_id)
+	return take_ingredient_id != "" and take_ingredient_id == _selected_hand_ingredient_id
 
 
 func _on_inventory_food_group_pressed(group: Dictionary) -> void:
@@ -1140,6 +1472,55 @@ func _open_create_offer_popup(participant_id: String) -> void:
 	_popup_centered_tight(228, 150)
 
 
+func _open_swap_popup(phase: String) -> void:
+	_clear(_offer_popup_list)
+	_offer_popup_list.custom_minimum_size = Vector2(212, 0)
+	_offer_popup_list.add_theme_constant_override("separation", 3)
+	var title := _offer_popup_title("Swap")
+	_offer_popup_list.add_child(title)
+	var give_label := _asset_label_from_key(_selected_inventory_asset_key)
+	var take_label := _asset_label_from_key(_selected_platter_asset_key)
+	if give_label == "" or take_label == "":
+		_offer_popup_list.add_child(_offer_popup_text("Choose one item to give and one basket item to take."))
+	else:
+		_offer_popup_list.add_child(_offer_popup_text("Give %s\nTake %s" % [give_label, take_label]))
+	var row := _offer_popup_button_row()
+	var swap_button := _offer_popup_compact_button("Swap", func(selected_phase := phase) -> void:
+		_confirm_swap_popup(selected_phase)
+	)
+	swap_button.disabled = not _swap_popup_can_confirm(phase)
+	row.add_child(swap_button)
+	row.add_child(_offer_popup_compact_button("Cancel", func() -> void:
+		_offer_popup.hide()
+	))
+	_offer_popup_list.add_child(row)
+	_popup_centered_tight(230, 142)
+
+
+func _swap_popup_can_confirm(phase: String) -> bool:
+	if _selected_inventory_asset_key == "" or _selected_platter_asset_key == "":
+		return false
+	if not _can_act_now(phase):
+		return false
+	if _selected_inventory_asset_key.begins_with("voucher:") and _selected_platter_asset_key.begins_with("voucher:"):
+		return not _same_ingredient_voucher_swap_selected()
+	return true
+
+
+func _confirm_swap_popup(phase: String) -> void:
+	if not _swap_popup_can_confirm(phase):
+		if _same_ingredient_voucher_swap_selected():
+			status_requested.emit("Choose a different ingredient to take.")
+		else:
+			status_requested.emit("Choose one item to give and one basket item to take.")
+		return
+	_offer_popup.hide()
+	if phase == "settlement":
+		_try_settlement_swap()
+	else:
+		_swap_selected_playing_asset()
+
+
 func _open_offer_popup(participant_id: String) -> void:
 	_clear(_offer_popup_list)
 	_offer_popup_list.custom_minimum_size = Vector2(276, 0)
@@ -1183,7 +1564,7 @@ func _open_offer_popup(participant_id: String) -> void:
 			_open_create_offer_popup(id)
 		))
 
-	_popup_centered_tight(308, 210)
+	_popup_centered_tight(308, 210, true)
 
 
 func _accept_offer(offer: Dictionary) -> void:
@@ -1380,6 +1761,7 @@ func _snapshot_has_assigned_ingredients(snapshot: Dictionary) -> bool:
 
 
 func _apply_start_setup_transition(current_snapshot: Dictionary) -> void:
+	_reset_basket_slot_mapping()
 	var baseline := _start_setup_baseline_for_offerings(current_snapshot)
 	_apply_snapshot(baseline)
 	var events := _animation_events(baseline, current_snapshot)
@@ -1392,7 +1774,36 @@ func _apply_start_setup_transition(current_snapshot: Dictionary) -> void:
 	_has_pending_visual_snapshot = true
 	_record_animation_debug(events)
 	_animation_queue.append_array(events)
-	call_deferred("_play_next_animation")
+	call_deferred("_play_next_animation_after_layout")
+
+
+func _play_next_animation_after_layout() -> void:
+	if not is_inside_tree():
+		return
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	_resolve_deposit_animation_points()
+	_play_next_animation()
+
+
+func _resolve_deposit_animation_points() -> void:
+	for index in range(_animation_queue.size()):
+		var event: Dictionary = _animation_queue[index]
+		if str(event.get("type", "")) != "deposit":
+			continue
+		var ingredient_id := str(event.get("ingredientId", ""))
+		event["startPoint"] = _participant_or_hand_center(str(event.get("participantId", "")), ingredient_id)
+		var end := _platter_voucher_center(ingredient_id)
+		if end == Vector2.INF:
+			end = _basket_slot_center_for_visual_slot(int(event.get("basketSlotIndex", -1)))
+		if end == Vector2.INF:
+			end = _control_global_center(_basket_grid)
+		event["endPoint"] = end
+		_animation_queue[index] = event
 
 
 func _start_setup_baseline_for_offerings(current_snapshot: Dictionary) -> Dictionary:
@@ -1457,7 +1868,87 @@ func _animation_events(previous_snapshot: Dictionary, current_snapshot: Dictiona
 	events.append_array(_detect_eating_events(previous_snapshot, current_snapshot))
 	events.append_array(_detect_turn_events(previous_snapshot, current_snapshot))
 	events.append_array(_detect_complete_events(previous_snapshot, current_snapshot))
-	return events
+	return _events_in_transaction_order(previous_snapshot, current_snapshot, events)
+
+
+func _events_in_transaction_order(previous_snapshot: Dictionary, current_snapshot: Dictionary, events: Array) -> Array:
+	var rows := _new_transactions(previous_snapshot, current_snapshot)
+	var ordered: Array = []
+	for index in range(events.size()):
+		var event: Dictionary = events[index]
+		var decorated := event.duplicate(true)
+		decorated["_sequence"] = index
+		decorated["_transactionOrder"] = _transaction_order_for_event(decorated, rows)
+		_insert_ordered_animation_event(ordered, decorated)
+	return ordered
+
+
+func _insert_ordered_animation_event(ordered: Array, event: Dictionary) -> void:
+	for index in range(ordered.size()):
+		var other: Dictionary = ordered[index]
+		var event_order := int(event.get("_transactionOrder", 1000000))
+		var other_order := int(other.get("_transactionOrder", 1000000))
+		if event_order < other_order:
+			ordered.insert(index, event)
+			return
+		if event_order == other_order and int(event.get("_sequence", 0)) < int(other.get("_sequence", 0)):
+			ordered.insert(index, event)
+			return
+	ordered.append(event)
+
+
+func _transaction_order_for_event(event: Dictionary, rows: Array) -> int:
+	var event_transaction_id := str(event.get("_transactionId", ""))
+	if event_transaction_id != "":
+		for index in range(rows.size()):
+			var row: Dictionary = rows[index]
+			if str(row.get("id", "")) == event_transaction_id:
+				return index
+	match str(event.get("type", "")):
+		"deposit":
+			return _transaction_order_by_action(rows, ["Deposit"], str(event.get("participantId", "")), "")
+		"swap", "settlement_swap":
+			return _transaction_order_by_action(rows, ["Swap", "Settlement Swap"], str(event.get("actorParticipantId", "")), "")
+		"exchange":
+			return _transaction_order_by_action(rows, ["Exchange"], str(event.get("fromParticipantId", "")), str(event.get("toParticipantId", "")))
+		"redeem":
+			return _transaction_order_by_action_and_ingredient(rows, ["Redeem"], _viewer_id(), str(event.get("ingredientId", "")))
+		"public_redeem":
+			return _transaction_order_by_action_and_ingredient(rows, ["Redeem"], str(event.get("participantId", "")), str(event.get("ingredientId", "")))
+		"prepare":
+			return _transaction_order_by_action(rows, ["Prepare"], _viewer_id(), "")
+		"eat":
+			return _transaction_order_by_action(rows, ["Eat", "Bite"], _viewer_id(), "")
+		"turn":
+			return _transaction_order_by_action(rows, ["Pass Turn"], "", str(event.get("participantId", "")))
+		_:
+			return 1000000
+
+
+func _transaction_order_by_action(rows: Array, actions: Array[String], participant_id: String, counterparty_participant_id: String) -> int:
+	for index in range(rows.size()):
+		var row: Dictionary = rows[index]
+		if not actions.has(str(row.get("action", ""))):
+			continue
+		if participant_id != "" and str(row.get("participantId", "")) != participant_id:
+			continue
+		if counterparty_participant_id != "" and str(row.get("counterpartyParticipantId", "")) != counterparty_participant_id:
+			continue
+		return index
+	return 1000000
+
+
+func _transaction_order_by_action_and_ingredient(rows: Array, actions: Array[String], participant_id: String, ingredient_id: String) -> int:
+	for index in range(rows.size()):
+		var row: Dictionary = rows[index]
+		if not actions.has(str(row.get("action", ""))):
+			continue
+		if participant_id != "" and str(row.get("participantId", "")) != participant_id:
+			continue
+		if ingredient_id != "" and _ingredient_id_from_label(str(row.get("itemOut", ""))) != ingredient_id:
+			continue
+		return index
+	return 1000000
 
 
 func _events_with_visual_milestones(previous_snapshot: Dictionary, current_snapshot: Dictionary, events: Array) -> Array:
@@ -1477,7 +1968,7 @@ func _events_with_visual_milestones(previous_snapshot: Dictionary, current_snaps
 			working = _snapshot_after_public_redeem_step(working, current_snapshot, event)
 			milestone["_snapshotAfter"] = working.duplicate(true)
 		elif event_type == "turn":
-			working = current_snapshot.duplicate(true)
+			working = _snapshot_after_turn_step(working, event)
 			milestone["_snapshotAfter"] = working.duplicate(true)
 		else:
 			working = current_snapshot.duplicate(true)
@@ -1513,6 +2004,14 @@ func _snapshot_after_public_redeem_step(working_snapshot: Dictionary, final_snap
 	var next := working_snapshot.duplicate(true)
 	var owner_id := str(event.get("ownerParticipantId", ""))
 	_step_participant_stock_toward_final(next, final_snapshot, owner_id)
+	return next
+
+
+func _snapshot_after_turn_step(working_snapshot: Dictionary, event: Dictionary) -> Dictionary:
+	var next := working_snapshot.duplicate(true)
+	var participant_id := str(event.get("participantId", ""))
+	if participant_id != "":
+		next["currentTurnParticipantId"] = participant_id
 	return next
 
 
@@ -1660,13 +2159,16 @@ func _participant_id_for_ingredient_in_snapshot(snapshot: Dictionary, ingredient
 func _record_animation_debug(events: Array) -> void:
 	_last_animation_types.clear()
 	var deposit_slots: Array[int] = []
+	var event_summaries: Array = []
 	for raw_event in events:
 		var event: Dictionary = raw_event
 		_last_animation_types.append(str(event.get("type", "")))
+		event_summaries.append(event.duplicate(true))
 		if str(event.get("type", "")) == "deposit":
 			deposit_slots.append(int(event.get("basketSlotIndex", -1)))
 	debug_stats["animationEventCount"] = events.size()
 	debug_stats["lastAnimationTypes"] = _last_animation_types.duplicate()
+	debug_stats["lastAnimationEvents"] = event_summaries
 	debug_stats["lastDepositBasketSlots"] = deposit_slots
 
 
@@ -1773,12 +2275,89 @@ func _detect_swap_events(previous_snapshot: Dictionary, current_snapshot: Dictio
 				"takeKind": "dish_part",
 				"takeDishName": str(taken_food.get("dishName", "Dish")),
 				"takeUnit": str(taken_food.get("unitSingular", "part"))
-			})
+				})
 			return events
+	var public_swaps := _public_swap_events_from_transactions(previous_snapshot, current_snapshot)
+	if not public_swaps.is_empty():
+		events.append_array(public_swaps)
+		return events
 	var public_swap := _public_swap_event_from_platter_delta(previous_snapshot, current_snapshot, platter_delta, platter_food_delta)
 	if not public_swap.is_empty():
 		events.append(public_swap)
 	return events
+
+
+func _public_swap_events_from_transactions(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Array:
+	var events: Array = []
+	var viewer_id := _viewer_id()
+	var phase := str(current_snapshot.get("phase", ""))
+	for raw_transaction in _new_transactions(previous_snapshot, current_snapshot):
+		var transaction: Dictionary = raw_transaction
+		var action := str(transaction.get("action", ""))
+		if action != "Swap" and action != "Settlement Swap":
+			continue
+		var actor_id := str(transaction.get("participantId", ""))
+		if actor_id == "" or actor_id == viewer_id:
+			continue
+		var event := _swap_event_from_transaction(transaction, previous_snapshot, current_snapshot, phase)
+		if not event.is_empty():
+			events.append(event)
+	return events
+
+
+func _swap_event_from_transaction(transaction: Dictionary, previous_snapshot: Dictionary, current_snapshot: Dictionary, phase: String) -> Dictionary:
+	var action := str(transaction.get("action", ""))
+	var event := {
+		"type": "settlement_swap" if action == "Settlement Swap" or phase == "settlement" else "swap",
+		"actorParticipantId": str(transaction.get("participantId", "")),
+		"_transactionId": str(transaction.get("id", ""))
+	}
+	var give := _asset_event_fields_from_label(str(transaction.get("itemOut", "")), "give", previous_snapshot, current_snapshot)
+	var take := _asset_event_fields_from_label(str(transaction.get("itemBack", "")), "take", previous_snapshot, current_snapshot)
+	if give.is_empty() or take.is_empty():
+		return {}
+	event.merge(give, true)
+	event.merge(take, true)
+	return event
+
+
+func _asset_event_fields_from_label(label: String, prefix: String, previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Dictionary:
+	var ingredient_id := _ingredient_id_from_label(label)
+	if ingredient_id != "":
+		return {
+			"%sKind" % prefix: "voucher",
+			"%sIngredientId" % prefix: ingredient_id
+		}
+	var dish := _dish_part_info_from_label(label, previous_snapshot, current_snapshot)
+	if not dish.is_empty():
+		return {
+			"%sKind" % prefix: "dish_part",
+			"%sDishName" % prefix: str(dish.get("dishName", "Dish")),
+			"%sUnit" % prefix: str(dish.get("unitSingular", "part"))
+		}
+	return {}
+
+
+func _dish_part_info_from_label(label: String, previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Dictionary:
+	var normalized := label.strip_edges().to_lower()
+	if normalized == "" or normalized == "none":
+		return {}
+	for snapshot in [previous_snapshot, current_snapshot, _snapshot]:
+		for collection_key in ["platterFoodParts", "ownFoodParts"]:
+			for raw_part in snapshot.get(collection_key, []):
+				var part: Dictionary = raw_part
+				var dish_name := str(part.get("dishName", "Dish"))
+				var unit := str(part.get("unitSingular", "part"))
+				if normalized == "%s %s" % [dish_name.to_lower(), unit.to_lower()] or normalized == "%s %s" % [VisualAssets.short_dish_name(dish_name).to_lower(), unit.to_lower()]:
+					return {"dishName": dish_name, "unitSingular": unit}
+	for unit in ["slice", "cup", "scoop", "piece", "portion", "serving", "bowl"]:
+		var suffix := " %s" % unit
+		if normalized.ends_with(suffix) and normalized.length() > suffix.length():
+			return {
+				"dishName": label.strip_edges().substr(0, label.strip_edges().length() - suffix.length()).strip_edges(),
+				"unitSingular": unit
+			}
+	return {}
 
 
 func _public_swap_event_from_platter_delta(previous_snapshot: Dictionary, current_snapshot: Dictionary, platter_delta: Dictionary, platter_food_delta: Dictionary) -> Dictionary:
@@ -1950,6 +2529,21 @@ func _detect_eating_events(previous_snapshot: Dictionary, current_snapshot: Dict
 
 
 func _detect_turn_events(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Array:
+	var transaction_turns: Array = []
+	for raw_transaction in _new_transactions(previous_snapshot, current_snapshot):
+		var transaction: Dictionary = raw_transaction
+		if str(transaction.get("action", "")) != "Pass Turn":
+			continue
+		var next_id := str(transaction.get("counterpartyParticipantId", ""))
+		if next_id == "":
+			continue
+		transaction_turns.append({
+			"type": "turn",
+			"participantId": next_id,
+			"_transactionId": str(transaction.get("id", ""))
+		})
+	if not transaction_turns.is_empty():
+		return transaction_turns
 	var previous_turn := str(previous_snapshot.get("currentTurnParticipantId", ""))
 	var current_turn := str(current_snapshot.get("currentTurnParticipantId", ""))
 	if previous_turn != "" and current_turn != "" and previous_turn != current_turn:
@@ -1969,6 +2563,12 @@ func _play_next_animation() -> void:
 	_animation_running = true
 	var event: Dictionary = _animation_queue.pop_front()
 	_current_animation_event = event
+	_animation_actor_participant_id = _animation_actor_id(event)
+	if _animation_actor_participant_id != "":
+		_apply_snapshot(_snapshot)
+	var message := _animation_status_message(event)
+	if message != "":
+		status_requested.emit(message)
 	var duration := _play_animation_event(event)
 	if duration <= 0.0:
 		_finish_animation_event()
@@ -1980,6 +2580,7 @@ func _finish_animation_event() -> void:
 	var finished_event := _current_animation_event.duplicate(true)
 	_current_animation_event = {}
 	_animation_running = false
+	_animation_actor_participant_id = ""
 	_apply_animation_event_snapshot(finished_event)
 	if _animation_queue.is_empty():
 		_apply_pending_visual_snapshot()
@@ -2001,6 +2602,24 @@ func _apply_pending_visual_snapshot() -> void:
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
 	_apply_snapshot(snapshot)
+
+
+func _animation_actor_id(event: Dictionary) -> String:
+	match str(event.get("type", "")):
+		"deposit":
+			return str(event.get("participantId", ""))
+		"swap", "settlement_swap":
+			return _swap_actor_id(event)
+		"exchange":
+			return str(event.get("fromParticipantId", ""))
+		"public_redeem":
+			return str(event.get("participantId", ""))
+		"turn":
+			return str(event.get("participantId", ""))
+		"redeem", "prepare", "eat":
+			return _viewer_id()
+		_:
+			return ""
 
 
 func _play_animation_event(event: Dictionary) -> float:
@@ -2029,12 +2648,20 @@ func _play_animation_event(event: Dictionary) -> float:
 			return 0.0
 
 
+func _animation_status_message(event: Dictionary) -> String:
+	match str(event.get("type", "")):
+		"redeem":
+			return "Redeeming %s..." % _ingredient_display(str(event.get("ingredientId", "")))
+		_:
+			return ""
+
+
 func _animate_deposit_event(event: Dictionary) -> float:
 	var ingredient_id := str(event.get("ingredientId", ""))
-	var start := _participant_or_hand_center(str(event.get("participantId", "")), ingredient_id)
-	var end := _basket_slot_center_for_visual_slot(int(event.get("basketSlotIndex", -1)))
+	var start = event.get("startPoint", _participant_or_hand_center(str(event.get("participantId", "")), ingredient_id))
+	var end = event.get("endPoint", _platter_voucher_center(ingredient_id))
 	if end == Vector2.INF:
-		end = _platter_voucher_center(ingredient_id)
+		end = _basket_slot_center_for_visual_slot(int(event.get("basketSlotIndex", -1)))
 	if end == Vector2.INF:
 		end = _control_global_center(_basket_grid)
 	_animate_voucher_card_path(ingredient_id, _valid_points([start, end]))
@@ -2043,18 +2670,27 @@ func _animate_deposit_event(event: Dictionary) -> float:
 
 
 func _animate_swap_event(event: Dictionary) -> float:
+	var actor_id := _swap_actor_id(event)
+	if actor_id == "":
+		return 0.0
 	var give_start := _asset_start_center(event, "give")
 	var take_start := _asset_start_center(event, "take")
 	var give_end := _asset_platter_target_center(event, "give")
 	if give_end == Vector2.INF:
 		give_end = _control_global_center(_basket_grid)
-	var actor_id := str(event.get("actorParticipantId", _viewer_id()))
 	var take_end := _asset_inventory_target_center(event, "take", actor_id)
 	_animate_event_asset_tile_path(event, "give", _valid_points([give_start, give_end]))
-	_animate_event_asset_tile_path(event, "take", _valid_points([take_start, take_end]))
+	_animate_event_asset_tile_path(event, "take", _valid_points([take_start, take_end]), 0.34)
 	_pulse_control(_basket_grid, Color(0.82, 0.62, 0.34))
 	_pulse_control(_control_for_participant_or_viewer(actor_id), Color(0.95, 0.82, 0.36))
-	return 0.58
+	return 0.92
+
+
+func _swap_actor_id(event: Dictionary) -> String:
+	var actor_id := str(event.get("actorParticipantId", ""))
+	if actor_id != "":
+		return actor_id
+	return "" if event.has("actorParticipantId") else _viewer_id()
 
 
 func _animate_exchange_event(event: Dictionary) -> float:
@@ -2099,11 +2735,12 @@ func _animate_redeem_event(event: Dictionary) -> float:
 	var owner_target := _ingredient_owner_global_center(ingredient_id)
 	var slot_node := find_child("RecipeSlot_%s_%s" % [ingredient_id, int(event.get("slotIndex", 0))], true, false) as Control
 	var end := _control_global_center(slot_node)
+	_show_animation_caption("Redeeming %s" % _ingredient_display(ingredient_id), start)
 	_animate_voucher_card_path(ingredient_id, _valid_points([start, owner_target]))
-	_animate_texture_path(texture, _valid_points([owner_target, end]), 0.26)
+	_animate_texture_path(texture, _valid_points([owner_target, end]), 0.62, Vector2(58, 58))
 	_pulse_control(_control_for_ingredient_owner(ingredient_id), Color(0.35, 0.66, 0.34))
 	_pulse_control(slot_node, Color(0.28, 0.70, 0.34))
-	return 0.88
+	return 1.18
 
 
 func _animate_public_redeem_event(event: Dictionary) -> float:
@@ -2116,10 +2753,10 @@ func _animate_public_redeem_event(event: Dictionary) -> float:
 	if owner_center == Vector2.INF:
 		owner_center = _ingredient_owner_global_center(ingredient_id)
 	_animate_voucher_card_path(ingredient_id, _valid_points([actor_center, owner_center]))
-	_animate_texture_path(texture, _valid_points([owner_center, actor_center]), 0.24)
+	_animate_texture_path(texture, _valid_points([owner_center, actor_center]), 0.62, Vector2(58, 58))
 	_pulse_control(owner_target, Color(0.35, 0.66, 0.34))
 	_pulse_control(actor_target, Color(0.95, 0.72, 0.28))
-	return 0.76
+	return 1.18
 
 
 func _animate_prepare_event(event: Dictionary) -> float:
@@ -2439,10 +3076,9 @@ func _animate_visual_tile_path(meta: Dictionary, label: String, global_points: A
 	tween.tween_callback(tile.queue_free)
 
 
-func _animate_texture_path(texture: Texture2D, global_points: Array[Vector2], delay := 0.0) -> void:
+func _animate_texture_path(texture: Texture2D, global_points: Array[Vector2], delay := 0.0, icon_size := Vector2(46, 46)) -> void:
 	if global_points.size() < 2 or not is_instance_valid(_animation_layer) or not texture is Texture2D:
 		return
-	var icon_size := Vector2(46, 46)
 	var icon := TextureRect.new()
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon.texture = texture
@@ -2587,6 +3223,32 @@ func _animate_swirl_ingredient(ingredient_id: String, global_start: Vector2, glo
 	tween.parallel().tween_property(icon, "scale", Vector2(0.20, 0.20), 0.12)
 	tween.parallel().tween_property(icon, "modulate", Color(1, 1, 1, 0), 0.12)
 	tween.tween_callback(icon.queue_free)
+
+
+func _show_animation_caption(text: String, global_center: Vector2) -> void:
+	if text == "" or global_center == Vector2.INF or not is_instance_valid(_animation_layer):
+		return
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.size = Vector2(176, 34)
+	panel.pivot_offset = panel.size * 0.5
+	panel.modulate = Color(1, 1, 1, 0)
+	panel.add_theme_stylebox_override("panel", _panel_style(Color(0.98, 0.88, 0.58, 0.94), Color(0.50, 0.28, 0.11), 2, 17))
+	var label := _card_label(text, TEXT_DARK, 14)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	panel.add_child(label)
+	_animation_layer.add_child(panel)
+	panel.position = _animation_local(global_center) - panel.size * 0.5 + Vector2(0, -54)
+
+	var tween := create_tween()
+	tween.tween_property(panel, "modulate", Color(1, 1, 1, 1), 0.08)
+	tween.parallel().tween_property(panel, "scale", Vector2(1.05, 1.05), 0.08).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.tween_interval(0.72)
+	tween.tween_property(panel, "position", panel.position + Vector2(0, -12), 0.20).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(panel, "modulate", Color(1, 1, 1, 0), 0.20)
+	tween.tween_callback(panel.queue_free)
 
 
 func _pop_texture(texture: Texture2D, global_center: Vector2) -> void:
@@ -2938,6 +3600,16 @@ func _recipe_name(recipe: Dictionary) -> String:
 	return str(recipe.get("dishName", ""))
 
 
+func _recipe_title(recipe_name: String) -> String:
+	var target := int(_snapshot.get("targetDishCount", 0))
+	if target <= 0:
+		return "Recipe: %s" % recipe_name
+	var viewer := _participant_by_id(_viewer_id())
+	var completed := int(viewer.get("dishCount", 0)) if not viewer.is_empty() else 0
+	var recipe_number := clampi(completed + 1, 1, target)
+	return "Recipe %s/%s: %s" % [recipe_number, target, recipe_name]
+
+
 func _recipe_slot(slot: Dictionary, index: int) -> Control:
 	var ingredient_id := str(slot.get("ingredientId", ""))
 	var status := str(slot.get("status", "empty"))
@@ -2952,8 +3624,9 @@ func _recipe_slot(slot: Dictionary, index: int) -> Control:
 		border = Color(0.65, 0.34, 0.08)
 	var panel := PanelContainer.new()
 	panel.name = "RecipeSlot_%s_%s" % [ingredient_id, index]
-	panel.custom_minimum_size = Vector2(76, 62)
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size = RECIPE_SLOT_SIZE
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	panel.add_theme_stylebox_override("panel", _real_ingredient_slot_style() if status == "redeemed" else _panel_style(bg, border, 1, 8))
 	var box := VBoxContainer.new()
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -3033,6 +3706,20 @@ func _auto_select_give_card(forbidden_ingredient_id: String) -> bool:
 	return true
 
 
+func _auto_select_give_asset(forbidden_ingredient_id: String, phase: String) -> bool:
+	if not _can_act_now(phase):
+		return false
+	var group := _default_give_card_group(forbidden_ingredient_id)
+	if not group.is_empty():
+		_select_hand_group(group)
+		return true
+	var food_group := _default_give_food_part_group()
+	if not food_group.is_empty():
+		_select_food_part_group(food_group)
+		return true
+	return false
+
+
 func _default_give_card_group(forbidden_ingredient_id: String) -> Dictionary:
 	var groups := _voucher_group_options(_snapshot.get("ownHand", []))
 	if groups.is_empty():
@@ -3056,6 +3743,17 @@ func _default_give_card_group(forbidden_ingredient_id: String) -> Dictionary:
 	return best
 
 
+func _default_give_food_part_group() -> Dictionary:
+	var best: Dictionary = {}
+	for raw_group in _food_part_group_options(_snapshot.get("ownFoodParts", [])):
+		var group: Dictionary = raw_group
+		if best.is_empty() or int(group.get("count", 0)) > int(best.get("count", 0)) or (
+			int(group.get("count", 0)) == int(best.get("count", 0)) and str(group.get("dishName", "")) < str(best.get("dishName", ""))
+		):
+			best = group
+	return best
+
+
 func _select_hand_group(group: Dictionary) -> void:
 	var voucher_id := str(group.get("voucherId", ""))
 	var ingredient_id := str(group.get("ingredientId", ""))
@@ -3064,6 +3762,15 @@ func _select_hand_group(group: Dictionary) -> void:
 	_selected_hand_voucher_id = voucher_id
 	_selected_hand_ingredient_id = ingredient_id
 	_selected_inventory_asset_key = "voucher:%s" % voucher_id
+
+
+func _select_food_part_group(group: Dictionary) -> void:
+	var part_id := str(group.get("partId", ""))
+	if part_id == "":
+		return
+	_selected_inventory_asset_key = "dish_part:%s" % part_id
+	_selected_hand_voucher_id = ""
+	_selected_hand_ingredient_id = ""
 
 
 func _viewer_main_ingredient_id() -> String:
@@ -3302,6 +4009,14 @@ func _scroll_wrap(child: Control, min_height: int) -> ScrollContainer:
 	return scroll
 
 
+func _center_wrap(child: Control, min_height: int) -> CenterContainer:
+	var center := CenterContainer.new()
+	center.custom_minimum_size = Vector2(0, min_height)
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.add_child(child)
+	return center
+
+
 func _visual_card(top_text: String, bottom_text: String, meta: Dictionary, minimum: Vector2, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = ""
@@ -3315,26 +4030,30 @@ func _visual_card(top_text: String, bottom_text: String, meta: Dictionary, minim
 	return button
 
 
-func _player_tile(top_text: String, bottom_text: String, meta: Dictionary, offer_indicator: String, minimum: Vector2, callback: Callable) -> Button:
+func _player_tile(top_text: String, bottom_text: String, meta: Dictionary, offer_indicator: String, is_turn: bool, minimum: Vector2, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = ""
 	button.custom_minimum_size = minimum
-	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	button.clip_contents = true
 	_apply_plain_item_style(button)
-	_add_player_tile_content(button, top_text, bottom_text, meta, offer_indicator)
+	if is_turn:
+		_add_turn_circle(button)
+	_add_player_tile_content(button, top_text, bottom_text, meta, offer_indicator, is_turn)
 	if callback.is_valid():
 		button.pressed.connect(callback)
 	return button
 
 
-func _add_player_tile_content(button: Button, top_text: String, bottom_text: String, meta: Dictionary, offer_indicator: String) -> void:
-	var name := _card_label(top_text, TEXT_DARK, 13)
+func _add_player_tile_content(button: Button, top_text: String, bottom_text: String, meta: Dictionary, offer_indicator: String, is_turn: bool) -> void:
+	var turn_ink := Color(0.34, 0.18, 0.04)
+	var turn_outline := Color(1.0, 0.78, 0.18, 0.92)
+	var name := _card_label(top_text, turn_ink if is_turn else TEXT_DARK, 14)
 	name.name = "CookNameLabel"
 	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	name.autowrap_mode = TextServer.AUTOWRAP_OFF
-	name.add_theme_color_override("font_outline_color", Color(0.96, 0.90, 0.72, 0.88))
-	name.add_theme_constant_override("outline_size", 1)
+	name.add_theme_color_override("font_outline_color", turn_outline if is_turn else Color(0.96, 0.90, 0.72, 0.88))
+	name.add_theme_constant_override("outline_size", 2 if is_turn else 1)
 	_place_overlay(name, 2, 0, -2, 24)
 	button.add_child(name)
 
@@ -3352,12 +4071,12 @@ func _add_player_tile_content(button: Button, top_text: String, bottom_text: Str
 		_place_overlay(mark, 2, 24, -2, -26)
 		button.add_child(mark)
 
-	var ingredient := _card_label(bottom_text, TEXT_DARK, 13)
+	var ingredient := _card_label(bottom_text, turn_ink if is_turn else TEXT_DARK, 14)
 	ingredient.name = "CookIngredientLabel"
 	ingredient.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ingredient.autowrap_mode = TextServer.AUTOWRAP_OFF
-	ingredient.add_theme_color_override("font_outline_color", Color(0.96, 0.90, 0.72, 0.92))
-	ingredient.add_theme_constant_override("outline_size", 1)
+	ingredient.add_theme_color_override("font_outline_color", turn_outline if is_turn else Color(0.96, 0.90, 0.72, 0.92))
+	ingredient.add_theme_constant_override("outline_size", 2 if is_turn else 1)
 	_place_overlay(ingredient, 0, -24, 0, 0)
 	button.add_child(ingredient)
 
@@ -3398,17 +4117,37 @@ func _offer_badge(text: String, color: Color, right_offset: int) -> PanelContain
 	return panel
 
 
-func _plain_asset_item(text: String, meta: Dictionary, minimum: Vector2, callback: Callable) -> Button:
+func _plain_asset_item(text: String, meta: Dictionary, minimum: Vector2, callback: Callable, is_turn := false) -> Button:
 	var button := Button.new()
 	button.text = ""
 	button.custom_minimum_size = minimum
 	button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	button.clip_contents = true
 	_apply_plain_item_style(button)
+	if is_turn:
+		_add_turn_circle(button)
 	_add_visual_content(button, "", text, meta, minimum, TEXT_DARK, false)
 	if callback.is_valid():
 		button.pressed.connect(callback)
 	return button
+
+
+func _add_turn_circle(parent: Control) -> void:
+	var circle := PanelContainer.new()
+	circle.name = "TurnCircle"
+	circle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	circle.set_anchors_preset(Control.PRESET_FULL_RECT)
+	circle.offset_left = 11
+	circle.offset_top = 2
+	circle.offset_right = -11
+	circle.offset_bottom = -10
+	var style := _panel_style(Color(1.0, 0.78, 0.18, 0.64), Color(0.95, 0.48, 0.03, 0.96), 3, 999)
+	style.content_margin_left = 0
+	style.content_margin_top = 0
+	style.content_margin_right = 0
+	style.content_margin_bottom = 0
+	circle.add_theme_stylebox_override("panel", style)
+	parent.add_child(circle)
 
 
 func _add_visual_content(button: Button, top_text: String, bottom_text: String, meta: Dictionary, minimum: Vector2, ink: Color, framed: bool) -> void:
@@ -3538,7 +4277,22 @@ func _action_button(text: String, callback: Callable) -> Button:
 	button.add_theme_color_override("font_outline_color", Color(0.12, 0.07, 0.03, 0.42))
 	button.add_theme_constant_override("outline_size", 1)
 	_apply_action_button_style(button, text)
+	if not debug_stats.has("actionButtonTexts"):
+		debug_stats["actionButtonTexts"] = []
+	var action_texts: Array = debug_stats.get("actionButtonTexts", [])
+	action_texts.append(text)
+	debug_stats["actionButtonTexts"] = action_texts
 	return button
+
+
+func _record_disabled_action_button(button: Button) -> void:
+	if not button.disabled:
+		return
+	if not debug_stats.has("disabledActionButtonTexts"):
+		debug_stats["disabledActionButtonTexts"] = []
+	var disabled_texts: Array = debug_stats.get("disabledActionButtonTexts", [])
+	disabled_texts.append(button.text)
+	debug_stats["disabledActionButtonTexts"] = disabled_texts
 
 
 func _apply_action_button_style(button: Button, text: String) -> void:
@@ -3595,6 +4349,24 @@ func _button(text: String, callback: Callable) -> Button:
 	return button
 
 
+func _menu_button_control() -> Button:
+	var button := Button.new()
+	button.name = "TableMenuButton"
+	button.text = ""
+	button.tooltip_text = "Menu"
+	button.custom_minimum_size = Vector2(40, 32)
+	button.size = Vector2(40, 32)
+	button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	button.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	button.focus_mode = Control.FOCUS_ALL
+	_apply_button_style(button, Color(0.91, 0.80, 0.58), Color(0.46, 0.32, 0.18), 1)
+	var icon := MenuBarsIcon.new()
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	button.add_child(icon)
+	return button
+
+
 func _label(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
@@ -3619,6 +4391,7 @@ func _action_label(text: String) -> Label:
 
 func _offer_popup_title(text: String) -> Label:
 	var label := _label(text)
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 14)
@@ -3628,6 +4401,7 @@ func _offer_popup_title(text: String) -> Label:
 
 func _offer_popup_text(text: String) -> Label:
 	var label := _label(text)
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 13)
@@ -3668,16 +4442,22 @@ func _offer_popup_compact_button(text: String, callback: Callable) -> Button:
 	return button
 
 
-func _popup_centered_tight(width: int, max_height: int) -> void:
+func _popup_centered_tight(width: int, max_height: int, allow_scroll := false) -> void:
 	_offer_popup.hide()
 	_offer_popup_scroller.custom_minimum_size = Vector2(0, 0)
+	_offer_popup_scroller.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO if allow_scroll else ScrollContainer.SCROLL_MODE_DISABLED
 	_offer_popup.size = Vector2i(0, 0)
 	var content_height := int(ceil(_offer_popup_list.get_combined_minimum_size().y))
 	var panel_padding := 18
 	var min_height := 64
-	var height := clampi(content_height + panel_padding, min_height, max_height)
+	var height := 0
+	if allow_scroll:
+		height = clampi(content_height + panel_padding, min_height, max_height)
+	else:
+		height = maxi(min_height, content_height + panel_padding + 2)
 	_offer_popup_scroller.custom_minimum_size = Vector2(width - panel_padding, height - panel_padding)
 	debug_stats["offerPopupHeight"] = height
+	debug_stats["offerPopupScrollEnabled"] = allow_scroll
 	_offer_popup.popup_centered(Vector2i(width, height))
 
 
@@ -3757,4 +4537,5 @@ func _panel_style(bg: Color, border: Color, border_width: int, radius: int) -> S
 
 func _clear(node: Node) -> void:
 	for child in node.get_children():
+		node.remove_child(child)
 		child.queue_free()

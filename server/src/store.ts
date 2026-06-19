@@ -178,7 +178,7 @@ export class TableStore {
 }
 
 function shouldRunBotsAfterIntent(intent: Intent): boolean {
-  if (intent.type === "leave_table" || intent.type === "close_table" || intent.type === "reset_table") {
+  if (intent.type === "start" || intent.type === "leave_table" || intent.type === "close_table" || intent.type === "reset_table") {
     return false;
   }
   if (intent.type === "respond_offer" && intent.response === "refuse") {

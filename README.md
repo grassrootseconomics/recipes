@@ -9,7 +9,7 @@ Authoritative multiplayer recipe-trading MVP with a Node TypeScript server and a
 Implemented:
 
 - Server-owned tables, participants, ingredients, vouchers, recipes, platter, offers, dishes, transaction history, timers, bots, filtered snapshots, and WebSocket updates.
-- Godot client for `Play Offline`, `Play Online`, joining online tables, taking over prefilled bot seats, choosing `round_robin` or `market`, pausing/resuming, starting, depositing, swapping with the platter, creating/responding to offers, preparing dishes, viewing dish totals/transaction history, ending the game, and eating.
+- Godot client for `Play Offline`, `Play Online`, joining online tables, taking over prefilled bot seats, choosing `round_robin` or `market`, pausing/resuming, starting, watching automatic opening offerings, swapping with the platter, creating/responding to offers, preparing dishes, viewing dish totals/transaction history, ending the game, and eating.
 - Online host-controlled seats with filtered per-seat views and explicit acting-seat intents.
 - Server-enforced `round_robin` and `market` turn modes. New tables default to `round_robin`.
 - Offline pass-and-play rules runtime for one-device local seats and bots, using the same snapshot/intent UI path as online play.
@@ -97,9 +97,9 @@ Manual smoke path:
 3. The table starts with 8 seats: you plus 7 bots.
 4. Use the seat grid to edit seat names and switch available bot seats between `Player` and `Bot` before start.
 5. Choose `round_robin` or `market`; `round_robin` is the default.
-6. Click `Start Game`.
-7. Deposit one card from each controlled seat.
-8. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem Cards and Pass Turn`, dish totals, transaction history, `Prepare Dish`, `End Game`, and dish bites.
+6. Click `Start Cooking`.
+7. Watch the automatic opening offerings fill the Common Basket.
+8. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem / Pass`, dish totals, transaction history, `Prepare Dish`, `End Game`, and dish bites.
 
 To test multiple humans locally, open another Godot client and join using the invite code.
 
@@ -110,6 +110,7 @@ cd /home/wor/src/recipes
 npm run typecheck
 npm run test:run
 npm run test:offline
+npm run test:visual
 godot4 --headless --log-file /tmp/recipes-godot-headless.log --path client --quit-after 5
 ```
 
@@ -131,10 +132,12 @@ Run an 8-seat game through the real HTTP/WebSocket API:
 
 ```bash
 cd /home/wor/src/recipes
-npm run simulate:game -- --players=8 --dish-goal=1 --profile=local --turn-mode=market
-npm run simulate:game -- --players=8 --dish-goal=1 --profile=local --turn-mode=round_robin
-npm run simulate:game -- --games=100 --player-min=8 --player-max=8 --concurrency=10 --dish-goal=1 --profile=local --turn-mode=market
-npm run simulate:game -- --games=100 --player-min=8 --player-max=8 --concurrency=10 --dish-goal=1 --profile=local --turn-mode=market --suite-max-duration-ms=300000
+npm run simulate:game -- --players=8 --dish-goal=4 --profile=local --turn-mode=market
+npm run simulate:game -- --players=8 --dish-goal=4 --profile=local --turn-mode=round_robin
+npm run simulate:game -- --players=8 --dish-goal=4 --profile=disconnect --turn-mode=market
+npm run simulate:game -- --players=8 --dish-goal=4 --profile=jitter --turn-mode=market
+npm run simulate:game -- --players=8 --dish-goal=4 --profile=bad --turn-mode=market
+npm run simulate:game -- --games=3 --player-min=8 --player-max=8 --concurrency=2 --dish-goal=4 --profile=local --turn-mode=market --suite-max-duration-ms=300000
 ```
 
 Profiles:
@@ -193,8 +196,8 @@ Web export:
 
 ```bash
 cd /home/wor/src/recipes
-mkdir -p client/web
-godot4 --headless --path client --export-debug Web web/index.html
+mkdir -p client/build/web
+godot4 --headless --path client --export-debug Web build/web/index.html
 ```
 
 Android test APK:
@@ -212,6 +215,7 @@ Godot export templates must be installed for export commands to work.
 - Keep the server authoritative. The client sends intents only.
 - Keep the Godot client GDScript-only.
 - Do not add accounts, wallets, blockchain, borrowing, free chat, or a global leaderboard unless `DESCRIPTION.md` changes first.
+- Commit Godot source resource metadata such as `.import` and `.uid` files; only generated build/editor output is ignored.
 - Generated folders such as `node_modules/`, `server/dist/`, `client/.godot/`, `client/build/`, and `client/web/` are ignored.
 
 ## First Push Checklist

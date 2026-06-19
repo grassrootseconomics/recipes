@@ -12,6 +12,7 @@ func _initialize() -> void:
 		_last_error = str(error.get("description", JSON.stringify(error)))
 	)
 	_regression_lobby_seat_editor(store)
+	_regression_lobby_rename_then_start_from_controlled_view(store)
 	_regression_own_redeem_returns_card_for_swap(store)
 	_regression_redeem_all_and_pass_turn(store)
 	_regression_goal_complete_bot_accepts_offer(store)
@@ -30,6 +31,8 @@ func _regression_lobby_seat_editor(store: Node) -> void:
 	_require(str(store.table.get("participants", {}).get("p1", {}).get("name", "")) == "Mara", "offline host seat can be renamed")
 	_require(store.handle_host_intent({"type": "rename_participant", "participantId": "p2", "name": "Zed"}), "rename bot seat: %s" % _last_error)
 	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "Zed_b", "offline bot seat keeps short _b name")
+	_require(store.handle_host_intent({"type": "rename_participant", "participantId": "p2", "name": "Zed_bx"}), "rename edited bot seat: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "Zed_bx", "offline explicit bot name edit is preserved")
 	_require(store.handle_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ted"}), "take bot seat as player: %s" % _last_error)
 	var controlled: Dictionary = store.table.get("participants", {}).get("p2", {})
 	_require(str(controlled.get("kind", "")) == "human", "offline taken seat becomes player")
@@ -39,6 +42,23 @@ func _regression_lobby_seat_editor(store: Node) -> void:
 	var bot: Dictionary = store.table.get("participants", {}).get("p2", {})
 	_require(str(bot.get("kind", "")) == "bot", "offline seat can return to bot")
 	_require(str(bot.get("name", "")) == "Ted_b", "offline returned bot uses short _b name")
+
+
+func _regression_lobby_rename_then_start_from_controlled_view(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-lobby-rename-start").is_empty(), "create lobby rename-start table")
+	_require(store.handle_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ted"}), "take controlled seat before rename-start: %s" % _last_error)
+	_require(store.view_as("p2"), "view controlled seat before lobby rename-start")
+	_require(
+		not store.handle_intent({"type": "rename_participant", "participantId": "p3", "name": "Pip"}),
+		"controlled non-host view cannot rename another bot directly"
+	)
+	_require(_last_error.contains("Only the host"), "direct controlled-seat rename reports host requirement")
+	_require(store.handle_host_intent({"type": "rename_participant", "participantId": "p3", "name": "Pip"}), "host rename bot while viewing controlled seat: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p3", {}).get("name", "")) == "Pip_b", "host-edited bot name is committed before start")
+	_require(store.handle_host_intent({"type": "start"}), "start after host-edited bot name: %s" % _last_error)
+	_require(str(store.table.get("phase", "")) == "playing", "start succeeds after host-edited bot name")
+	_require(str(store.table.get("participants", {}).get("p3", {}).get("name", "")) == "Pip_b", "host-edited bot name survives start")
+	_require(bool(store.table.get("participants", {}).get("p3", {}).get("depositedInitial", false)), "renamed bot participates in automatic offering")
 
 
 func _regression_own_redeem_returns_card_for_swap(store: Node) -> void:
@@ -83,9 +103,6 @@ func _regression_redeem_all_and_pass_turn(store: Node) -> void:
 		_require(store.handle_host_intent({"type": "add_controlled_seat"}), "add controlled seat: %s" % _last_error)
 	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 1}), "set one-dish goal")
 	_require(store.handle_host_intent({"type": "start"}), "start redeem-all table: %s" % _last_error)
-	for participant_id in _active_ids(store.latest_snapshot):
-		_require(store.view_as(participant_id), "view participant %s" % participant_id)
-		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id, false), "deposit %s: %s" % [participant_id, _last_error])
 	_require(str(store.table.get("phase", "")) == "playing", "redeem-all table enters playing")
 	_require(str(store.table.get("currentTurnParticipantId", "")) == "p1", "redeem-all starts with p1")
 	var ingredient_id := _participant_ingredient_id(store, "p1")
@@ -169,9 +186,6 @@ func _setup_market_table(store: Node) -> void:
 	_require(store.handle_host_intent({"type": "set_turn_mode", "mode": "market"}), "set market mode")
 	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 1}), "set one-dish goal")
 	_require(store.handle_host_intent({"type": "start"}), "start regression table: %s" % _last_error)
-	for participant_id in _active_ids(store.latest_snapshot):
-		_require(store.view_as(participant_id), "view participant %s" % participant_id)
-		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id), "deposit %s: %s" % [participant_id, _last_error])
 	_require(str(store.latest_snapshot.get("phase", "")) == "playing", "table enters playing")
 
 
@@ -181,9 +195,6 @@ func _regression_round_robin_pass_turn_history(store: Node) -> void:
 		_require(store.handle_host_intent({"type": "add_controlled_seat"}), "add controlled seat: %s" % _last_error)
 	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 1}), "set one-dish goal")
 	_require(store.handle_host_intent({"type": "start"}), "start round robin table: %s" % _last_error)
-	for participant_id in _active_ids(store.latest_snapshot):
-		_require(store.view_as(participant_id), "view participant %s" % participant_id)
-		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id, false), "deposit %s: %s" % [participant_id, _last_error])
 	_require(str(store.table.get("phase", "")) == "playing", "round robin table enters playing")
 	_require(str(store.table.get("currentTurnParticipantId", "")) == "p1", "first turn starts with p1")
 	_require(store.handle_intent({"type": "pass_turn"}, "p1", false), "pass turn succeeds: %s" % _last_error)
@@ -199,8 +210,6 @@ func _regression_bot_budget_returns_to_human(store: Node) -> void:
 	_require(not store.create_table("Amina", "offline-bot-budget").is_empty(), "create bot budget table")
 	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 4}), "set four-dish goal")
 	_require(store.handle_intent({"type": "start"}, "p1", false), "start bot budget table: %s" % _last_error)
-	for participant_id in _active_ids(store.latest_snapshot):
-		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id, false), "deposit %s: %s" % [participant_id, _last_error])
 	store.table["currentTurnParticipantId"] = "p2"
 	store._run_bots(0)
 	_require(str(store.table.get("currentTurnParticipantId", "")) == "p1", "bot budget fallback returns control to the human host")

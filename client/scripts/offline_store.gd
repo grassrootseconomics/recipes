@@ -108,7 +108,7 @@ func handle_intent(intent: Dictionary, actor_participant_id := "", run_bot_turns
 		return _emit_error(_last_error)
 	_auto_refuse_unavailable_offers()
 	table["version"] = int(table.get("version", 0)) + 1
-	if run_bot_turns and not bool(table.get("paused", false)):
+	if run_bot_turns and str(intent.get("type", "")) != "start" and not bool(table.get("paused", false)):
 		_run_bots()
 	_emit_snapshot()
 	return true
@@ -433,8 +433,19 @@ func _start_table(actor: Dictionary) -> bool:
 		_create_vouchers(participant)
 	for participant in active:
 		table["recipes"][participant["id"]] = _generate_recipe(str(participant.get("id", "")))
+	for participant in active:
+		if not _deposit_initial_offer(participant):
+			return false
 	table["currentTurnParticipantId"] = str(active[0].get("id", "")) if str(table.get("turnMode", "round_robin")) == "round_robin" else ""
 	return true
+
+
+func _deposit_initial_offer(participant: Dictionary) -> bool:
+	var ingredient_id := str(participant.get("ingredientId", ""))
+	for voucher in _hand_vouchers(str(participant.get("id", ""))):
+		if str(voucher.get("ingredientId", "")) == ingredient_id:
+			return _deposit(participant, str(voucher.get("id", "")))
+	return _fail("No backed initial offering is available.")
 
 
 func _reset_table() -> void:
@@ -1841,28 +1852,32 @@ func _unique_name_excluding(base: String, excluded_participant_id: String) -> St
 
 func _bot_name(base: String, bot_type: String) -> String:
 	var clean := base.strip_edges()
-	clean = clean.replace("_pool_bot", "")
-	clean = clean.replace("_barter_bot", "")
-	clean = clean.replace("_mix_bot", "")
-	clean = clean.replace("_mixed_bot", "")
-	clean = clean.replace("_bot", "")
-	clean = clean.replace("_b", "")
 	if _is_generic_bot_name(base):
 		return _unique_generated_bot_name(bot_type)
+	clean = _explicit_bot_name(clean)
+	if clean.findn("_b") >= 0:
+		return _unique_name(clean)
 	return _unique_bot_name(clean, bot_type)
 
 
 func _bot_name_excluding(base: String, bot_type: String, excluded_participant_id: String) -> String:
+	var clean := base.strip_edges()
+	if _is_generic_bot_name(base):
+		return _unique_generated_bot_name_excluding(bot_type, excluded_participant_id)
+	clean = _explicit_bot_name(clean)
+	if clean.findn("_b") >= 0:
+		return _unique_name_excluding(clean, excluded_participant_id)
+	return _unique_bot_name_excluding(clean, bot_type, excluded_participant_id)
+
+
+func _explicit_bot_name(base: String) -> String:
 	var clean := base.strip_edges()
 	clean = clean.replace("_pool_bot", "")
 	clean = clean.replace("_barter_bot", "")
 	clean = clean.replace("_mix_bot", "")
 	clean = clean.replace("_mixed_bot", "")
 	clean = clean.replace("_bot", "")
-	clean = clean.replace("_b", "")
-	if _is_generic_bot_name(base):
-		return _unique_generated_bot_name_excluding(bot_type, excluded_participant_id)
-	return _unique_bot_name_excluding(clean, bot_type, excluded_participant_id)
+	return clean
 
 
 func _is_generic_bot_name(base: String) -> bool:

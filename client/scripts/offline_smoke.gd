@@ -53,17 +53,11 @@ func _smoke_controlled_seats(store: Node) -> void:
 	var start_snapshot: Dictionary = store.latest_snapshot
 	_require(int(start_snapshot.get("targetDishCount", 0)) == 1, "dish goal reflected")
 	_require(start_snapshot.get("participants", []).size() == 8, "eight participants")
-	_require(start_snapshot.get("platter", []).is_empty(), "platter empty before deposits")
-	_require(start_snapshot.get("ownHand", []).size() == 7, "host starts with seven cards")
-
-	var active_ids := _active_ids(start_snapshot)
-	for participant_id in active_ids:
-		_require(store.view_as(participant_id), "view controlled participant %s" % participant_id)
-		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id), "deposit for %s: %s" % [participant_id, _last_error])
+	_require(str(start_snapshot.get("phase", "")) == "playing", "start automatically enters play after offerings")
+	_require(start_snapshot.get("platter", []).size() == 8, "platter has eight initial offerings")
+	_require(start_snapshot.get("ownHand", []).size() == 6, "host starts with six cards after offering")
 
 	var playing_snapshot: Dictionary = store.latest_snapshot
-	_require(str(playing_snapshot.get("phase", "")) == "playing", "phase enters playing after deposits")
-	_require(playing_snapshot.get("platter", []).size() == 8, "platter has eight initial deposits")
 	_require(playing_snapshot.get("ownHand", []).size() == 6, "selected seat has six remaining cards")
 	_require(not playing_snapshot.has("allHands"), "controlled seat does not receive all hands")
 
@@ -79,14 +73,9 @@ func _smoke_bots(store: Node) -> void:
 	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 1}), "set bot dish goal")
 	_require(store.handle_host_intent({"type": "start"}), "start bot table: %s" % _last_error)
 
-	var snapshot: Dictionary = store.latest_snapshot
-	for participant_id in _active_human_ids(snapshot):
-		_require(store.view_as(participant_id), "view human %s" % participant_id)
-		_require(store.handle_intent({"type": "deposit_ingredient"}, participant_id), "human deposit %s: %s" % [participant_id, _last_error])
-
 	var after_deposit: Dictionary = store.latest_snapshot
-	_require(str(after_deposit.get("phase", "")) == "playing", "bots deposit and table enters play")
-	_require(after_deposit.get("platter", []).size() == 8, "bot table has eight deposits")
+	_require(str(after_deposit.get("phase", "")) == "playing", "automatic offerings enter play")
+	_require(after_deposit.get("platter", []).size() == 8, "bot table has eight offerings")
 	var bot_names: Array[String] = []
 	for participant in after_deposit.get("participants", []):
 		if str(participant.get("kind", "")) == "bot":

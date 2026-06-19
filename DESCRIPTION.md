@@ -22,7 +22,7 @@ The table should show each active player’s finished dish count and the names o
 
 ## Trading And The Central Platter
 
-At the start of the game, every active participant must deposit exactly one active voucher into the central platter pool. The central platter is visible to everyone.
+At the start of the game, every active participant automatically contributes exactly one active voucher into the central platter pool. The client should show this as the opening offering animation, not as a manual per-player button flow. The central platter is visible to everyone.
 
 After depositing, a player may swap 1:1 with the platter by giving one card from their hand and taking one visible card from the platter.
 

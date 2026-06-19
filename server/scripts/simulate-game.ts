@@ -99,9 +99,6 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
       await sendIntent(host, { type: "set_target_dish_count", count: simulationOptions.dishGoal });
     }
     await sendIntent(host, { type: "start" });
-    for (const participant of activeParticipants(table)) {
-      await sendIntent(clientFor(clients, participant.id), { type: "deposit_ingredient" });
-    }
 
     while (table.phase === "playing") {
       for (const participant of activeParticipants(table)) {

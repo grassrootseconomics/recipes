@@ -178,10 +178,10 @@ static func _with_texture(raw_meta: Dictionary) -> Dictionary:
 static func _texture_for_path(texture_path: String) -> Texture2D:
 	if _texture_cache.has(texture_path):
 		return _texture_cache[texture_path]
-	var image := Image.new()
-	if image.load(texture_path) != OK:
+	var resource := ResourceLoader.load(texture_path)
+	if not resource is Texture2D:
 		return null
-	var texture := ImageTexture.create_from_image(image)
+	var texture := resource as Texture2D
 	_texture_cache[texture_path] = texture
 	return texture
 

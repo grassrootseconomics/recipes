@@ -31,6 +31,7 @@
 - [x] Simplify setup to `Play Offline` / `Play Online` with player plus 7 prefilled bot seats, fixed 4 dishes, fixed 40 stock, and no timer in normal setup.
 - [x] Allow offline and online hosts to take over prefilled bot seats before start while preserving filtered per-seat views.
 - [x] Add editable pre-start seat grid with ingredient image, name field, and Player/Bot toggle for all 8 seats.
+- [x] Automatically contribute one opening promise card from every active player into the Common Basket at start.
 - [ ] Add polished visual assets and table layout inspired by potluck dinners and cooking apps.
 - [x] Add structured offer creation/acceptance flows.
 - [ ] Add mobile touch UX for card placement, platter swaps, settlement swaps, and eating food parts.
@@ -41,6 +42,7 @@
 - [ ] Add persistence if the design requires restart recovery.
 - [ ] Add server deployment configuration.
 - [x] Add single-table load tests for larger catalog-backed games before fixing the current MVP at 8 seats.
+- [x] Complete 8-player, 4-dish release simulations for local, round-robin, disconnect/reconnect, jitter, bad-network, and concurrent local-suite profiles.
 - [ ] Add concurrent load and soak tests for 100+ simultaneous 8-seat tables.
 - [ ] Revisit variable runtime table sizes only if the fixed 8-seat MVP needs expansion.
 - [ ] Optimize live deltas so mature 8-seat game deltas stay near the 4 KB p95 target, with 20-seat budgets reserved for future expansion.

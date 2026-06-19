@@ -459,8 +459,15 @@ function resolveBotName(existing: string[], requestedName: string, _ordinal: num
   if (GENERIC_BOT_NAMES.has(lower)) {
     return uniqueGeneratedBotName(existing, botType);
   }
-  const rawBase = trimmed.replace(/_(pool|barter|mix|mixed)_bot$/i, "").replace(/_?bot$/i, "").replace(/_b$/i, "");
-  return uniqueBotName(existing, rawBase, botType);
+  const explicit = explicitBotName(trimmed);
+  if (/_b/i.test(explicit)) {
+    return uniqueName(existing, explicit);
+  }
+  return uniqueBotName(existing, explicit, botType);
+}
+
+function explicitBotName(requestedName: string): string {
+  return requestedName.replace(/_(pool|barter|mix|mixed)_bot$/i, "").replace(/_?bot$/i, "");
 }
 
 function botNameSuffix(botType: BotType): string {
@@ -821,7 +828,21 @@ function startTable(table: Table, actor: Participant): void {
   for (const participant of active) {
     table.recipes[participant.id] = generateRecipe(table, participant.id);
   }
+  for (const participant of active) {
+    depositInitialOffer(table, participant);
+  }
   table.currentTurnParticipantId = table.turnMode === "round_robin" ? active[0]?.id : undefined;
+}
+
+function depositInitialOffer(table: Table, participant: Participant): void {
+  const voucher = Object.values(table.vouchers)
+    .filter((candidate) => candidate.location.type === "hand" && candidate.location.participantId === participant.id)
+    .filter((candidate) => candidate.ingredientId === participant.ingredientId)
+    .sort((left, right) => left.id.localeCompare(right.id))[0];
+  if (!voucher) {
+    throw new GameError("No backed initial offering is available.", "voucher_not_in_hand");
+  }
+  depositToPlatter(table, participant, voucher.id);
 }
 
 function stopTable(table: Table, actor: Participant): void {

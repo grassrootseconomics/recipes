@@ -70,10 +70,6 @@ function startTable(activeCount: number, seed = "start-seed", turnMode: TurnMode
 
 function startAndDeposit(activeCount: number, seed = "deposit-seed", turnMode: TurnMode = "market"): Harness {
   const harness = startTable(activeCount, seed, turnMode);
-  for (const participant of activeParticipants(harness.table)) {
-    const voucherId = handVoucherIds(harness.table, participant.id)[0] as string;
-    applyIntent(harness.table, participant.id, { type: "deposit", voucherId });
-  }
   expect(harness.table.phase).toBe("playing");
   return harness;
 }
@@ -173,7 +169,13 @@ describe("catalog and startup", () => {
     expect(activeParticipants(created.table).filter((participant) => participant.kind === "bot")).toHaveLength(7);
 
     store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
-    expect(created.table.phase).toBe("deposit");
+    expect(created.table.phase).toBe("playing");
+    expect(platterVoucherIds(created.table)).toHaveLength(8);
+    expect(created.table.transactionHistory.filter((row) => row.action === "Deposit")).toHaveLength(8);
+    for (const participant of activeParticipants(created.table)) {
+      expect(participant.depositedInitial).toBe(true);
+      expect(handVoucherIds(created.table, participant.id)).toHaveLength(VOUCHERS_PER_INGREDIENT - 1);
+    }
   });
 
   it("accepts unique requested table codes and rejects reused or invalid codes", () => {
@@ -209,8 +211,9 @@ describe("catalog and startup", () => {
 
   it("allows start with exactly 8 active participants", () => {
     const { table } = startTable(8, "allowed-8");
-    expect(table.phase).toBe("deposit");
+    expect(table.phase).toBe("playing");
     expect(activeParticipants(table)).toHaveLength(8);
+    expect(platterVoucherIds(table)).toHaveLength(8);
   });
 
   it("makes running joins witnesses", () => {
@@ -246,6 +249,13 @@ describe("catalog and startup", () => {
 
     expect(created.table.participants[hostId].name).toBe("Mara");
     expect(created.table.participants[bot.id].name).toBe("Zed_b");
+
+    store.handleIntent(created.table.code, created.seatToken, { type: "rename_participant", participantId: bot.id, name: "Zed_bx" }, false);
+    expect(created.table.participants[bot.id].name).toBe("Zed_bx");
+
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+    expect(created.table.phase).toBe("playing");
+    expect(created.table.participants[bot.id].name).toBe("Zed_bx");
   });
 
   it("lets a joined player rename their own lobby seat but not other seats", () => {
@@ -317,7 +327,7 @@ describe("catalog and startup", () => {
     }
     store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
 
-    const actorSnapshot = store.handleIntent(created.table.code, created.seatToken, { type: "deposit_ingredient" }, false, controlledId);
+    const actorSnapshot = buildSnapshot(created.table, controlledId, created.participant.id);
     expect(created.table.participants[controlledId].depositedInitial).toBe(true);
     expect(actorSnapshot.viewerParticipantId).toBe(controlledId);
     expect(actorSnapshot.connectionParticipantId).toBe(created.participant.id);
@@ -427,7 +437,6 @@ describe("catalog and startup", () => {
     const store = new TableStore();
     const created = store.createTable("Host", "round-robin-human-turn");
     store.handleIntent(created.table.code, created.seatToken, { type: "start" });
-    store.handleIntent(created.table.code, created.seatToken, { type: "deposit_ingredient" });
     expect(created.table.phase).toBe("playing");
     expect(created.table.currentTurnParticipantId).toBe(created.participant.id);
 
@@ -455,9 +464,6 @@ describe("catalog and startup", () => {
     const store = new TableStore();
     const created = store.createTable("Host", "round-robin-bot-budget");
     store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
-    for (const participant of activeParticipants(created.table)) {
-      applyIntent(created.table, participant.id, { type: "deposit_ingredient" });
-    }
     const firstBot = activeParticipants(created.table).find((participant) => participant.kind === "bot") as Participant;
     created.table.currentTurnParticipantId = firstBot.id;
 
@@ -493,13 +499,16 @@ describe("catalog and startup", () => {
     const snapshot = store.handleIntent(created.table.code, created.seatToken, { type: "start" });
     const active = activeParticipants(created.table);
     const bots = active.filter((participant) => participant.kind === "bot");
+    const historyAfterStart = created.table.transactionHistory.map((row) => row.action);
 
-    expect(created.table.phase).toBe("deposit");
+    expect(created.table.phase).toBe("playing");
     expect(active).toHaveLength(8);
     expect(bots.every((participant) => participant.depositedInitial)).toBe(true);
-    expect(created.table.participants[created.table.hostParticipantId].depositedInitial).toBe(false);
-    expect(snapshot.phase).toBe("deposit");
-    expect(snapshot.ownHand).toHaveLength(VOUCHERS_PER_INGREDIENT);
+    expect(created.table.participants[created.table.hostParticipantId].depositedInitial).toBe(true);
+    expect(historyAfterStart).toHaveLength(8);
+    expect(historyAfterStart.every((action) => action === "Deposit")).toBe(true);
+    expect(snapshot.phase).toBe("playing");
+    expect(snapshot.ownHand).toHaveLength(VOUCHERS_PER_INGREDIENT - 1);
     expect(snapshot.ownRecipe).toBeDefined();
   });
 
@@ -514,10 +523,7 @@ describe("catalog and startup", () => {
     );
     expect(ownRequirement).toBeDefined();
 
-    store.handleIntent(created.table.code, created.seatToken, {
-      type: "deposit",
-      voucherId: handVoucherIds(created.table, created.participant.id)[0] as string
-    });
+    runBots(created.table);
 
     expect(created.table.phase).toBe("playing");
     expect(ownRequirement?.redeemedQty).toBe(ownRequirement?.requiredQty);
@@ -1084,12 +1090,8 @@ describe("platter, offers, and visibility", () => {
     expect(initialSnapshot.ownHandGroups).toContainEqual({
       ingredientId: first.ingredientId,
       ownerParticipantId: first.id,
-      count: VOUCHERS_PER_INGREDIENT
+      count: VOUCHERS_PER_INGREDIENT - 1
     });
-
-    for (const participant of activeParticipants(table)) {
-      applyIntent(table, participant.id, { type: "deposit_ingredient" });
-    }
 
     expect(table.phase).toBe("playing");
     expect(platterVoucherIds(table).filter((voucherId) => table.vouchers[voucherId].ownerParticipantId === first.id)).toHaveLength(1);
@@ -1154,20 +1156,17 @@ describe("platter, offers, and visibility", () => {
   it("records successful deposit, swap, exchange, and redemption transactions", () => {
     const { table } = startTable(8, "transactions");
     const [first, second] = activeParticipants(table);
-    const firstDepositId = handVoucherIds(table, first.id)[0] as string;
+    const firstDeposit = table.transactionHistory.find(
+      (transaction) => transaction.participantId === first.id && transaction.action === "Deposit"
+    );
 
-    applyIntent(table, first.id, { type: "deposit", voucherId: firstDepositId });
-    expect(table.transactionHistory.at(-1)).toMatchObject({
+    expect(firstDeposit).toMatchObject({
       name: first.name,
       action: "Deposit",
       counterparty: "Platter",
-      itemOut: table.vouchers[firstDepositId].ingredientId[0].toUpperCase() + table.vouchers[firstDepositId].ingredientId.slice(1),
+      itemOut: first.ingredientId?.[0].toUpperCase() + (first.ingredientId?.slice(1) ?? ""),
       itemBack: "None"
     });
-
-    for (const participant of activeParticipants(table).filter((participant) => !participant.depositedInitial)) {
-      applyIntent(table, participant.id, { type: "deposit", voucherId: handVoucherIds(table, participant.id)[0] as string });
-    }
 
     const giveVoucherId = handVoucherIds(table, first.id)[0] as string;
     const takeVoucherId = platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId !== first.id) as string;
@@ -1574,9 +1573,6 @@ describe("platter, offers, and visibility", () => {
     const hostId = table.hostParticipantId;
     const [poolOnly, barterOnly] = addBots(table, hostId, ["pool_only", "barter_only"]);
     applyIntent(table, hostId, { type: "start" });
-    for (const participant of activeParticipants(table)) {
-      applyIntent(table, participant.id, { type: "deposit", voucherId: handVoucherIds(table, participant.id)[0] as string });
-    }
 
     const target = firstOtherActive(table, poolOnly.id);
     expect(() =>
@@ -1601,9 +1597,6 @@ describe("platter, offers, and visibility", () => {
     const { table } = makeHarness(7, "bot-self-redeem");
     const [bot] = addBots(table, table.hostParticipantId, ["mixed"]);
     applyIntent(table, table.hostParticipantId, { type: "start" });
-    for (const participant of activeParticipants(table)) {
-      applyIntent(table, participant.id, { type: "deposit", voucherId: handVoucherIds(table, participant.id)[0] as string });
-    }
     expect(table.phase).toBe("playing");
 
     const ownRequirement = table.recipes[bot.id]?.requirements.find(
@@ -1800,7 +1793,7 @@ describe("platter, offers, and visibility", () => {
       connected: true
     });
     expect(rejoinedHand).toEqual(firstHand);
-    expect(rejoinedHand).toHaveLength(VOUCHERS_PER_INGREDIENT);
+    expect(rejoinedHand).toHaveLength(VOUCHERS_PER_INGREDIENT - 1);
   });
 
   it("lets the host manually convert a connected or disconnected active player to a mixed bot", () => {
@@ -1888,9 +1881,6 @@ describe("winning and eating", () => {
     const harness = makeHarness(8, "one-dish-goal");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
-    for (const participant of activeParticipants(harness.table)) {
-      applyIntent(harness.table, participant.id, { type: "deposit", voucherId: handVoucherIds(harness.table, participant.id)[0] as string });
-    }
 
     const participants = activeParticipants(harness.table);
     for (const participant of participants.slice(0, -1)) {
@@ -1962,9 +1952,6 @@ describe("winning and eating", () => {
     const harness = makeHarness(8, "settlement-swaps");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
-    for (const participant of activeParticipants(harness.table)) {
-      applyIntent(harness.table, participant.id, { type: "deposit", voucherId: handVoucherIds(harness.table, participant.id)[0] as string });
-    }
 
     const [debtor, shortfall] = activeParticipants(harness.table);
     const extraDebtorVoucher = handVoucherIds(harness.table, debtor.id).find(
@@ -2069,9 +2056,6 @@ describe("winning and eating", () => {
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
     for (const participant of activeParticipants(harness.table)) {
-      applyIntent(harness.table, participant.id, { type: "deposit", voucherId: handVoucherIds(harness.table, participant.id)[0] as string });
-    }
-    for (const participant of activeParticipants(harness.table)) {
       completeRecipeBySetup(harness.table, participant.id);
       applyIntent(harness.table, participant.id, { type: "prepare" });
     }
@@ -2101,9 +2085,6 @@ describe("winning and eating", () => {
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
     for (const participant of activeParticipants(harness.table)) {
-      applyIntent(harness.table, participant.id, { type: "deposit", voucherId: handVoucherIds(harness.table, participant.id)[0] as string });
-    }
-    for (const participant of activeParticipants(harness.table)) {
       completeRecipeBySetup(harness.table, participant.id);
       applyIntent(harness.table, participant.id, { type: "prepare" });
     }
@@ -2120,9 +2101,6 @@ describe("winning and eating", () => {
     store.handleIntent(table.code, hostToken, { type: "set_timer", seconds: 1 }, false);
     store.handleIntent(table.code, hostToken, { type: "start" }, false);
     const winner = activeParticipants(table)[0] as Participant;
-    for (const participant of activeParticipants(table)) {
-      applyIntent(table, participant.id, { type: "deposit", voucherId: handVoucherIds(table, participant.id)[0] as string });
-    }
     completeRecipeBySetup(table, winner.id);
     applyIntent(table, winner.id, { type: "prepare" });
 
@@ -2166,7 +2144,7 @@ describe("winning and eating", () => {
     store.handleIntent(table.code, hostToken, { type: "set_target_dish_count", count: 2 }, false);
     store.handleIntent(table.code, hostToken, { type: "set_stock", count: requiredStock }, false);
     store.handleIntent(table.code, hostToken, { type: "start" }, false);
-    expect(table.phase).toBe("deposit");
+    expect(table.phase).toBe("playing");
 
     store.handleIntent(table.code, hostToken, { type: "close_table" }, false);
     expect(table.phase).toBe("complete");
@@ -2264,7 +2242,6 @@ describe("HTTP app", () => {
       store.joinTable(created.table.code, `Player ${index + 2}`);
     }
     store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
-    store.handleIntent(created.table.code, created.seatToken, { type: "deposit_ingredient" }, false);
 
     const response = await app.inject({
       method: "GET",
