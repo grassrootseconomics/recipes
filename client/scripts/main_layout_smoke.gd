@@ -10,6 +10,8 @@ func _initialize() -> void:
 	var recipes_client := root.get_node("/root/RecipesClient")
 	recipes_client.start_offline_table("", "")
 	await process_frame
+	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ben"})
+	await process_frame
 	recipes_client.send_host_intent({"type": "start"})
 	for _index in range(12):
 		await process_frame
@@ -53,6 +55,16 @@ func _initialize() -> void:
 	_require(cooks_title != null, "main scene table renders the Cooks title")
 	_require(cooks_title.get_global_rect().position.y - visual_rect.position.y < 80.0, "table content is top-aligned without a large blank band")
 
+	main.set("_last_controlled_turn_participant_id", "p2")
+	recipes_client.send_intent({"type": "pass_turn"})
+	for _index in range(8):
+		if str(recipes_client.latest_snapshot.get("viewerParticipantId", "")) == "p2":
+			break
+		await process_frame
+	_require(str(recipes_client.latest_snapshot.get("viewerParticipantId", "")) == "p2", "main view follows a controlled current turn even if the last-turn marker is stale")
+	recipes_client.view_as("p1")
+	await process_frame
+
 	holder.size = Vector2(480, holder.size.y)
 	main.call("_fit_table_visual_to_window")
 	var narrow_visual_rect := visual.get_global_rect()
@@ -63,6 +75,39 @@ func _initialize() -> void:
 	_require(post_controls != null and not post_controls.visible, "post-table End Game controls hide on the title screen")
 	var table_menu_button := visual.find_child("TableMenuButton", true, false) as Control
 	_require(table_menu_button != null and not table_menu_button.visible, "table hamburger menu hides on the title screen")
+
+	recipes_client.start_offline_table("", "renamed-bot-visual")
+	await process_frame
+	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "jjj_b"})
+	await process_frame
+	recipes_client.send_host_intent({"type": "convert_to_bot", "participantId": "p2", "botType": "mixed"})
+	await process_frame
+	_require(str(recipes_client.latest_snapshot.get("participants", [])[1].get("name", "")) == "jjj_b", "visual smoke starts with toggled bot named jjj_b")
+	_require(str(recipes_client.latest_snapshot.get("participants", [])[1].get("kind", "")) == "bot", "visual smoke starts with p2 as a bot")
+	recipes_client.send_host_intent({"type": "start"})
+	for _index in range(20):
+		await process_frame
+	visual.call("debug_flush_animations")
+	await process_frame
+	visual.call("debug_press_pass_turn_action")
+	var saw_jjj_transaction := false
+	var saw_bot_animation := false
+	for _index in range(700):
+		for raw_transaction in recipes_client.latest_snapshot.get("transactionHistory", []):
+			var transaction: Dictionary = raw_transaction
+			if str(transaction.get("name", "")) == "jjj_b":
+				saw_jjj_transaction = true
+		var stats: Dictionary = visual.get("debug_stats")
+		for raw_type in stats.get("lastAnimationTypes", []):
+			var animation_type := str(raw_type)
+			if animation_type == "public_redeem" or animation_type == "swap" or animation_type == "turn":
+				saw_bot_animation = true
+		if saw_jjj_transaction and saw_bot_animation and str(recipes_client.latest_snapshot.get("currentTurnParticipantId", "")) == "p1":
+			break
+		await process_frame
+	_require(saw_jjj_transaction, "renamed bot jjj_b produces visible transaction history after pass")
+	_require(saw_bot_animation, "renamed bot jjj_b produces visual bot-turn animation events after pass")
+	_require(str(recipes_client.latest_snapshot.get("currentTurnParticipantId", "")) == "p1", "renamed bot visual smoke returns turn to Amina")
 	print("main layout smoke ok")
 	quit(0)
 

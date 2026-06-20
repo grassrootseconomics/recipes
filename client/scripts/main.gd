@@ -2673,7 +2673,6 @@ func _refresh_controls(snapshot: Dictionary) -> void:
 
 func _add_lobby_controls(snapshot: Dictionary) -> void:
 	var active_count := _active_count(snapshot)
-	var compact := _is_compact_lobby()
 	if _is_online_snapshot(snapshot):
 		_add_online_lobby_invite_controls(snapshot)
 	_phase_controls.add_child(_lobby_title("Who's Cooking?"))
@@ -2687,21 +2686,7 @@ func _add_lobby_controls(snapshot: Dictionary) -> void:
 
 	_add_seat_setup_grid(snapshot, true)
 
-	var turn_row := _button_row()
-	_phase_controls.add_child(turn_row)
-	var round_button := _button("Round Robin", func() -> void:
-		RecipesClient.send_host_intent({"type": "set_turn_mode", "mode": "round_robin"})
-	)
-	var market_button := _button("Market", func() -> void:
-		RecipesClient.send_host_intent({"type": "set_turn_mode", "mode": "market"})
-	)
-	round_button.disabled = str(snapshot.get("turnMode", "round_robin")) == "round_robin"
-	market_button.disabled = str(snapshot.get("turnMode", "round_robin")) == "market"
-	round_button.custom_minimum_size = Vector2(112, 32 if compact else 44)
-	market_button.custom_minimum_size = Vector2(112, 32 if compact else 44)
-	turn_row.add_child(round_button)
-	turn_row.add_child(market_button)
-
+	var compact := _is_compact_lobby()
 	var start_button := _button("Start Cooking", func() -> void:
 		_commit_lobby_seat_setup_edits()
 		RecipesClient.send_host_intent({"type": "start"})
@@ -3263,15 +3248,11 @@ func _maybe_follow_controlled_turn(snapshot: Dictionary) -> void:
 		return
 	if _viewer_is_witness(snapshot):
 		return
-	if str(snapshot.get("turnMode", "round_robin")) != "round_robin":
-		return
 	var phase := str(snapshot.get("phase", ""))
 	if phase != "playing" && phase != "settlement" && phase != "eating":
 		return
 	var current_turn_id := str(snapshot.get("currentTurnParticipantId", ""))
 	if current_turn_id == "":
-		return
-	if _last_controlled_turn_participant_id == current_turn_id:
 		return
 	if current_turn_id == str(snapshot.get("viewerParticipantId", "")):
 		return
@@ -3862,17 +3843,13 @@ func _viewer_can_bite_dish(snapshot: Dictionary, dish: Dictionary) -> bool:
 
 
 func _turn_status_label(snapshot: Dictionary) -> String:
-	if str(snapshot.get("turnMode", "round_robin")) != "round_robin":
-		return "Turn mode: market"
 	var current_id := str(snapshot.get("currentTurnParticipantId", ""))
 	if current_id == "":
-		return "Turn mode: round robin"
-	return "Turn mode: round robin. Current turn: %s" % _participant_name(snapshot, current_id)
+		return "Current turn: waiting"
+	return "Current turn: %s" % _participant_name(snapshot, current_id)
 
 
 func _viewer_can_take_turn(snapshot: Dictionary) -> bool:
-	if str(snapshot.get("turnMode", "round_robin")) != "round_robin":
-		return true
 	var phase := str(snapshot.get("phase", "lobby"))
 	if phase == "lobby" or phase == "deposit" or phase == "complete":
 		return true
@@ -3903,8 +3880,6 @@ func _add_read_only_turn_view(snapshot: Dictionary) -> void:
 
 
 func _add_pass_turn_button(snapshot: Dictionary) -> void:
-	if str(snapshot.get("turnMode", "round_robin")) != "round_robin":
-		return
 	if not _viewer_can_take_turn(snapshot):
 		return
 	var phase := str(snapshot.get("phase", "lobby"))

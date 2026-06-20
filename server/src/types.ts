@@ -2,7 +2,7 @@ export type ParticipantRole = "active" | "witness";
 export type ParticipantKind = "human" | "bot";
 export type BotType = "pool_only" | "barter_only" | "mixed";
 export type TablePhase = "lobby" | "deposit" | "playing" | "settlement" | "eating" | "complete";
-export type TurnMode = "round_robin" | "market";
+export type TurnMode = "round_robin";
 export type VoucherLocationType = "hand" | "platter" | "placed" | "holding" | "offer_lock";
 export type DishPartLocationType = "inventory" | "platter" | "eaten";
 export type OfferStatus = "pending" | "accepted" | "refused" | "cancelled";
@@ -52,6 +52,16 @@ export interface Recipe {
   fallbackIngredientIds: string[];
   requirements: RecipeRequirement[];
   omittedIngredientId: string;
+}
+
+export interface PublicRecipeRequirementSummary {
+  ingredientId: string;
+  missingQty: number;
+}
+
+export interface PublicRecipeSummary {
+  name: string;
+  missingRequirements: PublicRecipeRequirementSummary[];
 }
 
 export interface Participant {
@@ -214,6 +224,7 @@ export interface PublicParticipant {
   heldFoodPartCount: number;
   depositedInitial: boolean;
   connected: boolean;
+  currentRecipe?: PublicRecipeSummary;
 }
 
 export interface Snapshot {
@@ -297,7 +308,6 @@ export type Intent =
   | { type: "set_timer"; seconds: number | null }
   | { type: "set_target_dish_count"; count: number }
   | { type: "set_stock"; count: number }
-  | { type: "set_turn_mode"; mode: TurnMode }
   | { type: "set_pause"; paused: boolean }
   | { type: "start" }
   | { type: "stop" }

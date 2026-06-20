@@ -33,6 +33,8 @@ var latest_snapshot: Dictionary = {}
 var _catalog: Dictionary = {}
 var _game_config: Dictionary = {}
 var _last_error := ""
+var _bot_run_active := false
+var _bot_run_generation := 0
 
 
 func _ready() -> void:
@@ -45,6 +47,7 @@ func _process(_delta: float) -> void:
 
 
 func create_table(host_name: String, seed: String) -> Dictionary:
+	_cancel_bot_run()
 	_load_catalog()
 	var name := host_name.strip_edges()
 	if name == "" or name.to_lower() == "host" or name.to_lower() == "player":
@@ -84,6 +87,7 @@ func create_table(host_name: String, seed: String) -> Dictionary:
 
 
 func disconnect_local() -> void:
+	_cancel_bot_run()
 	table = {}
 	participant_id = ""
 	acting_participant_id = ""
@@ -109,8 +113,10 @@ func handle_intent(intent: Dictionary, actor_participant_id := "", run_bot_turns
 	_auto_refuse_unavailable_offers()
 	table["version"] = int(table.get("version", 0)) + 1
 	if run_bot_turns and str(intent.get("type", "")) != "start" and not bool(table.get("paused", false)):
-		_run_bots()
-	_emit_snapshot()
+		_emit_snapshot()
+		_schedule_bot_run(true)
+	else:
+		_emit_snapshot()
 	return true
 
 
@@ -187,14 +193,6 @@ func _apply_intent(actor_id: String, intent: Dictionary) -> bool:
 			if stock < min_stock or stock > max_stock:
 				return _fail("Stock must be between %s and %s." % [min_stock, max_stock])
 			table["stockPerIngredient"] = stock
-		"set_turn_mode":
-			if not _require_host(actor) or not _require_lobby():
-				return false
-			var mode := str(intent.get("mode", "round_robin"))
-			if mode != "round_robin" and mode != "market":
-				return _fail("Unknown turn mode.")
-			table["turnMode"] = mode
-			table["currentTurnParticipantId"] = ""
 		"set_pause":
 			if not _require_host(actor):
 				return false
@@ -371,7 +369,7 @@ func _convert_to_bot(actor: Dictionary, target_id: String, bot_type: String) -> 
 	participant["botType"] = bot_type
 	participant["connected"] = false
 	participant.erase("controllerParticipantId")
-	participant["name"] = _bot_name(str(participant.get("name", "")), bot_type)
+	participant["name"] = _bot_name_excluding(str(participant.get("name", "")), bot_type, target_id)
 	return true
 
 
@@ -436,7 +434,7 @@ func _start_table(actor: Dictionary) -> bool:
 	for participant in active:
 		if not _deposit_initial_offer(participant):
 			return false
-	table["currentTurnParticipantId"] = str(active[0].get("id", "")) if str(table.get("turnMode", "round_robin")) == "round_robin" else ""
+	table["currentTurnParticipantId"] = str(active[0].get("id", ""))
 	return true
 
 
@@ -698,12 +696,29 @@ func _redeem_all_and_pass_turn(actor: Dictionary) -> bool:
 	var actor_id := str(actor.get("id", ""))
 	var recipe: Dictionary = table["recipes"].get(actor_id, {})
 	if not recipe.is_empty():
+		var remaining_stock_by_owner := {}
+		for raw_requirement in recipe.get("requirements", []):
+			var requirement: Dictionary = raw_requirement
+			var placed_ids: Array = requirement.get("placedVoucherIds", []).duplicate()
+			for voucher_id in placed_ids:
+				var placed_voucher_id := str(voucher_id)
+				var voucher := _voucher_by_id(placed_voucher_id)
+				var location: Dictionary = voucher.get("location", {})
+				if voucher.is_empty() or str(location.get("type", "")) != "placed" or str(location.get("recipeOwnerId", "")) != actor_id or str(location.get("requirementId", "")) != str(requirement.get("id", "")):
+					continue
+				var owner_id := str(voucher.get("ownerParticipantId", ""))
+				var owner := _participant_by_id(owner_id)
+				var remaining_stock := int(remaining_stock_by_owner.get(owner_id, int(owner.get("realIngredientStock", 0))))
+				if remaining_stock <= 0:
+					continue
+				remaining_stock_by_owner[owner_id] = remaining_stock - 1
+				if not _redeem_voucher(actor, placed_voucher_id):
+					return false
 		var outstanding_by_requirement := {}
 		for raw_requirement in recipe.get("requirements", []):
 			var requirement: Dictionary = raw_requirement
 			var placed_ids: Array = requirement.get("placedVoucherIds", [])
 			outstanding_by_requirement[str(requirement.get("id", ""))] = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - placed_ids.size()
-		var remaining_stock_by_owner := {}
 		var planned_redemptions: Array = []
 		var initial_hand_ids: Array = []
 		for voucher in _hand_vouchers(actor_id):
@@ -739,7 +754,7 @@ func _pass_turn(actor: Dictionary) -> bool:
 	if not _require_active(actor):
 		return false
 	var actor_id := str(actor.get("id", ""))
-	var next_id := _next_turn_participant_id(actor_id) if str(table.get("turnMode", "round_robin")) == "round_robin" else ""
+	var next_id := _next_turn_participant_id(actor_id)
 	var next_participant := _participant_by_id(next_id)
 	_record_transaction(
 		actor,
@@ -964,14 +979,42 @@ func _public_participant(participant: Dictionary) -> Dictionary:
 		"dishCount": int(participant.get("dishCount", 0)),
 		"heldFoodPartCount": _inventory_dish_parts(str(participant.get("id", ""))).size(),
 		"depositedInitial": bool(participant.get("depositedInitial", false)),
-		"connected": bool(participant.get("connected", true))
+		"connected": bool(participant.get("connected", true)),
+		"currentRecipe": _public_recipe_summary(str(participant.get("id", "")), table.get("recipes", {}).get(str(participant.get("id", "")), {}))
 	}
 	if participant.has("controllerParticipantId"):
 		result["controllerParticipantId"] = participant.get("controllerParticipantId", "")
 	return result
 
 
-func _run_bots(max_turns := DEFAULT_BOT_RUN_BUDGET) -> void:
+func _public_recipe_summary(participant_id_for_summary: String, recipe: Dictionary) -> Dictionary:
+	if recipe.is_empty():
+		return {}
+	var held_useful_counts := {}
+	for voucher in _hand_vouchers(participant_id_for_summary):
+		if not _voucher_has_stock(voucher):
+			continue
+		var ingredient_id := str(voucher.get("ingredientId", ""))
+		held_useful_counts[ingredient_id] = int(held_useful_counts.get(ingredient_id, 0)) + 1
+	var missing_requirements: Array = []
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		var ingredient_id := str(requirement.get("ingredientId", ""))
+		var recipe_missing := maxi(0, int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)))
+		var missing := maxi(0, recipe_missing - int(held_useful_counts.get(ingredient_id, 0)))
+		if missing <= 0:
+			continue
+		missing_requirements.append({
+			"ingredientId": ingredient_id,
+			"missingQty": missing
+		})
+	return {
+		"name": str(recipe.get("name", "")),
+		"missingRequirements": missing_requirements
+	}
+
+
+func _run_bots(emit_each_step := false, max_turns := DEFAULT_BOT_RUN_BUDGET) -> void:
 	for _turn_index in range(max_turns):
 		var progressed := false
 		for id in table.get("participantOrder", []):
@@ -987,16 +1030,93 @@ func _run_bots(max_turns := DEFAULT_BOT_RUN_BUDGET) -> void:
 				_auto_refuse_unavailable_offers()
 				table["version"] = int(table.get("version", 0)) + 1
 				progressed = true
+				if emit_each_step:
+					_emit_snapshot()
 			else:
 				table = before
 		if not progressed:
 			break
-	_force_pass_current_bot_if_needed()
+	_force_pass_current_bot_if_needed(emit_each_step)
 
 
-func _force_pass_current_bot_if_needed() -> void:
-	if str(table.get("turnMode", "round_robin")) != "round_robin":
+func _schedule_bot_run(emit_each_step := false) -> void:
+	if _bot_run_active:
 		return
+	_bot_run_active = true
+	_bot_run_generation += 1
+	call_deferred("_run_bots_deferred", emit_each_step, DEFAULT_BOT_RUN_BUDGET, _bot_run_generation)
+
+
+func _cancel_bot_run() -> void:
+	_bot_run_generation += 1
+	_bot_run_active = false
+
+
+func _run_bots_deferred(emit_each_step := false, max_turns := DEFAULT_BOT_RUN_BUDGET, generation := 0) -> void:
+	if is_inside_tree():
+		await get_tree().process_frame
+	if generation != _bot_run_generation or table.is_empty() or bool(table.get("paused", false)):
+		if generation == _bot_run_generation:
+			_bot_run_active = false
+		return
+	for _turn_index in range(max_turns):
+		var progressed := false
+		for id in table.get("participantOrder", []):
+			if generation != _bot_run_generation or table.is_empty() or bool(table.get("paused", false)):
+				if generation == _bot_run_generation:
+					_bot_run_active = false
+				return
+			var participant: Dictionary = table["participants"][id]
+			if str(participant.get("kind", "")) != "bot":
+				continue
+			var intent := _decide_bot_intent(str(id))
+			if intent.is_empty():
+				continue
+			var before := table.duplicate(true)
+			_last_error = ""
+			if _apply_intent(str(id), intent):
+				_auto_refuse_unavailable_offers()
+				table["version"] = int(table.get("version", 0)) + 1
+				progressed = true
+				if emit_each_step:
+					_emit_snapshot()
+				if is_inside_tree():
+					await get_tree().process_frame
+			else:
+				table = before
+		if not progressed:
+			break
+	await _force_pass_current_bot_if_needed_deferred(emit_each_step, generation)
+	if generation == _bot_run_generation:
+		_bot_run_active = false
+
+
+func _force_pass_current_bot_if_needed_deferred(emit_each_step := false, generation := 0) -> void:
+	for _index in range(table.get("participantOrder", []).size()):
+		if generation != _bot_run_generation or table.is_empty() or bool(table.get("paused", false)):
+			return
+		var phase := str(table.get("phase", ""))
+		if phase != "playing" and phase != "settlement" and phase != "eating":
+			return
+		var current_id := str(table.get("currentTurnParticipantId", ""))
+		var current := _participant_by_id(current_id)
+		if current.is_empty() or str(current.get("kind", "")) != "bot" or str(current.get("role", "")) != "active":
+			return
+		var before := table.duplicate(true)
+		_last_error = ""
+		if _apply_intent(current_id, {"type": "pass_turn"}):
+			_auto_refuse_unavailable_offers()
+			table["version"] = int(table.get("version", 0)) + 1
+			if emit_each_step:
+				_emit_snapshot()
+			if is_inside_tree():
+				await get_tree().process_frame
+		else:
+			table = before
+			return
+
+
+func _force_pass_current_bot_if_needed(emit_each_step := false) -> void:
 	for _index in range(table.get("participantOrder", []).size()):
 		var phase := str(table.get("phase", ""))
 		if phase != "playing" and phase != "settlement" and phase != "eating":
@@ -1010,6 +1130,8 @@ func _force_pass_current_bot_if_needed() -> void:
 		if _apply_intent(current_id, {"type": "pass_turn"}):
 			_auto_refuse_unavailable_offers()
 			table["version"] = int(table.get("version", 0)) + 1
+			if emit_each_step:
+				_emit_snapshot()
 		else:
 			table = before
 			return
@@ -1019,7 +1141,7 @@ func _decide_bot_intent(bot_id: String) -> Dictionary:
 	var bot := _participant_by_id(bot_id)
 	if bot.is_empty() or str(bot.get("role", "")) != "active" or bool(table.get("paused", false)):
 		return {}
-	if str(table.get("turnMode", "round_robin")) == "round_robin" and str(table.get("phase", "")) != "deposit" and str(table.get("currentTurnParticipantId", "")) != bot_id:
+	if str(table.get("phase", "")) != "deposit" and str(table.get("currentTurnParticipantId", "")) != bot_id:
 		return {}
 	var snapshot := _build_snapshot(bot_id)
 	match str(table.get("phase", "")):
@@ -1040,31 +1162,26 @@ func _decide_bot_intent(bot_id: String) -> Dictionary:
 			return {"type": "bite", "dishId": parts[0].get("dishId", "")} if not parts.is_empty() else _round_robin_pass()
 		"playing":
 			var recipe: Dictionary = snapshot.get("ownRecipe", {})
-			var accept_offer := _decide_bot_accept_offer(bot_id, snapshot)
-			if not accept_offer.is_empty():
-				return accept_offer
 			if recipe.is_empty():
+				var goal_complete_offer := _decide_bot_accept_offer(bot_id, snapshot)
+				if not goal_complete_offer.is_empty():
+					return goal_complete_offer
 				return _round_robin_pass()
-			if _recipe_ready(recipe):
-				return {"type": "prepare"}
-			for requirement in recipe.get("requirements", []):
-				var placed: Array = requirement.get("placedVoucherIds", [])
-				if not placed.is_empty():
-					return {"type": "redeem_voucher", "voucherId": placed[0]}
-			for voucher in snapshot.get("ownHand", []):
-				if not _voucher_has_stock(voucher):
-					continue
-				var req_id := _useful_requirement_id(recipe, str(voucher.get("ingredientId", "")))
-				if req_id != "":
-					return {"type": "place_voucher", "voucherId": voucher.get("id", ""), "requirementId": req_id}
 			if str(bot.get("botType", "mixed")) != "barter_only":
 				var pool_intent := _decide_bot_pool_swap(bot_id, snapshot)
 				if not pool_intent.is_empty():
 					return pool_intent
+			var accept_offer := _decide_bot_accept_offer(bot_id, snapshot)
+			if not accept_offer.is_empty():
+				return accept_offer
+			if _recipe_ready(recipe):
+				return {"type": "prepare"}
 			if str(bot.get("botType", "mixed")) != "pool_only":
 				var offer_intent := _decide_bot_create_offer(bot_id, snapshot)
 				if not offer_intent.is_empty():
 					return offer_intent
+			if _bot_has_redeemable_cards(bot_id, snapshot, recipe):
+				return {"type": "redeem_all_and_pass_turn"}
 			return _round_robin_pass()
 	return {}
 
@@ -1078,6 +1195,22 @@ func _decide_bot_accept_offer(bot_id: String, snapshot: Dictionary) -> Dictionar
 		if matches.size() == int(requested.get("quantity", 1)):
 			return {"type": "respond_offer", "offerId": offer.get("id", ""), "response": "accept", "voucherIds": matches}
 	return {}
+
+
+func _bot_has_redeemable_cards(bot_id: String, snapshot: Dictionary, recipe: Dictionary) -> bool:
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		for raw_voucher_id in requirement.get("placedVoucherIds", []):
+			var voucher := _voucher_by_id(str(raw_voucher_id))
+			if not voucher.is_empty() and _voucher_has_stock(voucher):
+				return true
+	for raw_voucher in snapshot.get("ownHand", []):
+		var voucher: Dictionary = raw_voucher
+		if not _voucher_has_stock(voucher):
+			continue
+		if _useful_requirement_id(recipe, str(voucher.get("ingredientId", ""))) != "":
+			return true
+	return false
 
 
 func _decide_bot_settlement(bot_id: String, snapshot: Dictionary) -> Dictionary:
@@ -1101,36 +1234,29 @@ func _decide_bot_settlement(bot_id: String, snapshot: Dictionary) -> Dictionary:
 
 func _decide_bot_pool_swap(bot_id: String, snapshot: Dictionary) -> Dictionary:
 	var recipe: Dictionary = snapshot.get("ownRecipe", {})
-	var needed: Array = []
-	for requirement in recipe.get("requirements", []):
-		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
-		if outstanding > 0:
-			needed.append(str(requirement.get("ingredientId", "")))
-	var take := {}
+	var needed := _needed_ingredient_counts_after_hand(snapshot, recipe)
 	for voucher in snapshot.get("platter", []):
-		if needed.has(str(voucher.get("ingredientId", ""))) and _voucher_has_stock(voucher):
-			take = voucher
-			break
-	if take.is_empty():
-		return {}
-	var give := _first_surplus_voucher(bot_id, snapshot.get("ownHand", []), recipe)
-	if give.is_empty():
-		return {}
-	return {"type": "platter_swap", "giveVoucherId": give.get("id", ""), "takeVoucherId": take.get("id", "")}
+		if int(needed.get(str(voucher.get("ingredientId", "")), 0)) <= 0 or not _voucher_has_stock(voucher):
+			continue
+		var give := _first_surplus_voucher(bot_id, snapshot.get("ownHand", []), recipe, str(voucher.get("ingredientId", "")))
+		if give.is_empty():
+			continue
+		return {"type": "platter_swap", "giveVoucherId": give.get("id", ""), "takeVoucherId": voucher.get("id", "")}
+	return {}
 
 
 func _decide_bot_create_offer(bot_id: String, snapshot: Dictionary) -> Dictionary:
 	var recipe: Dictionary = snapshot.get("ownRecipe", {})
-	var give := _first_surplus_voucher(bot_id, snapshot.get("ownHand", []), recipe)
-	if give.is_empty():
-		return {}
+	var needed := _needed_ingredient_counts_after_hand(snapshot, recipe)
 	var needed_ingredient := ""
-	for requirement in recipe.get("requirements", []):
-		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
-		if outstanding > 0:
-			needed_ingredient = str(requirement.get("ingredientId", ""))
+	for raw_ingredient_id in needed.keys():
+		if int(needed.get(raw_ingredient_id, 0)) > 0:
+			needed_ingredient = str(raw_ingredient_id)
 			break
 	if needed_ingredient == "":
+		return {}
+	var give := _first_surplus_voucher(bot_id, snapshot.get("ownHand", []), recipe, needed_ingredient)
+	if give.is_empty():
 		return {}
 	for offer in snapshot.get("offers", []):
 		if str(offer.get("fromParticipantId", "")) == bot_id:
@@ -1141,8 +1267,27 @@ func _decide_bot_create_offer(bot_id: String, snapshot: Dictionary) -> Dictionar
 	return {}
 
 
+func _needed_ingredient_counts_after_hand(snapshot: Dictionary, recipe: Dictionary) -> Dictionary:
+	var needed := {}
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
+		if outstanding > 0:
+			var ingredient_id := str(requirement.get("ingredientId", ""))
+			needed[ingredient_id] = int(needed.get(ingredient_id, 0)) + outstanding
+	for raw_voucher in snapshot.get("ownHand", []):
+		var voucher: Dictionary = raw_voucher
+		if not _voucher_has_stock(voucher):
+			continue
+		var ingredient_id := str(voucher.get("ingredientId", ""))
+		var remaining := int(needed.get(ingredient_id, 0))
+		if remaining > 0:
+			needed[ingredient_id] = remaining - 1
+	return needed
+
+
 func _round_robin_pass() -> Dictionary:
-	return {"type": "pass_turn"} if str(table.get("turnMode", "round_robin")) == "round_robin" else {}
+	return {"type": "pass_turn"}
 
 
 func _enter_settlement_phase() -> void:
@@ -1254,8 +1399,6 @@ func _now_ms() -> int:
 
 
 func _should_gate_turn(intent: Dictionary) -> bool:
-	if str(table.get("turnMode", "round_robin")) != "round_robin":
-		return false
 	return str(intent.get("type", "")) in [
 		"pass_turn", "redeem_all_and_pass_turn", "platter_swap", "platter_swap_ingredient", "platter_asset_swap", "platter_asset_swap_aggregate",
 		"create_offer", "respond_offer", "cancel_offer", "place_voucher", "redeem_voucher", "redeem_from_hand", "prepare", "bite"
@@ -1273,9 +1416,6 @@ func _require_current_turn(actor_id: String) -> bool:
 
 
 func _advance_turn(actor_id: String) -> void:
-	if str(table.get("turnMode", "round_robin")) != "round_robin":
-		table["currentTurnParticipantId"] = ""
-		return
 	var phase := str(table.get("phase", "lobby"))
 	if phase == "lobby" or phase == "deposit" or phase == "complete":
 		if phase == "complete":
@@ -1727,14 +1867,24 @@ func _matching_hand_voucher_ids(holder_id: String, ingredient_id: String, quanti
 	return ids
 
 
-func _first_surplus_voucher(participant_id_for_bot: String, hand: Array, recipe: Dictionary) -> Dictionary:
+func _first_surplus_voucher(participant_id_for_bot: String, hand: Array, recipe: Dictionary, excluded_ingredient_id := "") -> Dictionary:
+	var protected_by_ingredient := {}
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
+		if outstanding > 0:
+			var ingredient_id := str(requirement.get("ingredientId", ""))
+			protected_by_ingredient[ingredient_id] = int(protected_by_ingredient.get(ingredient_id, 0)) + outstanding
+	var held_by_ingredient := {}
 	for voucher in hand:
 		if not _voucher_has_stock(voucher):
 			continue
-		if _useful_requirement_id(recipe, str(voucher.get("ingredientId", ""))) == "":
-			return voucher
-	for voucher in hand:
-		if _voucher_has_stock(voucher):
+		var ingredient_id := str(voucher.get("ingredientId", ""))
+		if ingredient_id == excluded_ingredient_id:
+			continue
+		var held_count := int(held_by_ingredient.get(ingredient_id, 0)) + 1
+		held_by_ingredient[ingredient_id] = held_count
+		if held_count > int(protected_by_ingredient.get(ingredient_id, 0)):
 			return voucher
 	return {}
 
@@ -1877,7 +2027,31 @@ func _explicit_bot_name(base: String) -> String:
 	clean = clean.replace("_mix_bot", "")
 	clean = clean.replace("_mixed_bot", "")
 	clean = clean.replace("_bot", "")
-	return clean
+	return _strip_short_bot_suffix(clean)
+
+
+func _strip_short_bot_suffix(base: String) -> String:
+	var clean := base.strip_edges()
+	var lower := clean.to_lower()
+	if lower.ends_with("_b"):
+		return clean.substr(0, clean.length() - 2).strip_edges()
+	var marker := lower.rfind("_b_")
+	if marker < 0:
+		return clean
+	var suffix := lower.substr(marker + 3)
+	if not _is_all_digits(suffix):
+		return clean
+	return clean.substr(0, marker).strip_edges()
+
+
+func _is_all_digits(value: String) -> bool:
+	if value == "":
+		return false
+	for index in range(value.length()):
+		var code := value.unicode_at(index)
+		if code < 48 or code > 57:
+			return false
+	return true
 
 
 func _is_generic_bot_name(base: String) -> bool:
@@ -1970,7 +2144,7 @@ func _bot_base_key(base: String) -> String:
 	clean = clean.replace("_mix_bot", "")
 	clean = clean.replace("_mixed_bot", "")
 	clean = clean.replace("_bot", "")
-	clean = clean.replace("_b", "")
+	clean = _strip_short_bot_suffix(clean)
 	var out := ""
 	for index in range(clean.length()):
 		var character := clean.substr(index, 1)

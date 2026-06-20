@@ -18,7 +18,7 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
   if (table.paused) {
     return undefined;
   }
-  if (table.turnMode === "round_robin" && table.phase !== "deposit" && table.currentTurnParticipantId !== botParticipantId) {
+  if (table.phase !== "deposit" && table.currentTurnParticipantId !== botParticipantId) {
     return undefined;
   }
   const snapshot = buildSnapshot(table, botParticipantId);
@@ -35,15 +35,20 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
   }
 
   if (snapshot.phase === "settlement") {
-    return decideSettlementSwap(table, botParticipantId, snapshot) ?? roundRobinPass(table);
+    return decideSettlementSwap(table, botParticipantId, snapshot) ?? roundRobinPass();
   }
 
   if (snapshot.phase === "eating") {
-    return decideBite(table, botParticipantId, snapshot) ?? roundRobinPass(table);
+    return decideBite(table, botParticipantId, snapshot) ?? roundRobinPass();
   }
 
   if (snapshot.phase !== "playing") {
     return undefined;
+  }
+
+  const poolDecision = participant.botType !== "barter_only" ? decidePoolSwap(table, botParticipantId, snapshot) : undefined;
+  if (poolDecision) {
+    return poolDecision;
   }
 
   const acceptDecision = decideAcceptOffer(snapshot);
@@ -56,30 +61,23 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
     return prepareDecision;
   }
 
-  const redeemDecision = decideRedeem(snapshot);
-  if (redeemDecision) {
-    return redeemDecision;
-  }
-
-  const placeDecision = decidePlace(table, botParticipantId, snapshot);
-  if (placeDecision) {
-    return placeDecision;
-  }
-
-  const poolDecision = participant.botType !== "barter_only" ? decidePoolSwap(table, botParticipantId, snapshot) : undefined;
-  if (poolDecision) {
-    return poolDecision;
-  }
-
   if (participant.botType !== "pool_only") {
-    return decideCreateOffer(table, botParticipantId, snapshot) ?? roundRobinPass(table);
+    const offerDecision = decideCreateOffer(table, botParticipantId, snapshot);
+    if (offerDecision) {
+      return offerDecision;
+    }
   }
 
-  return roundRobinPass(table);
+  const redeemAndPassDecision = decideRedeemAllAndPass(table, botParticipantId, snapshot);
+  if (redeemAndPassDecision) {
+    return redeemAndPassDecision;
+  }
+
+  return roundRobinPass();
 }
 
-function roundRobinPass(table: Table): BotDecision | undefined {
-  return table.turnMode === "round_robin" ? { intent: { type: "pass_turn" }, reason: "no useful turn action" } : undefined;
+function roundRobinPass(): BotDecision {
+  return { intent: { type: "pass_turn" }, reason: "no useful turn action" };
 }
 
 export function runBotTurn(table: Table, botParticipantId: string): BotDecision | undefined {
@@ -91,7 +89,7 @@ export function runBotTurn(table: Table, botParticipantId: string): BotDecision 
   return decision;
 }
 
-export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET): BotDecision[] {
+export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET, onStep?: (decision: BotDecision) => void): BotDecision[] {
   const decisions: BotDecision[] = [];
   for (let turn = 0; turn < maxTurns; turn += 1) {
     let progressed = false;
@@ -100,6 +98,7 @@ export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET): BotDec
       const decision = runBotTurn(table, botId);
       if (decision) {
         decisions.push(decision);
+        onStep?.(decision);
         progressed = true;
       }
     }
@@ -110,7 +109,6 @@ export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET): BotDec
   for (let passCount = 0; passCount < table.participantOrder.length; passCount += 1) {
     const current = table.currentTurnParticipantId ? table.participants[table.currentTurnParticipantId] : undefined;
     if (
-      table.turnMode !== "round_robin" ||
       (table.phase !== "playing" && table.phase !== "settlement" && table.phase !== "eating") ||
       current?.kind !== "bot" ||
       current.role !== "active"
@@ -119,7 +117,9 @@ export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET): BotDec
     }
     const passIntent: Intent = { type: "pass_turn" };
     applyIntent(table, current.id, passIntent);
-    decisions.push({ intent: passIntent, reason: "bot run budget exhausted; pass turn to avoid stalling" });
+    const decision = { intent: passIntent, reason: "bot run budget exhausted; pass turn to avoid stalling" };
+    decisions.push(decision);
+    onStep?.(decision);
   }
   return decisions;
 }
@@ -231,33 +231,6 @@ function decideBite(table: Table, botParticipantId: string, snapshot: Snapshot):
   return { intent: { type: "bite", dishId: dish.id }, reason: "take a legal dish bite" };
 }
 
-function decideRedeem(snapshot: Snapshot): BotDecision | undefined {
-  if (!snapshot.ownRecipe) {
-    return undefined;
-  }
-  for (const requirement of snapshot.ownRecipe.requirements) {
-    const voucherId = requirement.placedVoucherIds[0];
-    if (voucherId) {
-      return { intent: { type: "redeem_voucher", voucherId }, reason: "redeem placed voucher" };
-    }
-  }
-  return undefined;
-}
-
-function decidePlace(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
-  for (const voucher of snapshot.ownHand.filter((candidate) => voucherHasStock(snapshot, candidate))) {
-    const usefulRequirementIds = getUsefulRequirementIds(table, botParticipantId, voucher.ingredientId);
-    const requirementId = usefulRequirementIds[0];
-    if (requirementId) {
-      return {
-        intent: { type: "place_voucher", voucherId: voucher.id, requirementId },
-        reason: "place useful voucher"
-      };
-    }
-  }
-  return undefined;
-}
-
 function decideAcceptOffer(snapshot: Snapshot): BotDecision | undefined {
   for (const offer of snapshot.offers) {
     if (offer.status !== "pending" || offer.toParticipantId !== snapshot.viewerParticipantId) {
@@ -282,46 +255,68 @@ function decideAcceptOffer(snapshot: Snapshot): BotDecision | undefined {
   return undefined;
 }
 
+function decideRedeemAllAndPass(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
+  if (!snapshot.ownRecipe) {
+    return undefined;
+  }
+  const hasPlacedRedeemable = snapshot.ownRecipe.requirements.some((requirement) =>
+    requirement.placedVoucherIds.some((voucherId) => {
+      const voucher = table.vouchers[voucherId];
+      return voucher ? voucherHasStock(snapshot, voucher) : false;
+    })
+  );
+  const hasUsefulHandVoucher = snapshot.ownHand.some(
+    (voucher) => voucherHasStock(snapshot, voucher) && getUsefulRequirementIds(table, botParticipantId, voucher.ingredientId).length > 0
+  );
+  if (!hasPlacedRedeemable && !hasUsefulHandVoucher) {
+    return undefined;
+  }
+  return {
+    intent: { type: "redeem_all_and_pass_turn" },
+    reason: "redeem useful cards and pass turn"
+  };
+}
+
 function decidePoolSwap(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
   if (!snapshot.ownRecipe) {
     return undefined;
   }
-  const neededIngredients = snapshot.ownRecipe.requirements
-    .filter((requirement) => requirement.requiredQty > requirement.redeemedQty + requirement.placedVoucherIds.length)
-    .map((requirement) => requirement.ingredientId);
-  const take = snapshot.platter.find((voucher) => neededIngredients.includes(voucher.ingredientId) && voucherHasStock(snapshot, voucher));
-  if (!take) {
-    return undefined;
+  const neededIngredients = neededIngredientCountsAfterHand(snapshot);
+  for (const take of snapshot.platter) {
+    if ((neededIngredients.get(take.ingredientId) ?? 0) <= 0 || !voucherHasStock(snapshot, take)) {
+      continue;
+    }
+    const give = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand, take.ingredientId);
+    if (!give) {
+      continue;
+    }
+    return {
+      intent: { type: "platter_swap", giveVoucherId: give.id, takeVoucherId: take.id },
+      reason: "platter has useful voucher"
+    };
   }
-  const give = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand);
-  if (!give) {
-    return undefined;
-  }
-  return {
-    intent: { type: "platter_swap", giveVoucherId: give.id, takeVoucherId: take.id },
-    reason: "platter has useful voucher"
-  };
+  return undefined;
 }
 
 function decideCreateOffer(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
   if (!snapshot.ownRecipe) {
     return undefined;
   }
-  const give = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand);
-  if (!give) {
+  const neededIngredients = neededIngredientCountsAfterHand(snapshot);
+  const needed = [...neededIngredients.entries()].find(([, count]) => count > 0);
+  if (!needed) {
     return undefined;
   }
-  const needed = snapshot.ownRecipe.requirements.find(
-    (requirement) => requirement.requiredQty > requirement.redeemedQty + requirement.placedVoucherIds.length
-  );
-  if (!needed) {
+  const [neededIngredientId] = needed;
+  const give = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand, neededIngredientId);
+  if (!give) {
     return undefined;
   }
   const target = snapshot.participants.find(
     (participant) =>
       participant.id !== botParticipantId &&
       participant.role === "active" &&
-      participant.ingredientId === needed.ingredientId &&
+      participant.ingredientId === neededIngredientId &&
       participant.offerableOwnIngredientQty > 0
   );
   if (!target) {
@@ -336,22 +331,60 @@ function decideCreateOffer(table: Table, botParticipantId: string, snapshot: Sna
       type: "create_offer",
       toParticipantId: target.id,
       offeredVoucherIds: [give.id],
-      requested: { ingredientId: needed.ingredientId, quantity: 1 }
+      requested: { ingredientId: neededIngredientId, quantity: 1 }
     },
     reason: "request needed ingredient by structured offer"
   };
 }
 
-function firstSurplusVoucher(table: Table, participantId: string, hand: Voucher[]): Voucher | undefined {
+function neededIngredientCountsAfterHand(snapshot: Snapshot): Map<string, number> {
+  const needed = new Map<string, number>();
+  for (const requirement of snapshot.ownRecipe?.requirements ?? []) {
+    const outstanding = requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length;
+    if (outstanding > 0) {
+      needed.set(requirement.ingredientId, (needed.get(requirement.ingredientId) ?? 0) + outstanding);
+    }
+  }
+  for (const voucher of snapshot.ownHand) {
+    if (!voucherHasStock(snapshot, voucher)) {
+      continue;
+    }
+    const remaining = needed.get(voucher.ingredientId) ?? 0;
+    if (remaining > 0) {
+      needed.set(voucher.ingredientId, remaining - 1);
+    }
+  }
+  return needed;
+}
+
+function firstSurplusVoucher(table: Table, participantId: string, hand: Voucher[], excludedIngredientId = ""): Voucher | undefined {
   const backedHand = hand.filter((voucher) => {
     const owner = table.participants[voucher.ownerParticipantId];
     return (owner?.realIngredientStock ?? 0) > 0;
   });
-  const useful = new Set(
-    backedHand
-      .flatMap((voucher) => getUsefulRequirementIds(table, participantId, voucher.ingredientId).map(() => voucher.id))
-  );
-  return backedHand.find((voucher) => !useful.has(voucher.id)) ?? backedHand[0];
+  const recipe = table.recipes[participantId];
+  const protectedByIngredient = new Map<string, number>();
+  for (const requirement of recipe?.requirements ?? []) {
+    const outstanding = requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length;
+    if (outstanding > 0) {
+      protectedByIngredient.set(
+        requirement.ingredientId,
+        (protectedByIngredient.get(requirement.ingredientId) ?? 0) + outstanding
+      );
+    }
+  }
+  const heldByIngredient = new Map<string, number>();
+  for (const voucher of backedHand) {
+    if (voucher.ingredientId === excludedIngredientId) {
+      continue;
+    }
+    const heldCount = (heldByIngredient.get(voucher.ingredientId) ?? 0) + 1;
+    heldByIngredient.set(voucher.ingredientId, heldCount);
+    if (heldCount > (protectedByIngredient.get(voucher.ingredientId) ?? 0)) {
+      return voucher;
+    }
+  }
+  return undefined;
 }
 
 function voucherHasStock(snapshot: Snapshot, voucher: Voucher): boolean {

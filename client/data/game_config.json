@@ -12,8 +12,7 @@
   "defaultTargetDishCount": 4,
   "defaultTurnMode": "round_robin",
   "turnModes": [
-    "round_robin",
-    "market"
+    "round_robin"
   ],
   "phases": [
     "lobby",
@@ -38,7 +37,6 @@
     "set_timer",
     "set_target_dish_count",
     "set_stock",
-    "set_turn_mode",
     "set_pause",
     "start",
     "stop",

@@ -23,9 +23,10 @@
 - [x] Add offline pass-and-play setup entrypoint for Web and Android.
 - [x] Add initial GDScript rules mirror for offline local controlled seats and bot play without requiring the Node server on-device.
 - [x] Add host-controlled multi-seat support with participant identity separated from controller identity.
-- [x] Add setup and server validation for `round_robin` and `market` turn modes.
+- [x] Use round-robin as the single online/offline turn model and remove market-mode setup controls.
 - [x] Add UI controls for switching controlled seats and showing the active round-robin turn.
 - [x] Add batch `Redeem Cards and Pass Turn` action for cooking turns in online and offline rules.
+- [x] Align bot cooking turns so non-ending swaps, offers, and preparation happen before one batch turn-ending redemption, with duplicate surplus cards tradable by count.
 - [x] Add recipe generation tooling for one committed 8-player ingredient set with four recipes per ingredient.
 - [x] Fix the current playable MVP table size at exactly 8 active seats.
 - [x] Simplify setup to `Play Offline` / `Play Online` with player plus 7 prefilled bot seats, fixed 4 dishes, fixed 40 stock, and no timer in normal setup.
@@ -34,6 +35,7 @@
 - [x] Automatically contribute one opening promise card from every active player into the Common Basket at start.
 - [ ] Add polished visual assets and table layout inspired by potluck dinners and cooking apps.
 - [x] Add structured offer creation/acceptance flows.
+- [x] Unify offer popups around ingredient-card visuals and public recipe-help summaries for the other cook.
 - [ ] Add mobile touch UX for card placement, platter swaps, settlement swaps, and eating food parts.
 - [ ] Add local/manual QA scripts for Web and Android exports.
 
@@ -47,7 +49,7 @@
 - [ ] Revisit variable runtime table sizes only if the fixed 8-seat MVP needs expansion.
 - [ ] Optimize live deltas so mature 8-seat game deltas stay near the 4 KB p95 target, with 20-seat budgets reserved for future expansion.
 - [ ] Add full golden parity tests so offline rule traces stay aligned with online server rule traces.
-- [x] Add tests for host-controlled seats, round-robin turn enforcement, and market-style asynchronous actions.
+- [x] Add tests for host-controlled seats and round-robin turn enforcement.
 - [x] Expand offline parity tests beyond smoke coverage to swaps, offers, redemption, preparation, settlement, eating, timers, and invalid rollback.
 - [x] Add fixture coverage for the generated 8-player recipe catalog and shared client rule constants.
 - [x] Generate and consume shared client rule constants so online/offline validation bounds cannot drift silently.

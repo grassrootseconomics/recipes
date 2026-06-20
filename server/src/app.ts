@@ -36,7 +36,6 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("set_timer"), seconds: z.number().int().positive().nullable() }),
   z.object({ type: z.literal("set_target_dish_count"), count: z.number().int().min(1).max(4) }),
   z.object({ type: z.literal("set_stock"), count: z.number().int().min(MIN_STOCK_PER_INGREDIENT).max(MAX_STOCK_PER_INGREDIENT) }),
-  z.object({ type: z.literal("set_turn_mode"), mode: z.enum(["round_robin", "market"]) }),
   z.object({ type: z.literal("set_pause"), paused: z.boolean() }),
   z.object({ type: z.literal("start") }),
   z.object({ type: z.literal("stop") }),
@@ -222,12 +221,18 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
           return;
         }
         const intent = envelope.intent;
-        store.handleIntent(tableCode, query.seatToken, intent, true, envelope.actorParticipantId);
+        let broadcastedMutation = false;
+        store.handleIntent(tableCode, query.seatToken, intent, true, envelope.actorParticipantId, (table) => {
+          broadcastedMutation = true;
+          hub.broadcastTable(table);
+        });
         scheduleTimer(tableCode);
         if (clientIntentId) {
           socket.send(JSON.stringify({ type: "ack", clientIntentId, ok: true, version: store.requireTable(tableCode).version }));
         }
-        hub.broadcastTable(store.requireTable(tableCode));
+        if (!broadcastedMutation) {
+          hub.broadcastTable(store.requireTable(tableCode));
+        }
       } catch (error) {
         const payload = errorPayload(error);
         if (clientIntentId) {

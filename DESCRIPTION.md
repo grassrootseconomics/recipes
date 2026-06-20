@@ -26,7 +26,7 @@ At the start of the game, every active participant automatically contributes exa
 
 After depositing, a player may swap 1:1 with the platter by giving one card from their hand and taking one visible card from the platter.
 
-Players can also trade directly with each other. A player zooms out to see the full table, clicks another player, and creates a structured exchange offer. There is no free chat in the MVP. Offers can be accepted, refused, or cancelled. Cards in pending offers are locked until the offer resolves.
+Players can also trade directly with each other. A player zooms out to see the full table, clicks another player, and creates a structured exchange offer. The offer panel shows the offered and requested ingredient cards, plus a public recipe-help summary for the other player: their current recipe name and the ingredient counts still missing after counting recipe progress and useful promise cards already in that player’s hand. There is no free chat in the MVP. Offers can be accepted, refused, or cancelled. Cards in pending offers are locked until the offer resolves.
 
 Players can only be asked for their own ingredient while they still have at least one available voucher for that ingredient in hand and at least one real unit of stock remaining. If a pending offer asks for an ingredient that the recipient no longer has available, the server automatically refuses that offer and returns the offered card to the sender. Clients should not show players with zero available own-ingredient vouchers or zero real stock as offer targets.
 
@@ -44,9 +44,9 @@ Bot types are:
 - `barter_only`: trades only with players and bots.
 - `mixed`: uses both direct trades and the central platter.
 
-Bots see only legal player information: their own hand, their own recipe, the visible central platter, public dish counts, and offers involving them. Bots cannot inspect hidden hands.
+Bots see only legal player information: their own hand, their own recipe, public current-recipe help summaries for other players, the visible central platter, public dish counts, and offers involving them. Bots cannot inspect hidden hands or full hidden recipe state.
 
-Bots first place and redeem useful vouchers already in their own hand for their current recipe. For example, if a bot has rice in hand and its recipe needs rice x2, it should place and redeem two rice vouchers before pursuing swaps or offers. Bots then try to complete recipes, prepare dishes immediately when ready, protect useful cards, and trade away cards that do not help their current recipe. Bot behavior should be deterministic from the table seed.
+During a cooking turn, bots may make useful non-ending moves first: swap with the central platter when it helps their current recipe, respond to offers, prepare a completed dish, and create a legal structured offer. Bots must protect only the number of useful cards still needed for the current recipe, so duplicate cards beyond outstanding recipe demand are true surplus and can be traded before redemption. When a bot reaches the redemption step, it uses the same batch `Redeem Cards and Pass Turn` behavior as a human: every currently redeemable useful card is redeemed with the authoritative rules, then the bot's turn ends. Bot behavior should be deterministic from the table seed.
 
 If an active human player leaves an online table, their seat stays reserved for that same reconnect token so they can come back. No new player can claim an already-started active seat. The host may manually switch a connected or disconnected active player seat to a `mixed` bot at any time. This conversion should require an explicit confirmation in the client because the original player can no longer reclaim that seat after conversion.
 
@@ -68,14 +68,13 @@ A host-controlled seat is still a normal active participant for ingredient ident
 
 Host-controlled seats must not weaken hidden-information rules. The host can act for seats they control, but active seats still receive filtered snapshots according to their own participant perspective. Witness visibility remains separate from active seat control.
 
-## Turn Modes
+## Turns
 
-The host should choose the table turn mode before the game starts. New tables default to `round_robin`; `market` remains available before start.
+Recipes uses one turn model for both online and offline play: active participants take turns in a circle using deterministic table order.
 
-- `round_robin`: active participants take turns in a circle using deterministic table order. Only the current active seat can perform turn-gated gameplay actions. The current seat keeps the turn across swaps, offers, preparation, settlement, and eating until they explicitly pass. During cooking, `Redeem Cards and Pass Turn` redeems all useful held cards first, then advances to the next active seat.
-- `market`: active participants may act asynchronously whenever an action is legal. Offers, platter swaps, placement, redemption, preparation, bot turns, and eating are resolved by server validation without a strict active-seat turn gate.
+Only the current active seat can perform turn-gated gameplay actions. The current seat keeps the turn across swaps, offers, preparation, settlement, and eating until they explicitly pass. During cooking, `Redeem / Pass` redeems all useful held cards first, plays those animations, and then advances to the next active seat.
 
-Online multiplayer must keep turn mode, active turn, and turn advancement server-owned. Offline mode should mirror the same turn-mode semantics where feasible.
+Online multiplayer must keep active turn and turn advancement server-owned. Offline mode mirrors the same turn semantics locally.
 
 ## Winning And Eating
 
@@ -87,7 +86,7 @@ Winning can also mean that all active players have reached the configured dish g
 
 ## Visibility Rules
 
-Active players and bots cannot see other active hands. They can see their own hand, their own recipe, the public platter, public dish counts, incoming and outgoing offers, and table status.
+Active players and bots cannot see other active hands or full hidden recipe state. They can see their own hand, their own recipe, the public platter, public dish counts, incoming and outgoing offers, table status, and public current-recipe help summaries for other players. A recipe-help summary contains only the recipe name and the net ingredient counts still missing after counting recipe progress and useful promise cards already in that player’s hand.
 
 Witnesses can see everything. They can zoom in and out to inspect hands, recipes, the platter, and dishes, but they cannot trade, redeem, prepare, score, or eat before the eating phase.
 
@@ -152,16 +151,16 @@ The server should include focused unit and integration tests for:
 - the fixed dish goal is 4.
 - platter deposit and 1:1 swaps are atomic.
 - structured offers lock cards and resolve correctly.
+- offer popups show ingredient cards plus public current-recipe help summaries without exposing hidden hands or full hidden recipe state.
 - players with no available own-ingredient vouchers cannot receive new offers for that ingredient, and impossible pending offers are auto-refused.
 - successful deposits, swaps, exchanges, and redemptions are recorded in transaction history.
 - host-controlled seats can submit valid actions for multiple active participants without changing those participant identities.
-- `round_robin` mode enforces active-seat order and advances turns deterministically.
-- `market` mode allows asynchronous legal actions without strict active-seat order.
+- round-robin turns enforce active-seat order and advance deterministically.
 - active players cannot see other hands.
 - bots cannot see hidden hands.
 - witnesses can see all hands.
 - bot type restrictions are enforced.
-- bots redeem useful vouchers already in their own hand before swaps or offers.
+- bots use one batch redemption/pass intent at the end of a cooking turn, protect only useful cards still needed by count, and may trade duplicate surplus cards before redemption.
 - only the host can stop the game for everyone.
 - disconnected active humans stay reclaimable until the host manually converts them to `mixed` bots.
 - host pause blocks gameplay actions and bot turns.

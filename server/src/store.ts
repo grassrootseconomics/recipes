@@ -76,15 +76,23 @@ export class TableStore {
     return buildSnapshot(table, participantId);
   }
 
-  handleIntent(code: string, seatToken: string, intent: Intent, runBotTurns = true, actorParticipantId?: string): Snapshot {
+  handleIntent(
+    code: string,
+    seatToken: string,
+    intent: Intent,
+    runBotTurns = true,
+    actorParticipantId?: string,
+    onMutation?: (table: Table) => void
+  ): Snapshot {
     const table = this.requireTable(code);
     const connectionParticipant = this.connectParticipantByToken(code, seatToken);
     const actor = actorParticipantId
       ? this.requireControlledParticipant(table, connectionParticipant.id, actorParticipantId)
       : connectionParticipant;
     applyIntent(table, actor.id, intent);
+    onMutation?.(table);
     if (runBotTurns && !table.paused && shouldRunBotsAfterIntent(intent)) {
-      runBots(table);
+      runBots(table, undefined, () => onMutation?.(table));
     }
     return buildSnapshot(table, actor.id, connectionParticipant.id);
   }

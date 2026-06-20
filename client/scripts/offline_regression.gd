@@ -13,13 +13,18 @@ func _initialize() -> void:
 	)
 	_regression_lobby_seat_editor(store)
 	_regression_lobby_rename_then_start_from_controlled_view(store)
+	_regression_public_recipe_summary(store)
 	_regression_own_redeem_returns_card_for_swap(store)
 	_regression_redeem_all_and_pass_turn(store)
+	_regression_bot_batches_redeem_and_pass(store)
+	_regression_bot_swaps_surplus_before_redeem(store)
 	_regression_goal_complete_bot_accepts_offer(store)
 	_regression_stock_depleted_cards_not_usable(store)
 	_regression_lifecycle(store)
 	_regression_round_robin_pass_turn_history(store)
 	_regression_bot_budget_returns_to_human(store)
+	await _regression_bot_run_is_deferred_after_pass(store)
+	await _regression_renamed_bot_acts_after_pass(store)
 	_regression_full_offline_transaction_export(store)
 	print("offline regression ok")
 	quit()
@@ -42,6 +47,12 @@ func _regression_lobby_seat_editor(store: Node) -> void:
 	var bot: Dictionary = store.table.get("participants", {}).get("p2", {})
 	_require(str(bot.get("kind", "")) == "bot", "offline seat can return to bot")
 	_require(str(bot.get("name", "")) == "Ted_b", "offline returned bot uses short _b name")
+	_require(store.handle_host_intent({"type": "rename_participant", "participantId": "p2", "name": "jjj_b_2"}), "rename accumulated bot suffix: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "jjj_b", "offline accumulated short bot suffix is normalized")
+	_require(store.handle_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "jjj_b"}), "take suffixed bot seat as player: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "jjj_b", "offline controlled seat can keep typed suffixed name")
+	_require(store.handle_host_intent({"type": "convert_to_bot", "participantId": "p2", "botType": "mixed"}), "return suffixed controlled seat to bot: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "jjj_b", "offline player-to-bot conversion does not create jjj_b_2")
 
 
 func _regression_lobby_rename_then_start_from_controlled_view(store: Node) -> void:
@@ -61,8 +72,44 @@ func _regression_lobby_rename_then_start_from_controlled_view(store: Node) -> vo
 	_require(bool(store.table.get("participants", {}).get("p3", {}).get("depositedInitial", false)), "renamed bot participates in automatic offering")
 
 
+func _regression_public_recipe_summary(store: Node) -> void:
+	_setup_round_robin_table(store)
+	_require(store.view_as("p1"), "view p1 for public recipe summary")
+	var snapshot: Dictionary = store.latest_snapshot
+	var public_other := _public_participant(snapshot, "p2")
+	var recipe: Dictionary = store.table.get("recipes", {}).get("p2", {})
+	var summary: Dictionary = public_other.get("currentRecipe", {})
+	_require(not summary.is_empty(), "offline public participant includes current recipe summary")
+	_require(str(summary.get("name", "")) == str(recipe.get("name", "")), "offline public recipe summary exposes recipe name")
+	var held_useful_counts := {}
+	for voucher in store._hand_vouchers("p2"):
+		if not store._voucher_has_stock(voucher):
+			continue
+		var held_ingredient_id := str(voucher.get("ingredientId", ""))
+		held_useful_counts[held_ingredient_id] = int(held_useful_counts.get(held_ingredient_id, 0)) + 1
+	var expected_missing: Array = []
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		var ingredient_id := str(requirement.get("ingredientId", ""))
+		var missing := maxi(
+			0,
+			int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - int(held_useful_counts.get(ingredient_id, 0))
+		)
+		if missing > 0:
+			expected_missing.append({
+				"ingredientId": ingredient_id,
+				"missingQty": missing
+			})
+	_require(JSON.stringify(summary.get("missingRequirements", [])) == JSON.stringify(expected_missing), "offline public recipe summary exposes missing counters only")
+	for raw_summary in summary.get("missingRequirements", []):
+		var missing_requirement: Dictionary = raw_summary
+		_require(str(missing_requirement.get("ingredientId", "")) != _participant_ingredient_id(store, "p2"), "offline public recipe summary omits useful cards already held by the other cook")
+	_require(not snapshot.has("allHands"), "offline active snapshot does not expose all hands")
+	_require(not snapshot.has("allRecipes"), "offline active snapshot does not expose all recipes")
+
+
 func _regression_own_redeem_returns_card_for_swap(store: Node) -> void:
-	_setup_market_table(store)
+	_setup_round_robin_table(store)
 	var participant_id := "p1"
 	var main_ingredient_id := _participant_ingredient_id(store, participant_id)
 	var requirement := _requirement_for_ingredient(store, participant_id, main_ingredient_id)
@@ -84,7 +131,7 @@ func _regression_own_redeem_returns_card_for_swap(store: Node) -> void:
 
 
 func _regression_lifecycle(store: Node) -> void:
-	_setup_market_table(store)
+	_setup_round_robin_table(store)
 	_assert_invalid_intent_rolls_back(store)
 	_assert_platter_swap(store)
 	_assert_offer_exchange(store)
@@ -123,8 +170,55 @@ func _regression_redeem_all_and_pass_turn(store: Node) -> void:
 	_require(str(last.get("action", "")) == "Pass Turn", "redeem-all records final pass turn")
 
 
+func _regression_bot_batches_redeem_and_pass(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-bot-batch-redeem").is_empty(), "create bot batch redeem table")
+	_require(store.handle_host_intent({"type": "start"}), "start bot batch redeem table: %s" % _last_error)
+	var bot_id := "p2"
+	var bot: Dictionary = store.table.get("participants", {}).get(bot_id, {})
+	bot["botType"] = "pool_only"
+	store.table["currentTurnParticipantId"] = bot_id
+	var recipe: Dictionary = store.table.get("recipes", {}).get(bot_id, {})
+	var needed := {}
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
+		if outstanding > 0:
+			needed[str(requirement.get("ingredientId", ""))] = true
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "platter" and needed.has(str(voucher.get("ingredientId", ""))):
+			voucher["location"] = {"type": "hand", "participantId": "p1"}
+	var decision: Dictionary = store._decide_bot_intent(bot_id)
+	_require(str(decision.get("type", "")) == "redeem_all_and_pass_turn", "offline bot batches useful card redemption into turn-ending intent")
+
+
+func _regression_bot_swaps_surplus_before_redeem(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-bot-surplus-before-redeem").is_empty(), "create bot surplus table")
+	_require(store.handle_host_intent({"type": "start"}), "start bot surplus table: %s" % _last_error)
+	var bot_id := "p2"
+	store.table["currentTurnParticipantId"] = bot_id
+	var decision: Dictionary = store._decide_bot_intent(bot_id)
+	_require(str(decision.get("type", "")) == "platter_swap", "offline bot swaps surplus duplicate card before redeem/pass")
+	var give: Dictionary = store._voucher_by_id(str(decision.get("giveVoucherId", "")))
+	var take: Dictionary = store._voucher_by_id(str(decision.get("takeVoucherId", "")))
+	var give_location: Dictionary = give.get("location", {})
+	var take_location: Dictionary = take.get("location", {})
+	_require(str(give_location.get("type", "")) == "hand" and str(give_location.get("participantId", "")) == bot_id, "offline bot gives from its own hand")
+	_require(str(take_location.get("type", "")) == "platter", "offline bot takes from the platter")
+	_require(str(give.get("ingredientId", "")) != str(take.get("ingredientId", "")), "offline bot does not swap for the same ingredient")
+	var recipe: Dictionary = store.table.get("recipes", {}).get(bot_id, {})
+	var take_is_needed := false
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		if str(requirement.get("ingredientId", "")) == str(take.get("ingredientId", "")):
+			take_is_needed = true
+			break
+	_require(take_is_needed, "offline bot takes a card needed by its recipe")
+
+
 func _regression_goal_complete_bot_accepts_offer(store: Node) -> void:
-	_setup_market_table(store)
+	_setup_round_robin_table(store)
 	var sender_id := "p1"
 	var bot_id := "p2"
 	var bot: Dictionary = store.table.get("participants", {}).get(bot_id, {})
@@ -142,14 +236,15 @@ func _regression_goal_complete_bot_accepts_offer(store: Node) -> void:
 			"requested": {"ingredientId": _participant_ingredient_id(store, bot_id), "quantity": 1}
 		}, sender_id, false),
 		"create incoming offer for goal-complete bot: %s" % _last_error
-	)
+		)
+	store.table["currentTurnParticipantId"] = bot_id
 	var decision: Dictionary = store._decide_bot_intent(bot_id)
 	_require(str(decision.get("type", "")) == "respond_offer", "goal-complete bot still responds to incoming offers")
 	_require(str(decision.get("response", "")) == "accept", "goal-complete bot accepts satisfiable offer")
 
 
 func _regression_stock_depleted_cards_not_usable(store: Node) -> void:
-	_setup_market_table(store)
+	_setup_round_robin_table(store)
 	var participant_id := "p1"
 	var participant: Dictionary = store.table.get("participants", {}).get(participant_id, {})
 	var ingredient_id := _participant_ingredient_id(store, participant_id)
@@ -179,11 +274,10 @@ func _regression_stock_depleted_cards_not_usable(store: Node) -> void:
 	)
 
 
-func _setup_market_table(store: Node) -> void:
+func _setup_round_robin_table(store: Node) -> void:
 	_require(not store.create_table("Amina", "offline-regression").is_empty(), "create regression table")
 	for _index in range(7):
 		_require(store.handle_host_intent({"type": "add_controlled_seat"}), "add controlled seat: %s" % _last_error)
-	_require(store.handle_host_intent({"type": "set_turn_mode", "mode": "market"}), "set market mode")
 	_require(store.handle_host_intent({"type": "set_target_dish_count", "count": 1}), "set one-dish goal")
 	_require(store.handle_host_intent({"type": "start"}), "start regression table: %s" % _last_error)
 	_require(str(store.latest_snapshot.get("phase", "")) == "playing", "table enters playing")
@@ -217,6 +311,57 @@ func _regression_bot_budget_returns_to_human(store: Node) -> void:
 	var last: Dictionary = history[history.size() - 1]
 	_require(str(last.get("action", "")) == "Pass Turn", "bot budget fallback records pass turn")
 	_require(str(last.get("counterparty", "")) == "Amina", "bot budget fallback passes back to host")
+
+
+func _regression_bot_run_is_deferred_after_pass(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-deferred-bots").is_empty(), "create deferred bot table")
+	_require(store.handle_intent({"type": "start"}, "p1", false), "start deferred bot table: %s" % _last_error)
+	var before_count: int = store.table.get("transactionHistory", []).size()
+	_require(store.handle_intent({"type": "pass_turn"}, "p1"), "pass turn with deferred bots: %s" % _last_error)
+	var immediate_count: int = store.table.get("transactionHistory", []).size()
+	_require(immediate_count == before_count + 1, "bot turns are not applied synchronously before the pass animation can start")
+	for _index in range(20):
+		if int(store.table.get("transactionHistory", []).size()) > immediate_count:
+			break
+		await process_frame
+	var later_count: int = store.table.get("transactionHistory", []).size()
+	_require(later_count > immediate_count, "deferred bot turns continue after the pass snapshot is emitted")
+	for _index in range(400):
+		if str(store.table.get("currentTurnParticipantId", "")) == "p1":
+			break
+		await process_frame
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "p1", "deferred bot turns eventually return control to the human host")
+
+
+func _regression_renamed_bot_acts_after_pass(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-renamed-bot-turn").is_empty(), "create renamed bot turn table")
+	_require(store.handle_host_intent({"type": "rename_participant", "participantId": "p2", "name": "jjj_b_2"}), "rename p2 bot before turn test: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "jjj_b", "renamed bot starts test as jjj_b")
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("kind", "")) == "bot", "renamed bot remains a bot before start")
+	_assert_named_bot_acts_after_pass(store, "direct renamed bot")
+
+	_require(not store.create_table("Amina", "offline-toggled-renamed-bot-turn").is_empty(), "create toggled renamed bot turn table")
+	_require(store.handle_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "jjj_b"}), "take p2 before toggled bot test: %s" % _last_error)
+	_require(store.handle_host_intent({"type": "convert_to_bot", "participantId": "p2", "botType": "mixed"}), "convert p2 back to bot before turn test: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "jjj_b", "toggled bot starts test as jjj_b")
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("kind", "")) == "bot", "toggled renamed bot is a bot before start")
+	_assert_named_bot_acts_after_pass(store, "toggled renamed bot")
+
+
+func _assert_named_bot_acts_after_pass(store: Node, label: String) -> void:
+	_require(store.handle_intent({"type": "start"}, "p1", false), "start renamed bot turn table: %s" % _last_error)
+	_require(store.handle_intent({"type": "pass_turn"}, "p1"), "pass to renamed bot: %s" % _last_error)
+	for _index in range(500):
+		var saw_renamed_bot := false
+		for raw_transaction in store.table.get("transactionHistory", []):
+			var transaction: Dictionary = raw_transaction
+			if str(transaction.get("name", "")) == "jjj_b":
+				saw_renamed_bot = true
+				break
+		if saw_renamed_bot and str(store.table.get("currentTurnParticipantId", "")) == "p1":
+			return
+		await process_frame
+	_require(false, "%s jjj_b should act and return turn control after Amina passes" % label)
 
 
 func _regression_full_offline_transaction_export(store: Node) -> void:
@@ -282,6 +427,7 @@ func _assert_offer_exchange(store: Node) -> void:
 	var offer_id := _first_pending_offer_id(store)
 	_require(offer_id != "", "pending offer exists")
 	_require(str(_voucher(store, str(offered.get("id", ""))).get("location", {}).get("type", "")) == "offer_lock", "offered card is locked")
+	store.table["currentTurnParticipantId"] = recipient_id
 	_require(
 		store.handle_intent({"type": "respond_offer", "offerId": offer_id, "response": "accept", "voucherIds": [requested.get("id", "")]}, recipient_id),
 		"accept offer succeeds: %s" % _last_error
@@ -299,6 +445,7 @@ func _complete_recipe(store: Node, participant_id: String) -> void:
 		while _outstanding_requirement_qty(requirement) > 0:
 			var voucher: Dictionary = _ensure_hand_voucher_for_ingredient(store, participant_id, str(requirement.get("ingredientId", "")))
 			_require(not voucher.is_empty(), "matching card available for requirement")
+			store.table["currentTurnParticipantId"] = participant_id
 			_require(
 				store.handle_intent({"type": "redeem_from_hand", "voucherId": voucher.get("id", ""), "requirementId": requirement.get("id", "")}, participant_id),
 				"redeem from hand succeeds: %s" % _last_error

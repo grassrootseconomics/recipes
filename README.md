@@ -9,9 +9,9 @@ Authoritative multiplayer recipe-trading MVP with a Node TypeScript server and a
 Implemented:
 
 - Server-owned tables, participants, ingredients, vouchers, recipes, platter, offers, dishes, transaction history, timers, bots, filtered snapshots, and WebSocket updates.
-- Godot client for `Play Offline`, `Play Online`, joining online tables, taking over prefilled bot seats, choosing `round_robin` or `market`, pausing/resuming, starting, watching automatic opening offerings, swapping with the platter, creating/responding to offers, preparing dishes, viewing dish totals/transaction history, ending the game, and eating.
+- Godot client for `Play Offline`, `Play Online`, joining online tables, taking over prefilled bot seats, pausing/resuming, starting, watching automatic opening offerings, swapping with the platter, creating/responding to offers, preparing dishes, viewing dish totals/transaction history, ending the game, and eating.
 - Online host-controlled seats with filtered per-seat views and explicit acting-seat intents.
-- Server-enforced `round_robin` and `market` turn modes. New tables default to `round_robin`.
+- Server-enforced round-robin turns. Each active cook keeps the turn until they pass or use `Redeem / Pass`.
 - Offline pass-and-play rules runtime for one-device local seats and bots, using the same snapshot/intent UI path as online play.
 - Deterministic tests for the core game rules.
 
@@ -96,10 +96,9 @@ Manual smoke path:
 2. Click `Play Offline` for pass-and-play or `Play Online` to create a hosted table.
 3. The table starts with 8 seats: you plus 7 bots.
 4. Use the seat grid to edit seat names and switch available bot seats between `Player` and `Bot` before start.
-5. Choose `round_robin` or `market`; `round_robin` is the default.
-6. Click `Start Cooking`.
-7. Watch the automatic opening offerings fill the Common Basket.
-8. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem / Pass`, dish totals, transaction history, `Prepare Dish`, `End Game`, and dish bites.
+5. Click `Start Cooking`.
+6. Watch the automatic opening offerings fill the Common Basket.
+7. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem / Pass`, dish totals, transaction history, `Prepare Dish`, `End Game`, and dish bites.
 
 To test multiple humans locally, open another Godot client and join using the invite code.
 
@@ -132,12 +131,11 @@ Run an 8-seat game through the real HTTP/WebSocket API:
 
 ```bash
 cd /home/wor/src/recipes
-npm run simulate:game -- --players=8 --dish-goal=4 --profile=local --turn-mode=market
 npm run simulate:game -- --players=8 --dish-goal=4 --profile=local --turn-mode=round_robin
-npm run simulate:game -- --players=8 --dish-goal=4 --profile=disconnect --turn-mode=market
-npm run simulate:game -- --players=8 --dish-goal=4 --profile=jitter --turn-mode=market
-npm run simulate:game -- --players=8 --dish-goal=4 --profile=bad --turn-mode=market
-npm run simulate:game -- --games=3 --player-min=8 --player-max=8 --concurrency=2 --dish-goal=4 --profile=local --turn-mode=market --suite-max-duration-ms=300000
+npm run simulate:game -- --players=8 --dish-goal=4 --profile=disconnect
+npm run simulate:game -- --players=8 --dish-goal=4 --profile=jitter
+npm run simulate:game -- --players=8 --dish-goal=4 --profile=bad
+npm run simulate:game -- --games=3 --player-min=8 --player-max=8 --concurrency=2 --dish-goal=4 --profile=local --suite-max-duration-ms=300000
 ```
 
 Profiles:
@@ -154,7 +152,7 @@ tmp/simulations/
 ```
 
 Single-game reports include full per-client frame arrays for debugging. Multi-game suite reports keep compact per-game rows and aggregate frame/byte metrics so 100+ table runs stay readable.
-Use `--turn-mode=market` or `--turn-mode=round_robin` to choose the scripted table mode. The simulator defaults to `market` for load-test continuity even though new game tables default to `round_robin`.
+Round-robin is the only supported turn mode. The simulator accepts `--turn-mode=round_robin` for compatibility with older scripts.
 Use `--suite-max-duration-ms` to bound the entire multi-game run; per-game `--max-duration-ms` still applies inside the suite.
 
 ## Recipe Catalog

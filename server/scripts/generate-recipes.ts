@@ -66,7 +66,7 @@ function buildClientGameConfig() {
     maxTargetDishCount: MAX_TARGET_DISH_COUNT,
     defaultTargetDishCount: DEFAULT_TARGET_DISH_COUNT,
     defaultTurnMode: "round_robin",
-    turnModes: ["round_robin", "market"],
+    turnModes: ["round_robin"],
     phases: ["lobby", "deposit", "playing", "settlement", "eating", "complete"],
     botTypes: BOT_TYPES,
     intentTypes: [
@@ -79,7 +79,6 @@ function buildClientGameConfig() {
       "set_timer",
       "set_target_dish_count",
       "set_stock",
-      "set_turn_mode",
       "set_pause",
       "start",
       "stop",

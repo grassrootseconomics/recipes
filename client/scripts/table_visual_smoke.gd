@@ -89,6 +89,8 @@ func _initialize() -> void:
 	_require(own_stock_tile != null and own_stock_tile.find_child("TurnCircle", true, false) != null, "viewer turn highlights the own inventory area")
 	_require(int(visual.debug_stats.get("handGroupCount", 0)) == 2, "renders grouped hand cards")
 	_require(int(visual.debug_stats.get("recipeSlotCount", 0)) == 6, "renders six recipe slots with duplicate ingredients")
+	_require(visual.find_child("RecipeCheck_rice_0", true, false) != null, "redeemed recipe slot shows a green checkmark")
+	_require(visual.find_child("RecipeCheck_rice_1", true, false) == null, "unredeemed duplicate recipe slot does not show a checkmark")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "renders the recipe name")
 	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Recipe 1/4: Rice Bean Bowl", "renders current recipe number in title")
 	var second_recipe := snapshot.duplicate(true)
@@ -112,11 +114,8 @@ func _initialize() -> void:
 		_require(not str(action).begins_with("Swap"), "Actions panel does not show a Swap button after selecting a card")
 	visual.debug_press_platter_ingredient("beans")
 	await process_frame
-	_require(_intents.is_empty(), "basket click opens swap confirmation instead of swapping immediately")
-	visual.debug_confirm_swap_popup()
-	await process_frame
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "swap popup confirms a platter swap")
-	_require(str(_intents[0].get("giveVoucherId", "")) == "rice_1" and str(_intents[0].get("takeVoucherId", "")) == "beans_1", "swap popup uses default main ingredient card and clicked basket card")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "basket click immediately emits a platter swap")
+	_require(str(_intents[0].get("giveVoucherId", "")) == "rice_1" and str(_intents[0].get("takeVoucherId", "")) == "beans_1", "immediate swap uses selected hand card and clicked basket card")
 	_intents.clear()
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
@@ -140,6 +139,7 @@ func _initialize() -> void:
 	_require(off_turn_own_stock != null and off_turn_own_stock.find_child("TurnCircle", true, false) == null, "off-turn viewer inventory has no turn circle")
 	var off_turn_title := visual.find_child("Title_Inventory", true, false) as Label
 	_require(off_turn_title != null and int(off_turn_title.get_theme_constant("outline_size")) == 0, "off-turn viewer inventory title has no glow")
+	_require(_has_label_containing(visual, "Wait while other cooks take their turns."), "off-turn round-robin Actions panel tells the viewer to wait")
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
 	await _assert_start_snapshot_animates_offerings_from_empty_basket(visual)
@@ -152,11 +152,21 @@ func _initialize() -> void:
 	_assert_animation_event(visual, _deposit_before(), _deposit_after(), "deposit", "deposit confirmation queues animation")
 	_assert_animation_event(visual, _snapshot_fixture(), _swap_after(), "swap", "swap confirmation queues animation")
 	_assert_animation_event(visual, _snapshot_fixture(), _public_swap_after(), "swap", "off-turn public swap queues animation")
+	_assert_swap_paths_are_specific(visual)
+	await _assert_public_settlement_food_part_uses_future_basket_slot(visual)
+	_assert_swap_updates_basket_before_returning_card(visual)
+	_assert_swap_return_targets_existing_hand_group_after_layout_shift(visual)
+	_assert_public_swap_return_uses_recorded_actor_after_staged_layout(visual)
+	_assert_animation_handoffs_before_fade_out(visual)
 	_assert_public_swap_transactions_animate_separately(visual)
+	_assert_pending_public_swaps_render_in_sequence(visual)
+	_assert_unknown_actor_basket_delta_does_not_animate_from_wrong_cook(visual)
 	await _assert_public_action_temporarily_highlights_actor(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _exchange_after(), "exchange", "accepted exchange queues bidirectional animation")
+	_assert_exchange_paths_are_specific(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _redeem_after(), "redeem", "redeem confirmation queues animation")
 	_assert_animation_count(visual, _snapshot_fixture(), _redeem_all_after(), "redeem", 2, "batch redeem queues one animation per redeemed card")
+	await _assert_redeem_animation_has_no_dialog_artifacts(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _public_redeem_after(), "public_redeem", "off-turn public redeem queues animation")
 	_assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual)
 	_assert_animation_event(visual, _prepare_before(), _prepare_after(), "prepare", "prepare confirmation queues animation")
@@ -220,16 +230,12 @@ func _initialize() -> void:
 	_require(not selected_actions.has("Clear"), "selected-card Actions panel still does not show a Clear button")
 	for action in selected_actions:
 		_require(not str(action).begins_with("Swap"), "selected-card Actions panel does not show a Swap button")
-	_require(_intents.is_empty(), "selected hand and platter cards wait for swap confirmation")
-	visual.debug_confirm_swap_popup()
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "confirmed selected hand and platter cards emit swap intent")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "selected hand and platter cards emit swap intent immediately")
 
 	_intents.clear()
 	var auto_swap := _snapshot_fixture()
 	visual.debug_apply_snapshot(auto_swap)
 	visual.debug_press_platter_ingredient("beans")
-	_require(visual.debug_selected_hand_ingredient() == "rice", "basket tap defaults give-card to viewer main ingredient")
-	visual.debug_confirm_swap_popup()
 	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "auto-selected basket swap emits swap intent")
 	_require(str(_intents[0].get("giveVoucherId", "")) == "rice_1", "auto-selected swap gives viewer main card")
 
@@ -238,8 +244,6 @@ func _initialize() -> void:
 	same_resource_swap["platter"].append({"id": "rice_9", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "platter"}})
 	visual.debug_apply_snapshot(same_resource_swap)
 	visual.debug_press_platter_ingredient("rice")
-	_require(visual.debug_selected_hand_ingredient() == "cheese", "basket tap on viewer main ingredient defaults to another held card")
-	visual.debug_confirm_swap_popup()
 	_require(_intents.size() == 1 and str(_intents[0].get("giveVoucherId", "")) == "cheese_1", "same-resource basket tap swaps another held card by default")
 
 	_intents.clear()
@@ -250,7 +254,6 @@ func _initialize() -> void:
 	var same_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
 	for action in same_actions:
 		_require(not str(action).begins_with("Swap"), "same-ingredient voucher swap has no Action-panel Swap button")
-	visual.debug_confirm_swap_popup()
 	_require(_intents.is_empty(), "same-ingredient voucher swap does not emit an intent")
 
 	_intents.clear()
@@ -259,13 +262,25 @@ func _initialize() -> void:
 	visual.debug_press_participant("p4")
 	_require(visual.debug_selected_hand_ingredient() == "rice", "player tap defaults offer-card to viewer main ingredient")
 	var create_offer_height := int(visual.debug_stats.get("offerPopupHeight", 0))
-	_require(create_offer_height > 0 and create_offer_height <= 170, "create-offer popup stays compact, height=%s" % create_offer_height)
+	_require(create_offer_height > 0 and create_offer_height <= 430, "create-offer popup stays compact with recipe context, height=%s" % create_offer_height)
 	_require(not bool(visual.debug_stats.get("offerPopupScrollEnabled", true)), "create-offer popup does not show a scrollbar")
+	_require(visual.find_child("OfferGiveCard_rice", true, false) != null, "create-offer popup shows the offered card")
+	_require(visual.find_child("OfferGetCard_vegetables", true, false) != null, "create-offer popup shows the requested card")
+	_require(visual.find_child("OfferRecipeContext_p4", true, false) != null, "create-offer popup shows target recipe context")
+	_require(visual.find_child("OfferMissing_beans", true, false) != null, "create-offer popup shows target missing ingredients")
+	_require(visual.find_child("OfferMissing_vegetables", true, false) == null, "create-offer popup omits cards the target already has")
+	_assert_offer_actions_below_cards(visual)
 
 	var incoming_offer_popup := _snapshot_fixture()
 	visual.debug_apply_snapshot(incoming_offer_popup)
 	visual.debug_press_participant("p2")
-	_require(int(visual.debug_stats.get("offerPopupHeight", 0)) > 0 and int(visual.debug_stats.get("offerPopupHeight", 0)) <= 210, "accept/refuse offer popup stays compact")
+	_require(int(visual.debug_stats.get("offerPopupHeight", 0)) > 0 and int(visual.debug_stats.get("offerPopupHeight", 0)) <= 430, "accept/refuse offer popup stays compact with recipe context")
+	_require(visual.find_child("OfferGiveCard_beans", true, false) != null, "incoming-offer popup shows the offered card")
+	_require(visual.find_child("OfferGetCard_rice", true, false) != null, "incoming-offer popup shows the requested card")
+	_require(visual.find_child("OfferRecipeContext_p2", true, false) != null, "incoming-offer popup shows other player's recipe context")
+	_require(visual.find_child("OfferMissing_cheese", true, false) != null, "incoming-offer popup shows other player's missing ingredients")
+	_require(visual.find_child("OfferMissing_beans", true, false) == null, "incoming-offer popup omits cards the sender already has")
+	_assert_offer_actions_below_cards(visual)
 
 	_intents.clear()
 	var food_swap := _snapshot_fixture()
@@ -348,6 +363,17 @@ func _assert_animation_event(visual: Node, before_snapshot: Dictionary, after_sn
 	visual.debug_flush_animations()
 
 
+func _assert_offer_actions_below_cards(visual: Node) -> void:
+	var panel := visual.find_child("OfferPanel", true, false)
+	_require(panel != null, "offer panel exists")
+	var card_pair := panel.find_child("OfferCardPair", true, false)
+	var action_row := panel.find_child("OfferActionRow", true, false)
+	var context := panel.find_child("OfferRecipeContext_*", true, false)
+	_require(card_pair != null and action_row != null and context != null, "offer panel has cards, actions, and recipe context")
+	_require(card_pair.get_index() < action_row.get_index(), "offer action buttons appear below the offer cards")
+	_require(action_row.get_index() < context.get_index(), "offer recipe context appears below the action buttons")
+
+
 func _assert_animation_count(visual: Node, before_snapshot: Dictionary, after_snapshot: Dictionary, expected_type: String, expected_minimum: int, message: String) -> void:
 	visual.debug_apply_snapshot(before_snapshot)
 	visual.render(after_snapshot)
@@ -381,6 +407,236 @@ func _assert_public_swap_transactions_animate_separately(visual: Node) -> void:
 	visual.debug_flush_animations()
 
 
+func _assert_pending_public_swaps_render_in_sequence(visual: Node) -> void:
+	var first := _public_swap_after()
+	first["version"] = 2
+	first["turn"] = 15
+	first["transactionTotal"] = 1
+	var second := _public_second_swap_after()
+	second["version"] = 3
+	second["turn"] = 16
+	second["transactionTotal"] = 2
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(first)
+	visual.render(second)
+	var first_type: String = visual.debug_apply_next_animation_milestone()
+	_require(first_type == "swap", "first pending public basket swap animates before later snapshots apply")
+	var second_type: String = visual.debug_apply_next_animation_milestone()
+	_require(second_type == "swap", "second pending public basket swap animates after the first completes")
+	visual.debug_flush_animations()
+
+
+func _assert_unknown_actor_basket_delta_does_not_animate_from_wrong_cook(visual: Node) -> void:
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_public_swap_without_transaction_after())
+	var events: Array = visual.debug_stats.get("lastAnimationEvents", [])
+	for raw_event in events:
+		var event: Dictionary = raw_event
+		_require(str(event.get("type", "")) != "swap", "basket delta without actor does not invent a public swap animation")
+	visual.debug_flush_animations()
+
+
+func _assert_swap_paths_are_specific(visual: Node) -> void:
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_swap_after())
+	var local_swap := _first_animation_event_of_type(visual, "swap")
+	var local_points: Dictionary = visual.debug_animation_path_points(local_swap)
+	_require(_all_points_valid(local_points), "local swap has all path endpoints")
+	_require(_points_close(local_points.get("giveStart", Vector2.INF), _node_center(visual.find_child("HandCard_rice", true, false))), "local swap starts at the selected hand card")
+	_require(_points_close(local_points.get("giveEnd", Vector2.INF), _node_center(visual.find_child("BasketSlot_rice", true, false))), "local swap gives card to its specific basket slot")
+	_require(_points_close(local_points.get("takeStart", Vector2.INF), _node_center(visual.find_child("PlatterVoucher_beans", true, false))), "local swap takes from the specific basket card")
+	_require(_points_differ(local_points.get("takeStart", Vector2.INF), local_points.get("takeEnd", Vector2.INF)), "local swap returns basket card toward the hand")
+	visual.debug_flush_animations()
+
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_public_multi_swap_after())
+	var swaps: Array = []
+	for raw_event in visual.debug_stats.get("lastAnimationEvents", []):
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) == "swap":
+			swaps.append(event)
+	_require(swaps.size() == 2, "public swap path check has both public swaps")
+	for raw_event in swaps:
+		var event: Dictionary = raw_event
+		var actor_id := str(event.get("actorParticipantId", ""))
+		var give_ingredient := str(event.get("giveIngredientId", ""))
+		var take_ingredient := str(event.get("takeIngredientId", ""))
+		var points: Dictionary = visual.debug_animation_path_points(event)
+		var actor_center := _node_center(visual.find_child("Participant_%s" % actor_id, true, false))
+		_require(_points_close(points.get("giveStart", Vector2.INF), actor_center), "public swap give leg starts at acting cook %s" % actor_id)
+		_require(_points_close(points.get("giveEnd", Vector2.INF), _node_center(visual.find_child("BasketSlot_%s" % give_ingredient, true, false))), "public swap give leg ends at %s basket slot" % give_ingredient)
+		_require(_points_close(points.get("takeStart", Vector2.INF), _node_center(visual.find_child("PlatterVoucher_%s" % take_ingredient, true, false))), "public swap take leg starts at %s basket card" % take_ingredient)
+		_require(_points_close(points.get("takeEnd", Vector2.INF), actor_center), "public swap take leg returns to acting cook %s" % actor_id)
+	visual.debug_flush_animations()
+
+
+func _assert_public_settlement_food_part_uses_future_basket_slot(visual: Node) -> void:
+	visual.debug_apply_snapshot(_public_settlement_food_part_before())
+	visual.render(_public_settlement_food_part_after())
+	var event := _first_animation_event_of_type(visual, "settlement_swap")
+	_require(not event.is_empty(), "public settlement food-part swap queues an animation")
+	var points: Dictionary = visual.debug_animation_path_points(event)
+	_require(_all_points_valid(points), "public settlement food-part swap has visible endpoints")
+	var actor_center := _node_center(visual.find_child("Participant_p2", true, false))
+	var basket_center := _node_center(visual.find_child("BasketSlot_beans", true, false))
+	_require(_points_close(points.get("giveStart", Vector2.INF), actor_center), "public settlement food part starts at the acting cook")
+	_require(not _points_close(points.get("giveEnd", Vector2.INF), basket_center), "public settlement food part does not fall back to a voucher slot or broad basket center")
+	_require(_points_close(points.get("takeStart", Vector2.INF), _node_center(visual.find_child("PlatterVoucher_beans", true, false))), "public settlement return starts at the basket voucher")
+	_require(_points_close(points.get("takeEnd", Vector2.INF), actor_center), "public settlement return lands on the acting cook")
+	visual.debug_flush_animations()
+	visual.debug_apply_snapshot(_public_settlement_food_part_after())
+	await process_frame
+	var platter_food := visual.find_child("PlatterFood_dish_9", true, false)
+	_require(platter_food != null, "public settlement final render shows the new basket food part")
+	var give_end: Vector2 = points.get("giveEnd", Vector2.INF)
+	var food_center := _node_center(platter_food)
+	_require(
+		give_end != Vector2.INF and food_center != Vector2.INF and give_end.distance_to(food_center) <= 4.0,
+		"public settlement food part lands at its future basket card: %s vs %s" % [give_end, food_center]
+	)
+	visual.debug_flush_animations()
+
+
+func _assert_exchange_paths_are_specific(visual: Node) -> void:
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_exchange_after())
+	var exchange := _first_animation_event_of_type(visual, "exchange")
+	var points: Dictionary = visual.debug_animation_path_points(exchange)
+	_require(_all_points_valid(points), "viewer exchange has explicit endpoints")
+	_require(_points_close(points.get("offeredStart", Vector2.INF), _node_center(visual.find_child("Participant_p2", true, false))), "exchange offered card starts at the offering cook")
+	_require(_points_close(points.get("offeredEnd", Vector2.INF), _node_center(visual.find_child("HandRow", true, false))), "exchange offered card lands in the viewer hand tray when no grouped card exists yet")
+	_require(_points_close(points.get("requestedStart", Vector2.INF), _node_center(visual.find_child("HandCard_rice", true, false))), "exchange requested card starts at viewer hand card")
+	_require(_points_close(points.get("requestedEnd", Vector2.INF), _node_center(visual.find_child("Participant_p2", true, false))), "exchange requested card returns to offering cook")
+	visual.debug_flush_animations()
+
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_public_exchange_after())
+	exchange = _first_animation_event_of_type(visual, "exchange")
+	points = visual.debug_animation_path_points(exchange)
+	_require(_all_points_valid(points), "public exchange has explicit cook endpoints")
+	_require(_points_close(points.get("offeredStart", Vector2.INF), _node_center(visual.find_child("Participant_p2", true, false))), "public exchange offered card starts at source cook")
+	_require(_points_close(points.get("offeredEnd", Vector2.INF), _node_center(visual.find_child("Participant_p4", true, false))), "public exchange offered card goes to target cook")
+	_require(_points_close(points.get("requestedStart", Vector2.INF), _node_center(visual.find_child("Participant_p4", true, false))), "public exchange requested card starts at counterparty cook")
+	_require(_points_close(points.get("requestedEnd", Vector2.INF), _node_center(visual.find_child("Participant_p2", true, false))), "public exchange requested card returns to source cook")
+	visual.debug_flush_animations()
+
+
+func _assert_swap_updates_basket_before_returning_card(visual: Node) -> void:
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_swap_after())
+	_require(_visible_hand_count(visual, "rice") == 2, "swap starts with both rice cards still in hand")
+	_require(_visible_platter_count(visual, "rice") == 0, "swap starts before rice is added to basket")
+	_require(_visible_hand_count(visual, "beans") == 0, "swap starts before beans returns to hand")
+	_require(_visible_platter_count(visual, "beans") == 2, "swap starts with both beans cards in basket")
+
+	var start: String = visual.debug_apply_current_animation_start()
+	_require(start == "swap", "swap source-start stage is available")
+	_require(_visible_hand_count(visual, "rice") == 1, "swap source-start removes the moving rice card from hand")
+	_require(_visible_platter_count(visual, "rice") == 0, "swap source-start does not add rice to basket before it lands")
+	_require(_visible_platter_count(visual, "beans") == 2, "swap source-start keeps taken beans in basket")
+
+	var mid: String = visual.debug_apply_current_animation_midpoint()
+	_require(mid == "swap", "swap midpoint is available")
+	_require(_visible_hand_count(visual, "rice") == 1, "swap midpoint removes the given rice card from hand")
+	_require(_visible_platter_count(visual, "rice") == 1, "swap midpoint increments the rice count in basket")
+	_require(_visible_hand_count(visual, "beans") == 0, "swap midpoint has not returned beans to hand yet")
+	_require(_visible_platter_count(visual, "beans") == 2, "swap midpoint keeps the taken beans card in basket until the return leg")
+
+	var take_start: String = visual.debug_apply_current_animation_take_start()
+	_require(take_start == "swap", "swap take-start stage is available")
+	_require(_visible_hand_count(visual, "beans") == 0, "swap take-start has not added beans to hand yet")
+	_require(_visible_platter_count(visual, "beans") == 1, "swap take-start removes the moving beans card from basket")
+
+	var final: String = visual.debug_apply_next_animation_milestone()
+	_require(final == "swap", "swap final milestone applies after return leg")
+	_require(_visible_hand_count(visual, "rice") == 1, "swap final keeps the given rice in basket")
+	_require(_visible_platter_count(visual, "rice") == 1, "swap final keeps rice basket count incremented")
+	_require(_visible_hand_count(visual, "beans") == 1, "swap final returns one beans card to hand")
+	_require(_visible_platter_count(visual, "beans") == 1, "swap final decrements the taken beans card from basket")
+	visual.debug_flush_animations()
+
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_swap_last_visible_cards_after())
+	_require(_visible_hand_count(visual, "cheese") == 1, "last-card swap starts with one cheese card in hand")
+	_require(_visible_platter_count(visual, "vegetables") == 1, "last-card swap starts with one veggies card in basket")
+	start = visual.debug_apply_current_animation_start()
+	_require(start == "swap", "last-card swap source-start stage is available")
+	_require(_visible_hand_count(visual, "cheese") == 0, "last-card swap removes the only cheese card from hand as it moves")
+	_require(_visible_platter_count(visual, "cheese") == 0, "last-card swap does not leave a landed cheese copy before arrival")
+	mid = visual.debug_apply_current_animation_midpoint()
+	_require(mid == "swap", "last-card swap midpoint is available")
+	_require(_visible_platter_count(visual, "cheese") == 1, "last-card swap adds cheese to basket only after it lands")
+	take_start = visual.debug_apply_current_animation_take_start()
+	_require(take_start == "swap", "last-card swap take-start stage is available")
+	_require(_visible_platter_count(visual, "vegetables") == 0, "last-card swap removes the only veggies card from basket as it moves")
+	_require(_visible_hand_count(visual, "vegetables") == 0, "last-card swap does not add veggies to hand before return lands")
+	final = visual.debug_apply_next_animation_milestone()
+	_require(final == "swap", "last-card swap final milestone applies")
+	_require(_visible_hand_count(visual, "vegetables") == 1, "last-card swap adds veggies to hand only after return lands")
+	visual.debug_flush_animations()
+
+
+func _assert_animation_handoffs_before_fade_out(visual: Node) -> void:
+	var timings: Dictionary = visual.debug_animation_handoff_timings()
+	var card_landing := float(timings.get("cardLanding", 0.0))
+	var card_fade_end := float(timings.get("cardFadeOutEnd", 0.0))
+	var swap_mid := float(timings.get("swapMid", 0.0))
+	var swap_take_start := float(timings.get("swapTakeStart", 0.0))
+	var swap_return_visible := float(timings.get("swapReturnVisible", 0.0))
+	var swap_finish := float(timings.get("swapFinish", 0.0))
+	var swap_return_fade_end := float(timings.get("swapReturnFadeOutEnd", 0.0))
+	var redeem_finish := float(timings.get("redeemFinish", 0.0))
+	var redeem_ingredient_fade_end := float(timings.get("redeemIngredientFadeOutEnd", 0.0))
+	_require(swap_mid <= card_landing + 0.001, "swap gives appear in the basket before the moving card fades out")
+	_require(card_landing < card_fade_end, "card animation has a visible fade-out window after landing")
+	_require(swap_take_start >= swap_return_visible - 0.001, "swap take source stays visible until the return card is visible")
+	_require(swap_finish <= swap_return_fade_end + 0.001, "swap final hand state appears before the return card fades out")
+	_require(redeem_finish <= redeem_ingredient_fade_end + 0.001, "redeem final recipe state appears before the ingredient fades out")
+
+
+func _assert_swap_return_targets_existing_hand_group_after_layout_shift(visual: Node) -> void:
+	visual.debug_apply_snapshot(_swap_existing_return_before())
+	visual.render(_swap_existing_return_after())
+	var start: String = visual.debug_apply_current_animation_start()
+	_require(start == "swap", "existing-card swap source-start stage is available")
+	var mid: String = visual.debug_apply_current_animation_midpoint()
+	_require(mid == "swap", "existing-card swap midpoint is available")
+	var take_start: String = visual.debug_apply_current_animation_take_start()
+	_require(take_start == "swap", "existing-card swap take-start stage is available")
+	var target: Vector2 = visual.debug_current_swap_take_end_point()
+	var existing_card := visual.find_child("HandCard_beans", true, false)
+	_require(existing_card != null, "existing-card swap keeps a visible grouped target")
+	_require(_points_close(target, _node_center(existing_card)), "swap return lands on the existing grouped hand item after the hand row shifts")
+	visual.debug_flush_animations()
+
+
+func _assert_public_swap_return_uses_recorded_actor_after_staged_layout(visual: Node) -> void:
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_public_swap_after())
+	var event := _first_animation_event_of_type(visual, "swap")
+	_require(not event.is_empty(), "public swap event is available for staged return path check")
+	var actor_id := str(event.get("actorParticipantId", ""))
+	var actor_center := _node_center(visual.find_child("Participant_%s" % actor_id, true, false))
+	_require(actor_center != Vector2.INF, "public swap actor tile is visible before staged playback")
+	var start: String = visual.debug_apply_current_animation_start()
+	_require(start == "swap", "public swap source-start stage is available")
+	var mid: String = visual.debug_apply_current_animation_midpoint()
+	_require(mid == "swap", "public swap midpoint stage is available")
+	var take_start: String = visual.debug_apply_current_animation_take_start()
+	_require(take_start == "swap", "public swap take-start stage is available")
+	var target: Vector2 = visual.debug_current_swap_take_end_point()
+	_require(_points_close(target, actor_center), "public swap return keeps the recorded acting cook target after staged basket layout changes")
+	visual.debug_flush_animations()
+
+
+func _first_animation_event_of_type(visual: Node, event_type: String) -> Dictionary:
+	for raw_event in visual.debug_stats.get("lastAnimationEvents", []):
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) == event_type:
+			return event
+	return {}
+
+
 func _assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual: Node) -> void:
 	_statuses.clear()
 	visual.debug_apply_snapshot(_snapshot_fixture())
@@ -396,19 +652,42 @@ func _assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual: Node)
 	_require(str(redeem_event.get("participantId", "")) == "p2" and str(redeem_event.get("ownerParticipantId", "")) == "p1", "public redeem records redeemer and card owner")
 	var points: Dictionary = visual.debug_animation_path_points(redeem_event)
 	_require(_all_points_valid(points), "public redeem has visible card and ingredient endpoints")
-	_require(_points_differ(points.get("cardStart", Vector2.INF), points.get("cardEnd", Vector2.INF)), "public redeem card moves from redeemer to owner")
-	_require(_points_differ(points.get("ingredientStart", Vector2.INF), points.get("ingredientEnd", Vector2.INF)), "public redeem ingredient moves from owner back to redeemer")
+	var actor_center := _node_center(visual.find_child("Participant_p2", true, false))
+	var owner_stock_center := _node_center(visual.find_child("InventoryStock_rice", true, false))
+	_require(_points_close(points.get("cardStart", Vector2.INF), actor_center), "public redeem card starts at the acting cook")
+	_require(_points_close(points.get("cardEnd", Vector2.INF), owner_stock_center), "public redeem card lands on the exact owner stock item when visible")
+	_require(_points_close(points.get("ingredientStart", Vector2.INF), owner_stock_center), "public redeem ingredient starts from the owner stock item")
+	_require(_points_close(points.get("ingredientEnd", Vector2.INF), actor_center), "public redeem ingredient returns to the acting cook")
 	visual.debug_apply_next_animation_milestone()
 	_require(_statuses.is_empty(), "public redeem animation does not show status/dialog text")
 	visual.debug_flush_animations()
 
 
+func _assert_redeem_animation_has_no_dialog_artifacts(visual: Node) -> void:
+	_statuses.clear()
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_redeem_all_after())
+	await process_frame
+	await process_frame
+	_require(_statuses.is_empty(), "redeem animation playback does not emit transient status text")
+	_require(not _has_label_containing(visual, "Redeeming"), "redeem animation playback does not create a transient caption panel")
+	visual.debug_flush_animations()
+
+
+func _has_label_containing(node: Node, needle: String) -> bool:
+	for raw_child in node.find_children("*", "Label", true, false):
+		var label := raw_child as Label
+		if label != null and label.text.find(needle) >= 0:
+			return true
+	return false
+
+
 func _assert_public_action_temporarily_highlights_actor(visual: Node) -> void:
 	var before := _snapshot_fixture()
-	before["turnMode"] = "market"
+	before["turnMode"] = "round_robin"
 	before["currentTurnParticipantId"] = "p4"
 	var after := _public_swap_after()
-	after["turnMode"] = "market"
+	after["turnMode"] = "round_robin"
 	after["currentTurnParticipantId"] = "p4"
 	visual.debug_apply_snapshot(before)
 	visual.render(after)
@@ -444,6 +723,15 @@ func _points_differ(left: Vector2, right: Vector2) -> bool:
 	return left != Vector2.INF and right != Vector2.INF and left.distance_to(right) > 2.0
 
 
+func _points_close(left: Vector2, right: Vector2) -> bool:
+	return left != Vector2.INF and right != Vector2.INF and left.distance_to(right) <= 2.0
+
+
+func _node_center(node: Node) -> Vector2:
+	var control := node as Control
+	return control.get_global_rect().get_center() if control != null else Vector2.INF
+
+
 func _assert_turn_update_waits_for_animation(visual: Node) -> void:
 	var before := _snapshot_fixture()
 	var after := _snapshot_fixture()
@@ -468,6 +756,7 @@ func _assert_batch_redeem_updates_counts_one_by_one(visual: Node) -> void:
 	_require(_visible_hand_count(visual, "cheese") == 1, "batch redeem keeps initial cheese count before first animation finishes")
 	_require(_visible_redeemed_count(visual, "rice") == 1, "batch redeem keeps initial recipe count before first animation finishes")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "batch redeem keeps current turn before redeem animations finish")
+	_assert_batch_redeem_paths_are_specific(visual)
 
 	var first: String = visual.debug_apply_next_animation_milestone()
 	_require(first == "redeem", "batch redeem first milestone is a redeem")
@@ -486,6 +775,36 @@ func _assert_batch_redeem_updates_counts_one_by_one(visual: Node) -> void:
 	_require(third == "turn", "batch redeem passes turn only after redeem milestones")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "batch redeem updates turn after the turn milestone")
 	visual.debug_flush_animations()
+
+
+func _assert_batch_redeem_paths_are_specific(visual: Node) -> void:
+	var redeem_events: Array = []
+	for raw_event in visual.debug_stats.get("lastAnimationEvents", []):
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) == "redeem":
+			redeem_events.append(event)
+	_require(redeem_events.size() >= 2, "batch redeem has one animation event per redeemed card")
+
+	var rice_event: Dictionary = redeem_events[0]
+	var cheese_event: Dictionary = redeem_events[1]
+	_require(str(rice_event.get("ingredientId", "")) == "rice" and str(rice_event.get("ownerParticipantId", "")) == "p1", "rice redeem targets Amina as card owner")
+	_require(str(cheese_event.get("ingredientId", "")) == "cheese" and str(cheese_event.get("ownerParticipantId", "")) == "p3", "cheese redeem targets Clara as card owner")
+
+	for raw_event in [rice_event, cheese_event]:
+		var event: Dictionary = raw_event
+		var points: Dictionary = visual.debug_animation_path_points(event)
+		_require(_all_points_valid(points), "redeem event has visible card owner and recipe endpoints")
+		_require(_points_differ(points.get("cardStart", Vector2.INF), points.get("cardEnd", Vector2.INF)), "redeem card moves from hand to exact owner")
+		_require(_points_differ(points.get("ingredientStart", Vector2.INF), points.get("ingredientEnd", Vector2.INF)), "redeem ingredient moves from exact owner to recipe slot")
+		_require(points.get("cardEnd", Vector2.INF) == points.get("ingredientStart", Vector2.INF), "redeem ingredient starts exactly where card was delivered")
+		if str(event.get("ingredientId", "")) == "rice":
+			_require(_points_close(points.get("cardStart", Vector2.INF), _node_center(visual.find_child("HandCard_rice", true, false))), "own redeem starts from exact rice hand card")
+			_require(_points_close(points.get("cardEnd", Vector2.INF), _node_center(visual.find_child("InventoryStock_rice", true, false))), "own redeem returns card to exact inventory stock item")
+			_require(_points_close(points.get("ingredientEnd", Vector2.INF), _node_center(visual.find_child("RecipeSlot_rice_1", true, false))), "own redeem sends ingredient to exact open recipe slot")
+		if str(event.get("ingredientId", "")) == "cheese":
+			_require(_points_close(points.get("cardStart", Vector2.INF), _node_center(visual.find_child("HandCard_cheese", true, false))), "other-owner redeem starts from exact cheese hand card")
+			_require(_points_close(points.get("cardEnd", Vector2.INF), _node_center(visual.find_child("Participant_p3", true, false))), "other-owner redeem sends card to exact owner cook")
+			_require(_points_close(points.get("ingredientEnd", Vector2.INF), _node_center(visual.find_child("RecipeSlot_cheese_5", true, false))), "other-owner redeem sends ingredient to exact recipe slot")
 
 
 func _assert_in_place_delta_redeem_pass_waits_for_animation(visual: Node) -> void:
@@ -806,13 +1125,43 @@ func _swap_after() -> Dictionary:
 	return snapshot
 
 
+func _swap_existing_return_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	var hand: Array = snapshot.get("ownHand", [])
+	hand.append({"id": "beans_3", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "hand", "participantId": "p1"}})
+	snapshot["ownHand"] = hand
+	return snapshot
+
+
+func _swap_existing_return_after() -> Dictionary:
+	var snapshot := _swap_existing_return_before()
+	_move_voucher(snapshot, "rice_1", "ownHand", "platter")
+	_move_voucher(snapshot, "beans_1", "platter", "ownHand")
+	return snapshot
+
+
+func _swap_last_visible_cards_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	_move_voucher(snapshot, "cheese_1", "ownHand", "platter")
+	_move_voucher(snapshot, "vegetables_1", "platter", "ownHand")
+	return snapshot
+
+
 func _public_swap_after() -> Dictionary:
 	var snapshot := _snapshot_fixture()
 	_remove_voucher(snapshot, "vegetables_1", "platter")
 	snapshot["platter"].append({"id": "beans_9", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "platter"}})
 	snapshot["transactionHistory"] = [
-		{"id": "tx_1", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Swap", "counterparty": "Platter", "itemOut": "Beans", "itemBack": "Veggies"}
+		{"id": "tx_1", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Swap", "counterparty": "Platter", "itemOut": "Beans card 7", "itemBack": "Veggies x1"}
 	]
+	return snapshot
+
+
+func _public_swap_without_transaction_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	_remove_voucher(snapshot, "vegetables_1", "platter")
+	snapshot["platter"].append({"id": "beans_9", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "platter"}})
+	snapshot["transactionHistory"] = []
 	return snapshot
 
 
@@ -821,6 +1170,23 @@ func _public_multi_swap_after() -> Dictionary:
 	snapshot["transactionHistory"] = [
 		{"id": "tx_1", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Swap", "counterparty": "Platter", "itemOut": "Beans", "itemBack": "Veggies"},
 		{"id": "tx_2", "turn": 16, "participantId": "p4", "name": "Diego", "action": "Swap", "counterparty": "Platter", "itemOut": "Veggies", "itemBack": "Beans"}
+	]
+	return snapshot
+
+
+func _public_second_swap_after() -> Dictionary:
+	var snapshot := _public_swap_after()
+	snapshot["transactionHistory"] = [
+		{"id": "tx_1", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Swap", "counterparty": "Platter", "itemOut": "Beans", "itemBack": "Veggies"},
+		{"id": "tx_2", "turn": 16, "participantId": "p4", "name": "Diego", "action": "Swap", "counterparty": "Platter", "itemOut": "Veggies", "itemBack": "Beans"}
+	]
+	return snapshot
+
+
+func _public_exchange_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["transactionHistory"] = [
+		{"id": "tx_9", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Exchange", "counterpartyParticipantId": "p4", "counterparty": "Diego", "itemOut": "Beans", "itemBack": "Veggies"}
 	]
 	return snapshot
 
@@ -960,6 +1326,27 @@ func _settlement_after() -> Dictionary:
 	return snapshot
 
 
+func _public_settlement_food_part_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["phase"] = "settlement"
+	snapshot["ownRecipe"] = {}
+	snapshot["platterFoodParts"] = []
+	snapshot["transactionHistory"] = []
+	return snapshot
+
+
+func _public_settlement_food_part_after() -> Dictionary:
+	var snapshot := _public_settlement_food_part_before()
+	snapshot["platterFoodParts"] = [
+		{"id": "dish_9_part_1", "dishId": "dish_9", "dishName": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "makerParticipantId": "p2", "location": {"type": "platter"}}
+	]
+	_remove_voucher(snapshot, "beans_1", "platter")
+	snapshot["transactionHistory"] = [
+		{"id": "tx_settle_food", "turn": 22, "participantId": "p2", "name": "Ben", "action": "Settlement Swap", "counterparty": "Platter", "itemOut": "Bean Dip scoop", "itemBack": "Beans"}
+	]
+	return snapshot
+
+
 func _eating_before() -> Dictionary:
 	var snapshot := _snapshot_fixture()
 	snapshot["phase"] = "eating"
@@ -1036,10 +1423,10 @@ func _snapshot_fixture() -> Dictionary:
 			{"id": "eggs", "name": "Eggs"}
 		],
 		"participants": [
-			{"id": "p1", "name": "Amina", "role": "active", "kind": "human", "ingredientId": "rice", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "dishCount": 0, "heldFoodPartCount": 0},
-			{"id": "p2", "name": "Ben", "role": "active", "kind": "human", "ingredientId": "beans", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0},
-			{"id": "p3", "name": "Clara", "role": "active", "kind": "human", "ingredientId": "cheese", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0},
-			{"id": "p4", "name": "Diego", "role": "active", "kind": "human", "ingredientId": "vegetables", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0}
+			{"id": "p1", "name": "Amina", "role": "active", "kind": "human", "ingredientId": "rice", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "dishCount": 0, "heldFoodPartCount": 0, "currentRecipe": {"name": "Rice Bean Bowl", "missingRequirements": [{"ingredientId": "beans", "missingQty": 1}, {"ingredientId": "vegetables", "missingQty": 1}, {"ingredientId": "spices", "missingQty": 1}, {"ingredientId": "cheese", "missingQty": 1}]}},
+			{"id": "p2", "name": "Ben", "role": "active", "kind": "human", "ingredientId": "beans", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0, "currentRecipe": {"name": "Bean Tacos", "missingRequirements": [{"ingredientId": "cheese", "missingQty": 1}, {"ingredientId": "rice", "missingQty": 1}]}},
+			{"id": "p3", "name": "Clara", "role": "active", "kind": "human", "ingredientId": "cheese", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0, "currentRecipe": {"name": "Cheese Frittata", "missingRequirements": [{"ingredientId": "eggs", "missingQty": 1}]}},
+			{"id": "p4", "name": "Diego", "role": "active", "kind": "human", "ingredientId": "vegetables", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0, "currentRecipe": {"name": "Veggie Chili", "missingRequirements": [{"ingredientId": "beans", "missingQty": 1}, {"ingredientId": "spices", "missingQty": 1}]}}
 		],
 		"ownHand": [
 			{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},

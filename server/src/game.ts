@@ -24,7 +24,6 @@ import type {
   PlatterAssetRef,
   Table,
   TransactionAction,
-  TurnMode,
   Voucher
 } from "./types.js";
 
@@ -258,9 +257,6 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       case "set_stock":
         setStock(table, actor, intent.count);
         break;
-      case "set_turn_mode":
-        setTurnMode(table, actor, intent.mode);
-        break;
       case "set_pause":
         setPaused(table, actor, intent.paused);
         break;
@@ -467,7 +463,10 @@ function resolveBotName(existing: string[], requestedName: string, _ordinal: num
 }
 
 function explicitBotName(requestedName: string): string {
-  return requestedName.replace(/_(pool|barter|mix|mixed)_bot$/i, "").replace(/_?bot$/i, "");
+  return requestedName
+    .replace(/_(pool|barter|mix|mixed)_bot$/i, "")
+    .replace(/_?bot$/i, "")
+    .replace(/_b(?:_\d+)?$/i, "");
 }
 
 function botNameSuffix(botType: BotType): string {
@@ -529,7 +528,7 @@ function botBaseKey(name: string): string {
   return name
     .replace(/_(pool|barter|mix|mixed)_bot$/i, "")
     .replace(/_?bot$/i, "")
-    .replace(/_b$/i, "")
+    .replace(/_b(?:_\d+)?$/i, "")
     .replace(/[^A-Za-z0-9]/g, "")
     .toLowerCase();
 }
@@ -712,7 +711,12 @@ function convertParticipantToBot(table: Table, actor: Participant, participantId
   participant.botType = botType;
   participant.connected = false;
   delete participant.controllerParticipantId;
-  participant.name = resolveBotName(existingNames(table), participant.name, table.participantOrder.indexOf(participant.id) + 1, botType);
+  participant.name = resolveBotName(
+    existingNames(table).filter((candidate) => candidate !== participant.name),
+    participant.name,
+    table.participantOrder.indexOf(participant.id) + 1,
+    botType
+  );
   participant.seatToken = `bot:${participant.id}:converted`;
   return participant;
 }
@@ -752,13 +756,6 @@ function setStock(table: Table, actor: Participant, count: number): void {
     );
   }
   table.stockPerIngredient = count;
-}
-
-function setTurnMode(table: Table, actor: Participant, mode: TurnMode): void {
-  requireHost(actor);
-  requireLobby(table);
-  table.turnMode = mode;
-  table.currentTurnParticipantId = undefined;
 }
 
 function setPaused(table: Table, actor: Participant, paused: boolean): void {
@@ -831,7 +828,7 @@ function startTable(table: Table, actor: Participant): void {
   for (const participant of active) {
     depositInitialOffer(table, participant);
   }
-  table.currentTurnParticipantId = table.turnMode === "round_robin" ? active[0]?.id : undefined;
+  table.currentTurnParticipantId = active[0]?.id;
 }
 
 function depositInitialOffer(table: Table, participant: Participant): void {
@@ -858,7 +855,7 @@ function passTurn(table: Table, actor: Participant): void {
     throw new GameError("Only a running turn can be passed.", "invalid_phase");
   }
   requireActive(actor);
-  const nextParticipantId = table.turnMode === "round_robin" ? nextTurnParticipantId(table, actor.id) : undefined;
+  const nextParticipantId = nextTurnParticipantId(table, actor.id);
   const nextParticipant = nextParticipantId ? table.participants[nextParticipantId] : undefined;
   recordTransaction(table, actor, "Pass Turn", nextParticipant?.name ?? "Table", "Turn", "None", nextParticipant?.id);
 }
@@ -868,13 +865,33 @@ function redeemUsefulHandVouchersAndPassTurn(table: Table, actor: Participant): 
   requireActive(actor);
   const recipe = table.recipes[actor.id];
   if (recipe) {
+    const remainingStockByOwner = new Map<string, number>();
+    for (const requirement of recipe.requirements) {
+      for (const voucherId of [...requirement.placedVoucherIds]) {
+        const voucher = table.vouchers[voucherId];
+        if (
+          !voucher ||
+          voucher.location.type !== "placed" ||
+          voucher.location.recipeOwnerId !== actor.id ||
+          voucher.location.requirementId !== requirement.id
+        ) {
+          continue;
+        }
+        const owner = requireParticipant(table, voucher.ownerParticipantId);
+        const remainingStock = remainingStockByOwner.get(owner.id) ?? owner.realIngredientStock ?? 0;
+        if (remainingStock <= 0) {
+          continue;
+        }
+        remainingStockByOwner.set(owner.id, remainingStock - 1);
+        redeemVoucher(table, actor, voucherId);
+      }
+    }
     const outstandingByRequirement = new Map(
       recipe.requirements.map((requirement) => [
         requirement.id,
         requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length
       ])
     );
-    const remainingStockByOwner = new Map<string, number>();
     const plannedRedemptions: Array<{ voucherId: string; requirementId: string }> = [];
     const initialHandIds = handVoucherIds(table, actor.id);
     for (const voucherId of initialHandIds) {
@@ -1616,9 +1633,6 @@ function enterEndgamePhase(table: Table): void {
 }
 
 function shouldGateTurn(table: Table, intent: Intent): boolean {
-  if (table.turnMode !== "round_robin") {
-    return false;
-  }
   switch (intent.type) {
     case "pass_turn":
     case "redeem_all_and_pass_turn":
@@ -1642,7 +1656,7 @@ function shouldGateTurn(table: Table, intent: Intent): boolean {
 }
 
 function shouldAdvanceTurnAfterIntent(table: Table, intent: Intent): boolean {
-  return table.turnMode === "round_robin" && (intent.type === "pass_turn" || intent.type === "redeem_all_and_pass_turn");
+  return intent.type === "pass_turn" || intent.type === "redeem_all_and_pass_turn";
 }
 
 function requireCurrentTurn(table: Table, actor: Participant): void {
@@ -1659,10 +1673,6 @@ function requireCurrentTurn(table: Table, actor: Participant): void {
 }
 
 function advanceTurn(table: Table, actorParticipantId: string): void {
-  if (table.turnMode !== "round_robin") {
-    table.currentTurnParticipantId = undefined;
-    return;
-  }
   if (table.phase === "lobby" || table.phase === "deposit" || table.phase === "complete") {
     table.currentTurnParticipantId = table.phase === "complete" ? undefined : table.currentTurnParticipantId;
     return;

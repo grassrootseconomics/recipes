@@ -16,6 +16,7 @@ import type {
   Offer,
   OfferSnapshot,
   Participant,
+  PublicRecipeSummary,
   PublicParticipant,
   Recipe,
   Snapshot,
@@ -131,7 +132,36 @@ function publicParticipant(table: Table, participant: Participant): PublicPartic
     depositedInitial: participant.depositedInitial,
     connected: participant.controllerParticipantId
       ? Boolean(table.participants[participant.controllerParticipantId]?.connected)
-      : participant.connected
+      : participant.connected,
+    currentRecipe: publicRecipeSummary(table, participant.id, table.recipes[participant.id])
+  };
+}
+
+function publicRecipeSummary(table: Table, participantId: string, recipe?: Recipe): PublicRecipeSummary | undefined {
+  if (!recipe) {
+    return undefined;
+  }
+  const heldUsefulCounts = new Map<string, number>();
+  for (const voucherId of handVoucherIds(table, participantId)) {
+    const voucher = table.vouchers[voucherId];
+    const owner = table.participants[voucher.ownerParticipantId];
+    if (!voucher || (owner?.realIngredientStock ?? 0) <= 0) {
+      continue;
+    }
+    heldUsefulCounts.set(voucher.ingredientId, (heldUsefulCounts.get(voucher.ingredientId) ?? 0) + 1);
+  }
+  return {
+    name: recipe.name,
+    missingRequirements: recipe.requirements
+      .map((requirement) => {
+        const recipeMissingQty = Math.max(0, requirement.requiredQty - requirement.redeemedQty);
+        const heldQty = heldUsefulCounts.get(requirement.ingredientId) ?? 0;
+        return {
+          ingredientId: requirement.ingredientId,
+          missingQty: Math.max(0, recipeMissingQty - heldQty)
+        };
+      })
+      .filter((requirement) => requirement.missingQty > 0)
   };
 }
 

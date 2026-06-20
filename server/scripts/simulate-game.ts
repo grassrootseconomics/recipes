@@ -92,9 +92,6 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
     table = store.requireTable(host.tableCode);
     await Promise.all(clients.map((client) => client.connect()));
 
-    if (table.turnMode !== simulationOptions.turnMode) {
-      await sendIntent(host, { type: "set_turn_mode", mode: simulationOptions.turnMode });
-    }
     if (simulationOptions.dishGoal !== table.targetDishCount) {
       await sendIntent(host, { type: "set_target_dish_count", count: simulationOptions.dishGoal });
     }
@@ -186,7 +183,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
 
   async function advanceToParticipantTurn(participantId: string): Promise<void> {
     const table = currentTable();
-    if (table.turnMode !== "round_robin" || !phaseUsesTurnGate(table.phase)) {
+    if (!phaseUsesTurnGate(table.phase)) {
       return;
     }
     let guard = 0;
@@ -799,9 +796,9 @@ function parseOptions(args: string[]): SimulationOptions {
   if (!["local", "jitter", "disconnect", "bad"].includes(profile)) {
     throw new Error(`Unknown profile ${profile}.`);
   }
-  const turnMode = getValue("turn-mode", process.env.SIM_TURN_MODE ?? "market") as TurnMode;
-  if (!["round_robin", "market"].includes(turnMode)) {
-    throw new Error(`Unknown turn mode ${turnMode}.`);
+  const turnMode = getValue("turn-mode", process.env.SIM_TURN_MODE ?? "round_robin") as TurnMode;
+  if (turnMode !== "round_robin") {
+    throw new Error(`Unsupported turn mode ${turnMode}; Recipes now uses round_robin only.`);
   }
   const gameCount = parsePositiveInt(getValue("games", process.env.SIM_GAMES ?? "1"), "Simulation game count");
   const explicitPlayers = hasValue("players") || Boolean(process.env.SIM_PLAYERS);
