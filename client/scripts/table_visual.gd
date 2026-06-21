@@ -18,6 +18,7 @@ const DEFAULT_INGREDIENT_ORDER := ["cheese", "flour", "herbs", "vegetables", "ri
 # [5] [1] [2] [6]
 const BASKET_CENTER_OUT_SLOTS := [5, 6, 1, 2, 4, 7, 3, 0]
 const TABLE_CONTENT_WIDTH := 680
+const TABLE_CONTENT_HEIGHT := 960
 const BASKET_BACKDROP_SIZE := Vector2(668, 230)
 const BASKET_SLOT_SIZE := Vector2(118, 82)
 const BASKET_GRID_GAP := 7
@@ -26,22 +27,22 @@ const RECIPE_SLOT_SIZE := Vector2(138, 92)
 const RECIPE_GRID_GAP := 6
 const RECIPE_GRID_SIZE := Vector2(RECIPE_SLOT_SIZE.x * 3.0 + RECIPE_GRID_GAP * 2.0, RECIPE_SLOT_SIZE.y * 2.0 + RECIPE_GRID_GAP)
 const COOK_TILE_SIZE := Vector2(152, 108)
-const CARD_TILE_FADE_IN_SECONDS := 0.06
-const CARD_TILE_MOVE_SECONDS := 0.22
-const CARD_TILE_PULSE_SECONDS := 0.10
+const CARD_TILE_FADE_IN_SECONDS := 0.03
+const CARD_TILE_MOVE_SECONDS := 0.42
+const CARD_TILE_PULSE_SECONDS := 0.12
 const CARD_TILE_FADE_OUT_SECONDS := 0.08
 const CARD_TILE_LANDING_SECONDS := CARD_TILE_FADE_IN_SECONDS + CARD_TILE_MOVE_SECONDS + CARD_TILE_PULSE_SECONDS
 const CARD_TILE_VISIBLE_START_LANDING_SECONDS := CARD_TILE_MOVE_SECONDS + CARD_TILE_PULSE_SECONDS
-const TEXTURE_FADE_IN_SECONDS := 0.06
-const TEXTURE_MOVE_SECONDS := 0.20
-const TEXTURE_PULSE_SECONDS := 0.10
+const TEXTURE_FADE_IN_SECONDS := 0.03
+const TEXTURE_MOVE_SECONDS := 0.38
+const TEXTURE_PULSE_SECONDS := 0.12
 const TEXTURE_FADE_OUT_SECONDS := 0.08
 const TEXTURE_LANDING_SECONDS := TEXTURE_FADE_IN_SECONDS + TEXTURE_MOVE_SECONDS + TEXTURE_PULSE_SECONDS
-const SWAP_RETURN_DELAY_SECONDS := 0.56
+const SWAP_RETURN_DELAY_SECONDS := CARD_TILE_LANDING_SECONDS + 0.10
 const SWAP_MID_SNAPSHOT_SECONDS := CARD_TILE_LANDING_SECONDS
 const SWAP_TAKE_START_SECONDS := SWAP_RETURN_DELAY_SECONDS + CARD_TILE_FADE_IN_SECONDS
 const SWAP_FINISH_SECONDS := SWAP_TAKE_START_SECONDS + CARD_TILE_VISIBLE_START_LANDING_SECONDS
-const REDEEM_INGREDIENT_DELAY_SECONDS := 0.62
+const REDEEM_INGREDIENT_DELAY_SECONDS := CARD_TILE_LANDING_SECONDS + 0.10
 const REDEEM_FINISH_SECONDS := REDEEM_INGREDIENT_DELAY_SECONDS + TEXTURE_LANDING_SECONDS
 
 
@@ -372,7 +373,7 @@ func debug_apply_next_animation_milestone() -> String:
 	_animation_actor_participant_id = ""
 	_apply_animation_event_snapshot(event)
 	if _animation_queue.is_empty():
-		_apply_pending_visual_snapshot()
+		_apply_pending_visual_snapshot(false)
 	return str(event.get("type", ""))
 
 
@@ -433,10 +434,7 @@ func debug_visible_snapshot() -> Dictionary:
 
 
 func preferred_visual_size() -> Vector2:
-	var preferred_height := 620.0
-	if is_instance_valid(_root):
-		preferred_height = maxf(preferred_height, _root.get_combined_minimum_size().y + 24.0)
-	return Vector2(TABLE_CONTENT_WIDTH + 20.0, preferred_height)
+	return Vector2(TABLE_CONTENT_WIDTH + 20.0, TABLE_CONTENT_HEIGHT)
 
 
 func debug_deposit_animation_anchors() -> Array:
@@ -497,7 +495,7 @@ func debug_animation_path_points(event: Dictionary) -> Dictionary:
 func _build() -> void:
 	add_theme_stylebox_override("panel", _panel_style(TABLE_BG, PANEL_BORDER, 2, 8))
 	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH + 20, 620)
+	custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH + 20, TABLE_CONTENT_HEIGHT)
 
 	var margin := MarginContainer.new()
 	margin.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
@@ -629,7 +627,8 @@ func _build() -> void:
 	hand_panel.add_child(_scroll_wrap(_hand_row, 104))
 
 	_offer_popup = PopupPanel.new()
-	_configure_persistent_popup(_offer_popup)
+	_offer_popup.name = "OfferPopup"
+	_configure_transient_popup(_offer_popup)
 	_offer_popup.add_theme_stylebox_override("panel", _offer_popup_panel_style())
 	_offer_popup_scroller = ScrollContainer.new()
 	_offer_popup_scroller.name = "OfferPopupScroller"
@@ -756,6 +755,12 @@ func _configure_persistent_popup(window: Window) -> void:
 	window.set("popup_window", false)
 
 
+func _configure_transient_popup(window: Window) -> void:
+	if not is_instance_valid(window):
+		return
+	window.set("popup_window", true)
+
+
 func _render_participants() -> void:
 	_clear(_participant_row)
 	var viewer_id := _viewer_id()
@@ -821,10 +826,14 @@ func _render_basket() -> void:
 	_clear(_basket_grid)
 	var count := 0
 	var voucher_groups_by_ingredient := _voucher_groups_by_ingredient(_snapshot.get("platter", []))
+	var ingredient_by_slot := _basket_ingredient_by_visual_slot()
 	var visual_order := _basket_ingredients_by_visual_slot()
 	debug_stats["basketVisualOrder"] = visual_order.duplicate()
-	for visual_slot_index in range(visual_order.size()):
-		var ingredient_id := str(visual_order[visual_slot_index])
+	for visual_slot_index in range(BASKET_CENTER_OUT_SLOTS.size()):
+		var ingredient_id := str(ingredient_by_slot.get(visual_slot_index, ""))
+		if ingredient_id == "":
+			_basket_grid.add_child(_basket_empty_slot(visual_slot_index))
+			continue
 		var group: Dictionary = voucher_groups_by_ingredient.get(ingredient_id, {})
 		if not group.is_empty():
 			count += 1
@@ -847,6 +856,18 @@ func _render_basket() -> void:
 		_basket_grid.add_child(button)
 
 	debug_stats["platterGroupCount"] = count
+
+
+func _basket_empty_slot(visual_slot_index: int) -> Control:
+	var slot := CenterContainer.new()
+	slot.name = "BasketSlot_empty_%s" % visual_slot_index
+	slot.set_meta("basket_slot_index", visual_slot_index)
+	slot.custom_minimum_size = BASKET_SLOT_SIZE
+	slot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	slot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot.clip_contents = true
+	return slot
 
 
 func _basket_ingredient_slot(ingredient_id: String, group: Dictionary, visual_slot_index: int) -> Control:
@@ -889,19 +910,22 @@ func _voucher_groups_by_ingredient(vouchers: Array) -> Dictionary:
 
 
 func _basket_ingredients_by_visual_slot() -> Array[String]:
-	_ensure_basket_slot_mapping()
-	var ingredient_order := _basket_ingredient_order()
-	var by_slot := {}
-	for raw_ingredient_id in ingredient_order:
-		var ingredient_id := str(raw_ingredient_id)
-		if _basket_slot_by_ingredient.has(ingredient_id):
-			by_slot[int(_basket_slot_by_ingredient.get(ingredient_id))] = ingredient_id
-
+	var by_slot := _basket_ingredient_by_visual_slot()
 	var visual_order: Array[String] = []
 	for slot_index in range(BASKET_CENTER_OUT_SLOTS.size()):
 		if by_slot.has(slot_index):
 			visual_order.append(str(by_slot[slot_index]))
 	return visual_order
+
+
+func _basket_ingredient_by_visual_slot() -> Dictionary:
+	_ensure_basket_slot_mapping()
+	var by_slot := {}
+	for raw_ingredient_id in _basket_ingredient_order():
+		var ingredient_id := str(raw_ingredient_id)
+		if ingredient_id != "" and _basket_slot_by_ingredient.has(ingredient_id):
+			by_slot[int(_basket_slot_by_ingredient.get(ingredient_id))] = ingredient_id
+	return by_slot
 
 
 func _ensure_basket_slot_mapping() -> void:
@@ -1536,7 +1560,7 @@ func _open_create_offer_popup(participant_id: String) -> void:
 	_prepare_offer_popup_content(276)
 	var target := _participant_by_id(participant_id)
 	if target.is_empty() or not _participant_can_receive_offer(target):
-		_offer_popup_list.add_child(_offer_popup_title("Offer"))
+		_offer_popup_list.add_child(_offer_popup_header("Offer"))
 		var unavailable := _offer_popup_text("That player cannot receive an offer right now.")
 		_offer_popup_list.add_child(unavailable)
 		_popup_centered_tight(228, 120)
@@ -1567,7 +1591,7 @@ func _open_swap_popup(phase: String) -> void:
 	_clear(_offer_popup_list)
 	_offer_popup_list.custom_minimum_size = Vector2(212, 0)
 	_offer_popup_list.add_theme_constant_override("separation", 3)
-	var title := _offer_popup_title("Swap")
+	var title := _offer_popup_header("Swap")
 	_offer_popup_list.add_child(title)
 	var give_label := _asset_label_from_key(_selected_inventory_asset_key)
 	var take_label := _asset_label_from_key(_selected_platter_asset_key)
@@ -1622,7 +1646,7 @@ func _offer_popup_component(title_text: String, participant_id: String, give_ing
 	box.name = "OfferPanel"
 	box.add_theme_constant_override("separation", 6)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_child(_offer_popup_title(title_text))
+	box.add_child(_offer_popup_header(title_text))
 	if detail_text != "":
 		box.add_child(_offer_popup_text(detail_text))
 	box.add_child(_offer_card_pair(give_ingredient_id, give_qty, get_ingredient_id, get_qty))
@@ -1734,22 +1758,31 @@ func _open_offer_popup(participant_id: String) -> void:
 			))
 			action_row = row
 		elif from_id == _viewer_id():
-			action_row = _offer_popup_button("Cancel", func(o := offer) -> void:
+			action_row = _offer_popup_button("Cancel Offer", func(o := offer) -> void:
 				intent_requested.emit({"type": "cancel_offer", "offerId": o.get("id", "")})
 				_offer_popup.hide()
 			)
+		var give_ingredient_id := _offer_first_offered_ingredient_id(offer)
+		var give_quantity := _offer_offered_quantity(offer)
+		var get_ingredient_id := _offer_requested_ingredient_id(offer)
+		var get_quantity := _offer_requested_quantity(offer)
+		if to_id == _viewer_id():
+			give_ingredient_id = _offer_requested_ingredient_id(offer)
+			give_quantity = _offer_requested_quantity(offer)
+			get_ingredient_id = _offer_first_offered_ingredient_id(offer)
+			get_quantity = _offer_offered_quantity(offer)
 		_offer_popup_list.add_child(_offer_popup_component(
 			"Offers with %s" % _participant_name(participant_id),
 			participant_id,
-			_offer_first_offered_ingredient_id(offer),
-			_offer_offered_quantity(offer),
-			_offer_requested_ingredient_id(offer),
-			_offer_requested_quantity(offer),
+			give_ingredient_id,
+			give_quantity,
+			get_ingredient_id,
+			get_quantity,
 			_offer_sentence(offer),
 			action_row
 		))
 	if not added:
-		var title := _offer_popup_title("Offers with %s" % _participant_name(participant_id))
+		var title := _offer_popup_header("Offers with %s" % _participant_name(participant_id))
 		_offer_popup_list.add_child(title)
 		var none_label := _offer_popup_text("No visible offers.")
 		_offer_popup_list.add_child(none_label)
@@ -3011,9 +3044,18 @@ func _finish_animation_event() -> void:
 	_animation_actor_participant_id = ""
 	_apply_animation_event_snapshot(finished_event)
 	if _animation_queue.is_empty():
-		_apply_pending_visual_snapshot()
+		_apply_pending_visual_snapshot_after_layout()
 	else:
 		_play_next_animation()
+
+
+func _apply_pending_visual_snapshot_after_layout() -> void:
+	if not is_inside_tree():
+		return
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	_apply_pending_visual_snapshot()
 
 
 func _apply_animation_event_snapshot(event: Dictionary) -> void:
@@ -3040,7 +3082,7 @@ func _queue_pending_visual_snapshot(snapshot: Dictionary) -> void:
 	_has_pending_visual_snapshot = true
 
 
-func _apply_pending_visual_snapshot() -> void:
+func _apply_pending_visual_snapshot(defer_remaining := true) -> void:
 	if _pending_visual_snapshots.is_empty() and not _has_pending_visual_snapshot:
 		return
 	var snapshot: Dictionary
@@ -3058,7 +3100,10 @@ func _apply_pending_visual_snapshot() -> void:
 		var remaining: Dictionary = raw_remaining
 		_queue_pending_visual_snapshot(remaining)
 	if not _animation_running and _animation_queue.is_empty() and not _pending_visual_snapshots.is_empty():
-		_apply_pending_visual_snapshot()
+		if defer_remaining:
+			_apply_pending_visual_snapshot_after_layout()
+		else:
+			_apply_pending_visual_snapshot(false)
 
 
 func _animation_actor_id(event: Dictionary) -> String:
@@ -3529,7 +3574,7 @@ func _basket_food_slot_center_by_name(dish_name: String) -> Vector2:
 		if str(group.get("dishName", "")) == dish_name:
 			food_rank = index
 			break
-	return _basket_grid_index_center(_basket_ingredients_by_visual_slot().size() + food_rank)
+	return _basket_grid_index_center(BASKET_CENTER_OUT_SLOTS.size() + food_rank)
 
 
 func _basket_grid_index_center(index: int) -> Vector2:
@@ -3671,7 +3716,7 @@ func _valid_points(points: Array) -> Array[Vector2]:
 	return valid
 
 
-func _animate_event_asset_tile_path(event: Dictionary, prefix: String, global_points: Array[Vector2], delay := 0.0, start_visible := false) -> void:
+func _animate_event_asset_tile_path(event: Dictionary, prefix: String, global_points: Array[Vector2], delay := 0.0, start_visible := true) -> void:
 	var kind := str(event.get("%sKind" % prefix, ""))
 	if kind == "voucher":
 		_animate_voucher_card_path(str(event.get("%sIngredientId" % prefix, "")), global_points, delay, start_visible)
@@ -3685,21 +3730,23 @@ func _animate_event_asset_tile_path(event: Dictionary, prefix: String, global_po
 		)
 
 
-func _animate_voucher_card_path(ingredient_id: String, global_points: Array[Vector2], delay := 0.0, start_visible := false) -> void:
+func _animate_voucher_card_path(ingredient_id: String, global_points: Array[Vector2], delay := 0.0, start_visible := true) -> void:
 	var meta := VisualAssets.ingredient_meta(ingredient_id)
 	_animate_visual_tile_path(meta, _ingredient_display(ingredient_id), global_points, delay, start_visible)
 
 
-func _animate_dish_part_card_path(dish_name: String, unit: String, global_points: Array[Vector2], delay := 0.0, start_visible := false) -> void:
+func _animate_dish_part_card_path(dish_name: String, unit: String, global_points: Array[Vector2], delay := 0.0, start_visible := true) -> void:
 	var meta := VisualAssets.dish_meta(dish_name, unit)
 	_animate_visual_tile_path(meta, VisualAssets.short_dish_name(dish_name), global_points, delay, start_visible)
 
 
-func _animate_visual_tile_path(meta: Dictionary, label: String, global_points: Array[Vector2], delay := 0.0, start_visible := false) -> void:
+func _animate_visual_tile_path(meta: Dictionary, label: String, global_points: Array[Vector2], delay := 0.0, start_visible := true) -> void:
 	if global_points.size() < 2 or not is_instance_valid(_animation_layer):
 		return
-	var tile_size := Vector2(66, 76)
+	var tile_size := BASKET_SLOT_SIZE
 	var tile := Button.new()
+	tile.name = "AnimatedCard_%s" % label.replace(" ", "_")
+	debug_stats["lastAnimatedCardSize"] = tile_size
 	tile.text = ""
 	tile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tile.focus_mode = Control.FOCUS_NONE
@@ -5057,6 +5104,45 @@ func _offer_popup_title(text: String) -> Label:
 	label.add_theme_font_size_override("font_size", 14)
 	label.add_theme_color_override("font_color", TEXT_DARK)
 	return label
+
+
+func _offer_popup_header(text: String) -> Control:
+	var row := HBoxContainer.new()
+	row.name = "OfferPopupHeader"
+	row.add_theme_constant_override("separation", 4)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(24, 24)
+	row.add_child(spacer)
+	var title := _offer_popup_title(text)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(title)
+	row.add_child(_offer_popup_close_button())
+	return row
+
+
+func _offer_popup_close_button() -> Button:
+	var button := Button.new()
+	button.name = "OfferPopupClose"
+	button.text = "X"
+	button.custom_minimum_size = Vector2(24, 24)
+	button.focus_mode = Control.FOCUS_NONE
+	button.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.pressed.connect(func() -> void:
+		if is_instance_valid(_offer_popup):
+			_offer_popup.hide()
+	)
+	var normal := _panel_style(Color(0.88, 0.82, 0.68), PANEL_BORDER, 1, 5)
+	var hover := _panel_style(Color(0.94, 0.89, 0.76), PANEL_BORDER.darkened(0.08), 1, 5)
+	var pressed := _panel_style(Color(0.78, 0.70, 0.56), PANEL_BORDER.darkened(0.16), 1, 5)
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_color_override("font_color", TEXT_DARK)
+	button.add_theme_color_override("font_hover_color", TEXT_DARK)
+	button.add_theme_color_override("font_pressed_color", TEXT_DARK)
+	button.add_theme_font_size_override("font_size", 12)
+	return button
 
 
 func _offer_popup_text(text: String) -> Label:

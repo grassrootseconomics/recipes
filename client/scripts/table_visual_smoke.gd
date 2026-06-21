@@ -30,7 +30,12 @@ func _initialize() -> void:
 	var snapshot := _snapshot_fixture()
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
-	_require(_all_popup_panels_are_persistent(visual), "visual table popup panels do not auto-dismiss on focus loss")
+	visual.debug_play_animation_event({"type": "deposit", "ingredientId": "rice", "participantId": "p2"})
+	await process_frame
+	_require(visual.debug_stats.get("lastAnimatedCardSize", Vector2.ZERO) == Vector2(118, 82), "animated promise cards use the same size as basket cards")
+	visual.debug_flush_animations()
+	await process_frame
+	_require(_popup_panels_have_expected_dismissal(visual), "visual table popups use expected dismissal behavior")
 	_require(visual.get_combined_minimum_size().x <= 720.0, "visual table minimum width fits a 720px portrait window with app margins")
 	visual.debug_apply_snapshot(_eight_seat_snapshot())
 	visual.size = Vector2(720, 1100)
@@ -269,18 +274,23 @@ func _initialize() -> void:
 	_require(visual.find_child("OfferRecipeContext_p4", true, false) != null, "create-offer popup shows target recipe context")
 	_require(visual.find_child("OfferMissing_beans", true, false) != null, "create-offer popup shows target missing ingredients")
 	_require(visual.find_child("OfferMissing_vegetables", true, false) == null, "create-offer popup omits cards the target already has")
+	_require(visual.find_child("OfferPopupClose", true, false) != null, "offer popup has a top-right close button")
 	_assert_offer_actions_below_cards(visual)
 
 	var incoming_offer_popup := _snapshot_fixture()
 	visual.debug_apply_snapshot(incoming_offer_popup)
 	visual.debug_press_participant("p2")
 	_require(int(visual.debug_stats.get("offerPopupHeight", 0)) > 0 and int(visual.debug_stats.get("offerPopupHeight", 0)) <= 430, "accept/refuse offer popup stays compact with recipe context")
-	_require(visual.find_child("OfferGiveCard_beans", true, false) != null, "incoming-offer popup shows the offered card")
-	_require(visual.find_child("OfferGetCard_rice", true, false) != null, "incoming-offer popup shows the requested card")
+	_require(visual.find_child("OfferGiveCard_rice", true, false) != null, "incoming-offer popup shows what the viewer gives")
+	_require(visual.find_child("OfferGetCard_beans", true, false) != null, "incoming-offer popup shows what the viewer gets")
 	_require(visual.find_child("OfferRecipeContext_p2", true, false) != null, "incoming-offer popup shows other player's recipe context")
 	_require(visual.find_child("OfferMissing_cheese", true, false) != null, "incoming-offer popup shows other player's missing ingredients")
 	_require(visual.find_child("OfferMissing_beans", true, false) == null, "incoming-offer popup omits cards the sender already has")
 	_assert_offer_actions_below_cards(visual)
+
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.debug_press_participant("p3")
+	_require(_has_text_containing(visual, "Cancel Offer"), "outgoing-offer popup uses explicit Cancel Offer button text")
 
 	_intents.clear()
 	var food_swap := _snapshot_fixture()
@@ -672,6 +682,18 @@ func _assert_redeem_animation_has_no_dialog_artifacts(visual: Node) -> void:
 	_require(_statuses.is_empty(), "redeem animation playback does not emit transient status text")
 	_require(not _has_label_containing(visual, "Redeeming"), "redeem animation playback does not create a transient caption panel")
 	visual.debug_flush_animations()
+
+
+func _has_text_containing(node: Node, needle: String) -> bool:
+	for raw_child in node.find_children("*", "Button", true, false):
+		var button := raw_child as Button
+		if button != null and button.text.find(needle) >= 0:
+			return true
+	for raw_child in node.find_children("*", "Label", true, false):
+		var label := raw_child as Label
+		if label != null and label.text.find(needle) >= 0:
+			return true
+	return false
 
 
 func _has_label_containing(node: Node, needle: String) -> bool:
@@ -1558,11 +1580,15 @@ func _is_width_sensitive_visual_node(name: String) -> bool:
 		or name.begins_with("RecipeSlot_")
 
 
-func _all_popup_panels_are_persistent(node: Node) -> bool:
-	if node is PopupPanel and bool(node.get("popup_window")):
-		return false
+func _popup_panels_have_expected_dismissal(node: Node) -> bool:
+	if node is PopupPanel:
+		var is_offer_popup := node.name == "OfferPopup"
+		if is_offer_popup and not bool(node.get("popup_window")):
+			return false
+		if not is_offer_popup and bool(node.get("popup_window")):
+			return false
 	for child in node.get_children():
-		if not _all_popup_panels_are_persistent(child):
+		if not _popup_panels_have_expected_dismissal(child):
 			return false
 	return true
 
