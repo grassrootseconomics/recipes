@@ -16,11 +16,14 @@ func _initialize() -> void:
 	_regression_public_recipe_summary(store)
 	_regression_own_redeem_returns_card_for_swap(store)
 	_regression_redeem_all_and_pass_turn(store)
+	_regression_redeem_pass_auto_prepares(store)
 	_regression_bot_batches_redeem_and_pass(store)
 	_regression_bot_swaps_surplus_before_redeem(store)
 	_regression_goal_complete_bot_accepts_offer(store)
 	_regression_stock_depleted_cards_not_usable(store)
 	_regression_lifecycle(store)
+	_regression_settlement_requires_returned_promise_cards(store)
+	_regression_bot_settlement_avoids_food_part_cycle(store)
 	_regression_round_robin_pass_turn_history(store)
 	_regression_bot_budget_returns_to_human(store)
 	await _regression_bot_run_is_deferred_after_pass(store)
@@ -144,6 +147,82 @@ func _regression_lifecycle(store: Node) -> void:
 	_assert_settlement_and_eating(store, maker_id, dish_id)
 
 
+func _regression_settlement_requires_returned_promise_cards(store: Node) -> void:
+	_setup_round_robin_table(store)
+	for participant_id in _active_ids(store.latest_snapshot):
+		_complete_recipe(store, participant_id)
+		_require(store.handle_intent({"type": "prepare"}, participant_id), "prepare settlement card-return dish: %s" % _last_error)
+	var holder_id := "p1"
+	var owner_id := "p2"
+	_force_all_accounts_cleared(store)
+	var owner_card := _first_hand_voucher_by_owner(store, owner_id, owner_id)
+	_require(not owner_card.is_empty(), "owner has own card before foreign-card settlement setup")
+	store.table["vouchers"][str(owner_card.get("id", ""))]["location"] = {"type": "hand", "participantId": holder_id}
+	store._enter_settlement_phase()
+	store._emit_snapshot()
+	_require(str(store.table.get("phase", "")) == "settlement", "foreign card in hand blocks eating")
+	var holder_public := _public_participant(store.latest_snapshot, holder_id)
+	var owner_public := _public_participant(store.latest_snapshot, owner_id)
+	_require(int(holder_public.get("foreignCardsInHand", 0)) == 1 and not bool(holder_public.get("cleared", true)), "holder is not settled while holding another cook's card")
+	_require(int(owner_public.get("ownCardsInOtherHands", 0)) == 1 and not bool(owner_public.get("cleared", true)), "owner is not settled while their card is held elsewhere")
+
+	var owner_part: Dictionary = _inventory_dish_parts(store, owner_id)[0]
+	var owner_platter := _first_platter_voucher_by_owner(store, owner_id)
+	_require(not owner_platter.is_empty(), "owner has a deposited card to pull from platter")
+	store.table["currentTurnParticipantId"] = owner_id
+	_require(
+		store.handle_intent({"type": "platter_asset_swap", "give": {"kind": "dish_part", "id": owner_part.get("id", "")}, "take": {"kind": "voucher", "id": owner_platter.get("id", "")}}, owner_id),
+		"owner creates food-piece liquidity: %s" % _last_error
+	)
+	_require(str(store.table.get("phase", "")) == "settlement", "owner shortfall still blocks eating")
+	store.table["currentTurnParticipantId"] = holder_id
+	_require(
+		store.handle_intent({"type": "platter_asset_swap", "give": {"kind": "voucher", "id": owner_card.get("id", "")}, "take": {"kind": "dish_part", "id": owner_part.get("id", "")}}, holder_id),
+		"holder returns foreign promise card for food piece: %s" % _last_error
+	)
+	holder_public = _public_participant(store.latest_snapshot, holder_id)
+	owner_public = _public_participant(store.latest_snapshot, owner_id)
+	_require(bool(holder_public.get("cleared", false)) and int(holder_public.get("foreignCardsInHand", 0)) == 0, "holder settles after returning foreign card")
+	_require(bool(owner_public.get("cleared", false)) and int(owner_public.get("ownCardsInOtherHands", 0)) == 0, "owner settles after own card returns to basket")
+	_require(str(store.table.get("phase", "")) == "eating", "offline settlement enters eating only after cards are returned")
+
+
+func _regression_bot_settlement_avoids_food_part_cycle(store: Node) -> void:
+	_setup_round_robin_table(store)
+	var owner_id := "p2"
+	var holder_id := "p3"
+	store.table["participants"][holder_id]["kind"] = "bot"
+	store.table["participants"][holder_id]["botType"] = "mixed"
+	_complete_recipe(store, owner_id)
+	_require(store.handle_intent({"type": "prepare"}, owner_id), "prepare owner dish for settlement cycle test: %s" % _last_error)
+	_complete_recipe(store, holder_id)
+	_require(store.handle_intent({"type": "prepare"}, holder_id), "prepare holder dish for settlement cycle test: %s" % _last_error)
+	_force_all_accounts_cleared(store)
+
+	var owner_card := _first_platter_voucher_by_owner(store, owner_id)
+	_require(not owner_card.is_empty(), "owner has platter card before cycle setup")
+	store.table["vouchers"][str(owner_card.get("id", ""))]["location"] = {"type": "hand", "participantId": holder_id}
+	var holder_part: Dictionary = _inventory_dish_parts(store, holder_id)[0]
+	store.table["dishParts"][str(holder_part.get("id", ""))]["location"] = {"type": "platter"}
+	store.table["phase"] = "settlement"
+	store.table["currentTurnParticipantId"] = holder_id
+	store.view_as(holder_id)
+
+	var decision: Dictionary = store._decide_bot_settlement(holder_id, store.latest_snapshot)
+	_require(str(decision.get("type", "")) == "pass_turn", "bot does not trade a foreign card for an unrelated food part")
+
+	var owner_part: Dictionary = _inventory_dish_parts(store, owner_id)[0]
+	store.table["dishParts"][str(owner_part.get("id", ""))]["location"] = {"type": "platter"}
+	store.view_as(holder_id)
+	decision = store._decide_bot_settlement(holder_id, store.latest_snapshot)
+	_require(str(decision.get("type", "")) == "platter_asset_swap", "bot returns foreign card when matching owner food part is available")
+	_require(str(decision.get("give", {}).get("id", "")) == str(owner_card.get("id", "")), "bot gives the foreign card back through the platter")
+	_require(str(decision.get("take", {}).get("id", "")) == str(owner_part.get("id", "")), "bot takes the matching owner-made food part")
+	_require(store.handle_intent(decision, holder_id, false), "apply bot settlement swap without continuing bot run: %s" % _last_error)
+	decision = store._decide_bot_settlement(holder_id, store.latest_snapshot)
+	_require(str(decision.get("type", "")) == "pass_turn", "bot passes after one settlement swap instead of looping in the same turn")
+
+
 func _regression_redeem_all_and_pass_turn(store: Node) -> void:
 	_require(not store.create_table("Amina", "offline-redeem-all-pass").is_empty(), "create redeem-all table")
 	for _index in range(7):
@@ -168,6 +247,32 @@ func _regression_redeem_all_and_pass_turn(store: Node) -> void:
 	var history: Array = store.table.get("transactionHistory", [])
 	var last: Dictionary = history[history.size() - 1]
 	_require(str(last.get("action", "")) == "Pass Turn", "redeem-all records final pass turn")
+
+
+func _regression_redeem_pass_auto_prepares(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-redeem-pass-auto-prepare").is_empty(), "create redeem-pass auto-prepare table")
+	_require(store.handle_host_intent({"type": "start"}), "start redeem-pass auto-prepare table: %s" % _last_error)
+	var participant_id := "p1"
+	var ingredient_id := _participant_ingredient_id(store, participant_id)
+	var recipe: Dictionary = store.table.get("recipes", {}).get(participant_id, {})
+	var final_requirement := _requirement_for_ingredient(store, participant_id, ingredient_id)
+	_require(not recipe.is_empty() and not final_requirement.is_empty(), "auto-prepare recipe includes participant ingredient")
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		requirement["placedVoucherIds"] = []
+		requirement["redeemedQty"] = int(requirement.get("requiredQty", 0)) - 1 if str(requirement.get("id", "")) == str(final_requirement.get("id", "")) else int(requirement.get("requiredQty", 0))
+	var before_recipe_id := str(recipe.get("id", ""))
+	var before_history_size: int = store.table.get("transactionHistory", []).size()
+	_require(store.handle_intent({"type": "redeem_all_and_pass_turn"}, participant_id, false), "redeem-pass auto-prepares: %s" % _last_error)
+	_require(int(store.table.get("participants", {}).get(participant_id, {}).get("dishCount", 0)) == 1, "redeem-pass increments dish count")
+	_require(_inventory_dish_parts(store, participant_id).size() == 10, "redeem-pass creates prepared dish parts")
+	_require(str(store.table.get("recipes", {}).get(participant_id, {}).get("id", "")) != before_recipe_id, "redeem-pass assigns next recipe")
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "p2", "redeem-pass advances only after auto-prepare")
+	var actions: Array = []
+	var history: Array = store.table.get("transactionHistory", [])
+	for index in range(before_history_size, history.size()):
+		actions.append(str(history[index].get("action", "")))
+	_require(JSON.stringify(actions) == JSON.stringify(["Redeem", "Prepare", "Pass Turn"]), "redeem-pass records redeem, prepare, pass in order")
 
 
 func _regression_bot_batches_redeem_and_pass(store: Node) -> void:
@@ -619,6 +724,14 @@ func _first_platter_voucher_not_ingredient(store: Node, ingredient_id: String) -
 	for raw_voucher in store.table.get("vouchers", {}).values():
 		var voucher: Dictionary = raw_voucher
 		if str(voucher.get("location", {}).get("type", "")) == "platter" and str(voucher.get("ingredientId", "")) != ingredient_id:
+			return voucher
+	return {}
+
+
+func _first_platter_voucher_by_owner(store: Node, owner_id: String) -> Dictionary:
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		if str(voucher.get("location", {}).get("type", "")) == "platter" and str(voucher.get("ownerParticipantId", "")) == owner_id:
 			return voucher
 	return {}
 

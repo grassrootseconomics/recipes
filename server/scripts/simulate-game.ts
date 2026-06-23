@@ -12,6 +12,7 @@ import {
   platterVoucherIds
 } from "../src/game.js";
 import { TableStore } from "../src/store.js";
+import { transactionsToCsv } from "../src/transactions.js";
 import type { Intent, Snapshot, SnapshotDelta, Table, TablePhase, TurnMode } from "../src/types.js";
 
 type NetworkProfile = "local" | "jitter" | "disconnect" | "bad";
@@ -41,6 +42,8 @@ interface SimulationOptions {
   gameCount: number;
   concurrency: number;
   dishGoal: number;
+  joinedHumanClients: number;
+  hostControlledSeats: number;
   maxIntents: number;
   maxDurationMs: number;
   suiteMaxDurationMs: number;
@@ -78,6 +81,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
   const startedAt = Date.now();
   const rng = seededRng(simulationOptions.seed);
   const clients: SimClient[] = [];
+  const controllerByParticipantId = new Map<string, SimClient>();
   let totalIntents = 0;
   let lastStage = "starting";
   let table: Table | undefined;
@@ -85,12 +89,18 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
   try {
     const host = await SimClient.createHost(baseUrl, "Host", simulationOptions.seed);
     clients.push(host);
-    for (let index = 2; index <= simulationOptions.playerCount; index += 1) {
+    for (let index = 2; index <= simulationOptions.joinedHumanClients + 1; index += 1) {
       clients.push(await SimClient.join(baseUrl, host.tableCode, `Player ${index}`));
     }
 
     table = store.requireTable(host.tableCode);
     await Promise.all(clients.map((client) => client.connect()));
+    rebuildControllers();
+
+    for (let index = 1; index <= simulationOptions.hostControlledSeats; index += 1) {
+      await sendIntentDirect(host, { type: "add_controlled_seat", name: `Host Seat ${index}` });
+    }
+    rebuildControllers();
 
     if (simulationOptions.dishGoal !== table.targetDishCount) {
       await sendIntent(host, { type: "set_target_dish_count", count: simulationOptions.dishGoal });
@@ -98,16 +108,35 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
     await sendIntent(host, { type: "start" });
 
     while (table.phase === "playing") {
+      let acted = false;
       for (const participant of activeParticipants(table)) {
         if (table.phase !== "playing") {
           break;
         }
-        await completeOneRecipe(table, clients, participant.id);
+        if (!controllerByParticipantId.has(participant.id)) {
+          continue;
+        }
+        const beforeVersion = table.version;
+        await respondToIncomingOffer(participant.id);
+        await completeOneRecipe(table, participant.id);
+        acted = acted || table.version !== beforeVersion;
+        if (table.phase === "playing" && !table.recipes[participant.id] && table.currentTurnParticipantId === participant.id) {
+          await sendIntentForParticipant(participant.id, { type: "pass_turn" });
+          acted = true;
+        }
+      }
+      if (!acted && table.phase === "playing") {
+        const currentTurnParticipantId = table.currentTurnParticipantId;
+        if (currentTurnParticipantId && controllerByParticipantId.has(currentTurnParticipantId)) {
+          await sendIntentForParticipant(currentTurnParticipantId, { type: "pass_turn" });
+          continue;
+        }
+        throw new Error(`No controllable playing action found; current turn is ${currentTurnParticipantId ?? "unset"}.`);
       }
     }
 
-    await settleTable(table, clients);
-    await eatAllFoodParts(table, clients);
+    await settleTable(table);
+    await eatAllFoodParts(table);
 
     return buildReport();
   } catch (error) {
@@ -126,6 +155,9 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
       tableCode: table?.code ?? clients[0]?.tableCode ?? "unknown",
       profile: simulationOptions.profile,
       playerCount: simulationOptions.playerCount,
+      joinedHumanClients: simulationOptions.joinedHumanClients,
+      hostControlledSeats: simulationOptions.hostControlledSeats,
+      botSeats: Math.max(0, simulationOptions.playerCount - 1 - simulationOptions.joinedHumanClients - simulationOptions.hostControlledSeats),
       dishGoal: simulationOptions.dishGoal,
       turnMode: simulationOptions.turnMode,
       phase: table?.phase ?? "unknown",
@@ -139,6 +171,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
       p95FrameBytes: percentile(frameSizes, 95),
       maxDeltaFrameBytes: Math.max(0, ...metrics.flatMap((metric) => metric.deltaFrameSizes)),
       p95DeltaFrameBytes: percentile(metrics.flatMap((metric) => metric.deltaFrameSizes), 95),
+      tableSummary: table ? summarizeTable(table) : undefined,
       clients: metrics
     };
   }
@@ -150,8 +183,20 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
     await sendIntentDirect(client, intent, allowFailure);
   }
 
-  async function sendIntentDirect(client: SimClient, intent: Intent, allowFailure = false): Promise<void> {
-    lastStage = `${client.name} ${intent.type}`;
+  async function sendIntentForParticipant(participantId: string, intent: Intent, allowFailure = false): Promise<void> {
+    const client = controllerByParticipantId.get(participantId);
+    if (!client) {
+      throw new Error(`No controllable client for participant ${participantId}.`);
+    }
+    const actorParticipantId = client.participantId === participantId ? undefined : participantId;
+    if (shouldAutoAdvanceTurn(intent)) {
+      await advanceToParticipantTurn(participantId);
+    }
+    await sendIntentDirect(client, intent, allowFailure, actorParticipantId);
+  }
+
+  async function sendIntentDirect(client: SimClient, intent: Intent, allowFailure = false, actorParticipantId?: string): Promise<void> {
+    lastStage = `${actorParticipantId ?? client.name} ${intent.type}`;
     checkDeadline(lastStage);
     totalIntents += 1;
     if (totalIntents > simulationOptions.maxIntents) {
@@ -163,7 +208,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
       await client.send({ type: "platter_swap_ingredient", giveIngredientId: "missing", takeIngredientId: "missing" }, true);
     }
     const beforeTableVersion = currentTable().version;
-    const result = await client.send(intent, allowFailure);
+    const result = await client.send(intent, allowFailure, actorParticipantId);
     if (result === "ok") {
       return;
     }
@@ -175,7 +220,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
     if (versionAfterTimeout > beforeTableVersion) {
       return;
     }
-    const retryResult = await client.send(intent, false);
+    const retryResult = await client.send(intent, false, actorParticipantId);
     if (retryResult !== "ok") {
       throw new Error(`Intent failed for ${client.name}: ${JSON.stringify(intent)} (${retryResult}; ${client.lastAckError})`);
     }
@@ -193,8 +238,37 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
         throw new Error(`Could not advance round-robin turn to ${participantId}.`);
       }
       const currentParticipantId = currentTable().currentTurnParticipantId;
-      const currentClient = clientFor(clients, currentParticipantId);
-      await sendIntentDirect(currentClient, { type: "pass_turn" });
+      const currentClient = controllerByParticipantId.get(currentParticipantId);
+      if (!currentClient) {
+        await delay(25);
+        if (currentTable().currentTurnParticipantId === currentParticipantId) {
+          throw new Error(`Current turn is uncontrolled participant ${currentParticipantId}.`);
+        }
+        continue;
+      }
+      await sendIntentDirect(
+        currentClient,
+        { type: "pass_turn" },
+        false,
+        currentClient.participantId === currentParticipantId ? undefined : currentParticipantId
+      );
+    }
+  }
+
+  function rebuildControllers(): void {
+    controllerByParticipantId.clear();
+    for (const client of clients) {
+      controllerByParticipantId.set(client.participantId, client);
+    }
+    const table = currentTable();
+    for (const participant of activeParticipants(table)) {
+      if (!participant.controllerParticipantId) {
+        continue;
+      }
+      const controller = clients.find((candidate) => candidate.participantId === participant.controllerParticipantId);
+      if (controller) {
+        controllerByParticipantId.set(participant.id, controller);
+      }
     }
   }
 
@@ -211,7 +285,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
     }
   }
 
-  async function completeOneRecipe(table: Table, clients: SimClient[], participantId: string): Promise<void> {
+  async function completeOneRecipe(table: Table, participantId: string): Promise<void> {
     while (true) {
       const recipe = table.recipes[participantId];
       if (!recipe) {
@@ -221,7 +295,10 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
       if (!requirement) {
         break;
       }
-      await ensureIngredientInHand(table, clients, participantId, requirement.ingredientId);
+      const hasIngredient = await ensureIngredientInHand(table, participantId, requirement.ingredientId);
+      if (!hasIngredient) {
+        return;
+      }
       const refreshedRecipe = table.recipes[participantId];
       const refreshedRequirement = refreshedRecipe?.requirements.find((candidate) => candidate.id === requirement.id);
       if (!refreshedRequirement || refreshedRequirement.redeemedQty >= refreshedRequirement.requiredQty) {
@@ -229,130 +306,253 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
       }
       const voucherId = handVoucherIds(table, participantId).find((id) => table.vouchers[id].ingredientId === refreshedRequirement.ingredientId);
       if (!voucherId) {
-        throw new Error(`Could not move ${refreshedRequirement.ingredientId} to ${participantId}.`);
+        return;
       }
-      await sendIntent(clientFor(clients, participantId), {
+      await sendIntentForParticipant(participantId, {
         type: "redeem_from_hand",
         voucherId,
         requirementId: refreshedRequirement.id
       });
     }
-    await sendIntent(clientFor(clients, participantId), { type: "prepare" });
+    await sendIntentForParticipant(participantId, { type: "prepare" });
   }
 
-  async function ensureIngredientInHand(table: Table, clients: SimClient[], participantId: string, ingredientId: string): Promise<void> {
+  async function respondToIncomingOffer(participantId: string): Promise<boolean> {
+    const pendingOffer = Object.values(currentTable().offers).find(
+      (offer) => offer.status === "pending" && offer.toParticipantId === participantId
+    );
+    if (!pendingOffer) {
+      return false;
+    }
+    const matchingVoucherIds = handVoucherIds(currentTable(), participantId)
+      .filter((voucherId) => currentTable().vouchers[voucherId].ingredientId === pendingOffer.requested.ingredientId)
+      .slice(0, pendingOffer.requested.quantity);
+    await sendIntentForParticipant(participantId, {
+      type: "respond_offer",
+      offerId: pendingOffer.id,
+      response: matchingVoucherIds.length === pendingOffer.requested.quantity ? "accept" : "refuse",
+      voucherIds: matchingVoucherIds
+    });
+    return true;
+  }
+
+  async function ensureIngredientInHand(table: Table, participantId: string, ingredientId: string): Promise<boolean> {
     if (handVoucherIds(table, participantId).some((id) => table.vouchers[id].ingredientId === ingredientId)) {
-      return;
+      return true;
     }
     if (!platterVoucherIds(table).some((id) => table.vouchers[id].ingredientId === ingredientId)) {
       const holderId = participantHoldingIngredient(table, ingredientId);
       if (!holderId) {
-        throw new Error(`No holder found for ingredient ${ingredientId}.`);
+        await maybePassCurrentParticipant(participantId);
+        return false;
+      }
+      if (!controllerByParticipantId.has(holderId)) {
+        await requestIngredientFromHolder(participantId, holderId, ingredientId);
+        return false;
+      }
+      await advanceToParticipantTurn(holderId);
+      if (!handVoucherIds(table, holderId).some((id) => table.vouchers[id].ingredientId === ingredientId)) {
+        return false;
       }
       const takeIngredientId = firstPlatterIngredient(table, ingredientId);
-      await sendIntent(clientFor(clients, holderId), {
+      await sendIntentForParticipant(holderId, {
         type: "platter_swap_ingredient",
         giveIngredientId: ingredientId,
         takeIngredientId
       });
     }
+    if (!platterVoucherIds(table).some((id) => table.vouchers[id].ingredientId === ingredientId)) {
+      return false;
+    }
+    await advanceToParticipantTurn(participantId);
+    if (!platterVoucherIds(table).some((id) => table.vouchers[id].ingredientId === ingredientId)) {
+      return false;
+    }
     const handIngredientId = firstHandIngredient(table, participantId);
     if (handIngredientId) {
-      await sendIntent(clientFor(clients, participantId), {
+      await sendIntentForParticipant(participantId, {
         type: "platter_swap_ingredient",
         giveIngredientId: handIngredientId,
         takeIngredientId: ingredientId
       });
-      return;
+      return handVoucherIds(table, participantId).some((id) => table.vouchers[id].ingredientId === ingredientId);
     }
     const givePartId = inventoryDishPartIds(table, participantId)[0];
     const takeVoucherId = platterVoucherIds(table).find((id) => table.vouchers[id].ingredientId === ingredientId);
     if (!givePartId || !takeVoucherId) {
-      throw new Error(`Participant ${participantId} has no voucher or food part to trade for ${ingredientId}.`);
+      await maybePassCurrentParticipant(participantId);
+      return false;
     }
-    await sendIntent(clientFor(clients, participantId), {
+    await sendIntentForParticipant(participantId, {
       type: "platter_asset_swap",
       give: { kind: "dish_part", id: givePartId },
       take: { kind: "voucher", id: takeVoucherId }
     });
+    return handVoucherIds(table, participantId).some((id) => table.vouchers[id].ingredientId === ingredientId);
   }
 
-  async function settleTable(table: Table, clients: SimClient[]): Promise<void> {
+  async function requestIngredientFromHolder(participantId: string, holderId: string, ingredientId: string): Promise<void> {
+    const existingPending = Object.values(table?.offers ?? {}).some(
+      (offer) => offer.status === "pending" && offer.fromParticipantId === participantId && offer.toParticipantId === holderId
+    );
+    if (!existingPending) {
+      const offeredVoucherId = handVoucherIds(currentTable(), participantId).find((id) => {
+        const voucher = currentTable().vouchers[id];
+        return voucher.ingredientId !== ingredientId;
+      });
+      if (offeredVoucherId) {
+        await sendIntentForParticipant(
+          participantId,
+          {
+            type: "create_offer",
+            toParticipantId: holderId,
+            offeredVoucherIds: [offeredVoucherId],
+            requested: { ingredientId, quantity: 1 }
+          },
+          true
+        );
+      }
+    }
+    await maybePassCurrentParticipant(participantId);
+  }
+
+  async function maybePassCurrentParticipant(participantId: string): Promise<void> {
+    if (currentTable().currentTurnParticipantId === participantId) {
+      await sendIntentForParticipant(participantId, { type: "pass_turn" }, true);
+    }
+  }
+
+  async function settleTable(table: Table): Promise<void> {
     let loops = 0;
     while (table.phase === "settlement") {
       loops += 1;
       if (loops > simulationOptions.maxIntents) {
         throw new Error("Settlement did not converge.");
       }
-      const debtor = activeParticipants(table).find((participant) => platterAccountForParticipant(table, participant.id).platterDebt > 0);
+      const controllableParticipants = activeParticipants(table).filter((participant) => controllerByParticipantId.has(participant.id));
+      const debtor = controllableParticipants.find((participant) => platterAccountForParticipant(table, participant.id).platterDebt > 0);
       if (debtor) {
         const ownPlatterVoucherId = platterVoucherIds(table).find((id) => table.vouchers[id].ownerParticipantId === debtor.id);
         const givePartId = inventoryDishPartIds(table, debtor.id)[0];
         if (ownPlatterVoucherId && givePartId) {
-          await sendIntent(clientFor(clients, debtor.id), {
+          await sendIntentForParticipant(debtor.id, {
             type: "platter_asset_swap",
             give: { kind: "dish_part", id: givePartId },
             take: { kind: "voucher", id: ownPlatterVoucherId }
-          });
-          continue;
-        }
-      }
-
-      const shortfall = activeParticipants(table).find((participant) => platterAccountForParticipant(table, participant.id).platterShortfall > 0);
-      if (shortfall) {
-        const ownHandVoucherId = handVoucherIds(table, shortfall.id).find((id) => table.vouchers[id].ownerParticipantId === shortfall.id);
-        const takePartId = platterDishPartIds(table)[0];
-        const takeVoucherId = platterVoucherIds(table).find((id) => table.vouchers[id].ownerParticipantId !== shortfall.id);
-        if (ownHandVoucherId && takePartId) {
-          await sendIntent(clientFor(clients, shortfall.id), {
-            type: "platter_asset_swap",
-            give: { kind: "voucher", id: ownHandVoucherId },
-            take: { kind: "dish_part", id: takePartId }
-          });
-          continue;
-        }
-        if (ownHandVoucherId && takeVoucherId) {
-          await sendIntent(clientFor(clients, shortfall.id), {
-            type: "platter_asset_swap",
-            give: { kind: "voucher", id: ownHandVoucherId },
-            take: { kind: "voucher", id: takeVoucherId }
-          });
+          }, true);
           continue;
         }
       }
 
       const platterPartId = platterDishPartIds(table)[0];
       if (platterPartId) {
-        const clearer = activeParticipants(table).find((participant) =>
-          handVoucherIds(table, participant.id).some((id) => table.vouchers[id].ownerParticipantId !== participant.id)
-        );
-        if (clearer) {
-          const giveVoucherId = handVoucherIds(table, clearer.id).find((id) => table.vouchers[id].ownerParticipantId !== clearer.id) as string;
-          await sendIntent(clientFor(clients, clearer.id), {
+        const returnMove = controllableParticipants
+          .flatMap((participant) =>
+            handVoucherIds(table, participant.id)
+              .filter((id) => table.vouchers[id].ownerParticipantId !== participant.id)
+              .map((voucherId) => ({ participant, voucherId, ownerId: table.vouchers[voucherId].ownerParticipantId }))
+          )
+          .map((candidate) => ({
+            ...candidate,
+            matchingPartId: platterDishPartIds(table).find((partId) => table.dishParts[partId].makerParticipantId === candidate.ownerId),
+            ownerAccount: platterAccountForParticipant(table, candidate.ownerId)
+          }))
+          .find((candidate) => candidate.matchingPartId && candidate.ownerAccount.platterShortfall > 0);
+        if (returnMove?.matchingPartId) {
+          await sendIntentForParticipant(returnMove.participant.id, {
             type: "platter_asset_swap",
-            give: { kind: "voucher", id: giveVoucherId },
-            take: { kind: "dish_part", id: platterPartId }
-          });
+            give: { kind: "voucher", id: returnMove.voucherId },
+            take: { kind: "dish_part", id: returnMove.matchingPartId }
+          }, true);
           continue;
         }
+      }
+
+      const seeder = controllableParticipants.find((participant) => {
+        const account = platterAccountForParticipant(table, participant.id);
+        const ownPostedPart = platterDishPartIds(table).some((partId) => table.dishParts[partId].makerParticipantId === participant.id);
+        const ownHeldPart = inventoryDishPartIds(table, participant.id).some((partId) => table.dishParts[partId].makerParticipantId === participant.id);
+        return account.ownCardsInOtherHands > 0 && !ownPostedPart && ownHeldPart;
+      });
+      if (seeder) {
+        const seedPartId = inventoryDishPartIds(table, seeder.id).find((partId) => table.dishParts[partId].makerParticipantId === seeder.id) as string;
+        const takeVoucherId =
+          platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId === seeder.id) ??
+          platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId !== seeder.id) ??
+          platterVoucherIds(table)[0];
+        if (takeVoucherId) {
+          await sendIntentForParticipant(seeder.id, {
+            type: "platter_asset_swap",
+            give: { kind: "dish_part", id: seedPartId },
+            take: { kind: "voucher", id: takeVoucherId }
+          }, true);
+          continue;
+        }
+      }
+
+      const shortfall = controllableParticipants.find((participant) => platterAccountForParticipant(table, participant.id).platterShortfall > 0);
+      if (shortfall) {
+        const shortfallAccount = platterAccountForParticipant(table, shortfall.id);
+        if (shortfallAccount.ownCardsInOtherHands > 0) {
+          await sendIntentForParticipant(shortfall.id, { type: "pass_turn" }, true);
+          continue;
+        }
+        const ownHandVoucherId = handVoucherIds(table, shortfall.id).find((id) => table.vouchers[id].ownerParticipantId === shortfall.id);
+        const takePartId = platterDishPartIds(table)[0];
+        const takeVoucherId = platterVoucherIds(table).find((id) => table.vouchers[id].ownerParticipantId !== shortfall.id);
+        if (ownHandVoucherId && takePartId) {
+          await sendIntentForParticipant(shortfall.id, {
+            type: "platter_asset_swap",
+            give: { kind: "voucher", id: ownHandVoucherId },
+            take: { kind: "dish_part", id: takePartId }
+          }, true);
+          continue;
+        }
+        if (ownHandVoucherId && takeVoucherId) {
+          await sendIntentForParticipant(shortfall.id, {
+            type: "platter_asset_swap",
+            give: { kind: "voucher", id: ownHandVoucherId },
+            take: { kind: "voucher", id: takeVoucherId }
+          }, true);
+          continue;
+        }
+      }
+
+      const currentTurnParticipantId = table.currentTurnParticipantId;
+      if (currentTurnParticipantId && controllerByParticipantId.has(currentTurnParticipantId)) {
+        await sendIntentForParticipant(currentTurnParticipantId, { type: "pass_turn" });
+        continue;
       }
 
       throw new Error("No legal settlement move found.");
     }
   }
 
-  async function eatAllFoodParts(table: Table, clients: SimClient[]): Promise<void> {
+  async function eatAllFoodParts(table: Table): Promise<void> {
     let loops = 0;
     while (table.phase === "eating") {
       loops += 1;
       if (loops > simulationOptions.maxIntents) {
         throw new Error("Eating did not converge.");
       }
-      const part = Object.values(table.dishParts).find((candidate) => candidate.location.type === "inventory" && candidate.location.participantId);
-      if (!part?.location.participantId) {
-        throw new Error("No held food part found while table is eating.");
+      const part = Object.values(table.dishParts).find(
+        (candidate) =>
+          candidate.location.type === "inventory" &&
+          candidate.location.participantId &&
+          controllerByParticipantId.has(candidate.location.participantId)
+      );
+      if (part?.location.participantId) {
+        await sendIntentForParticipant(part.location.participantId, { type: "bite", dishId: part.dishId });
+        continue;
       }
-      await sendIntent(clientFor(clients, part.location.participantId), { type: "bite", dishId: part.dishId });
+
+      const currentTurnParticipantId = table.currentTurnParticipantId;
+      if (currentTurnParticipantId && controllerByParticipantId.has(currentTurnParticipantId)) {
+        await sendIntentForParticipant(currentTurnParticipantId, { type: "pass_turn" });
+        continue;
+      }
+
+      throw new Error("No controllable held food part found while table is eating.");
     }
   }
 }
@@ -583,12 +783,12 @@ class SimClient {
     await this.connect();
   }
 
-  async send(intent: Intent, allowFailure = false): Promise<SendResult> {
+  async send(intent: Intent, allowFailure = false, actorParticipantId?: string): Promise<SendResult> {
     await this.connect();
     const clientIntentId = `${this.participantId}:${this.nextIntentId}`;
     this.nextIntentId += 1;
     const ackPromise = this.waitForAck(clientIntentId, 4000);
-    this.ws?.send(JSON.stringify({ type: "intent", clientIntentId, intent }));
+    this.ws?.send(JSON.stringify({ type: "intent", clientIntentId, actorParticipantId, intent }));
     const ack = await ackPromise;
     if (!ack) {
       this.intentTimeouts += 1;
@@ -768,6 +968,56 @@ function firstPlatterIngredient(table: Table, avoidIngredientId: string): string
   return table.vouchers[fallback].ingredientId;
 }
 
+function summarizeTable(table: Table): Record<string, unknown> {
+  return {
+    code: table.code,
+    phase: table.phase,
+    currentTurnParticipantId: table.currentTurnParticipantId,
+    currentTurnParticipantName: table.currentTurnParticipantId ? table.participants[table.currentTurnParticipantId]?.name : undefined,
+    participantOrder: table.participantOrder.map((id) => ({
+      id,
+      name: table.participants[id]?.name,
+      kind: table.participants[id]?.kind,
+      controllerParticipantId: table.participants[id]?.controllerParticipantId,
+      ingredientId: table.participants[id]?.ingredientId,
+      dishCount: table.participants[id]?.dishCount,
+      realIngredientStock: table.participants[id]?.realIngredientStock,
+      account: table.participants[id] ? platterAccountForParticipant(table, id) : undefined,
+      hand: aggregateHand(table, id),
+      recipe: table.recipes[id]
+        ? {
+            dishName: table.recipes[id].dishName,
+            requirements: table.recipes[id].requirements.map((requirement) => ({
+              ingredientId: requirement.ingredientId,
+              requiredQty: requirement.requiredQty,
+              redeemedQty: requirement.redeemedQty,
+              placedQty: requirement.placedVoucherIds.length
+            }))
+          }
+        : undefined
+    })),
+    platter: aggregatePlatter(table)
+  };
+}
+
+function aggregateHand(table: Table, participantId: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const voucherId of handVoucherIds(table, participantId)) {
+    const ingredientId = table.vouchers[voucherId].ingredientId;
+    result[ingredientId] = (result[ingredientId] ?? 0) + 1;
+  }
+  return result;
+}
+
+function aggregatePlatter(table: Table): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const voucherId of platterVoucherIds(table)) {
+    const ingredientId = table.vouchers[voucherId].ingredientId;
+    result[ingredientId] = (result[ingredientId] ?? 0) + 1;
+  }
+  return result;
+}
+
 async function maybeDelay(profile: NetworkProfile, rng: () => number): Promise<void> {
   if (profile !== "jitter" && profile !== "bad") {
     return;
@@ -826,12 +1076,29 @@ function parseOptions(args: string[]): SimulationOptions {
     gameCount,
     concurrency: Math.min(gameCount, parsePositiveInt(getValue("concurrency", process.env.SIM_CONCURRENCY ?? "4"), "Simulation concurrency")),
     dishGoal: Number.parseInt(getValue("dish-goal", process.env.SIM_DISH_GOAL ?? "4"), 10),
+    joinedHumanClients: parseBoundedSeatCount(
+      getValue("joined-humans", process.env.SIM_JOINED_HUMANS ?? String(playerCount - 1)),
+      "Joined human clients"
+    ),
+    hostControlledSeats: parseBoundedSeatCount(
+      getValue("host-controlled-seats", process.env.SIM_HOST_CONTROLLED_SEATS ?? "0"),
+      "Host-controlled seats"
+    ),
     maxIntents: Number.parseInt(getValue("max-intents", process.env.SIM_MAX_INTENTS ?? "5000"), 10),
     maxDurationMs,
     suiteMaxDurationMs,
     seed: getValue("seed", process.env.SIM_SEED ?? "simulation"),
     turnMode
   };
+}
+
+function validateOptions(options: SimulationOptions): void {
+  const occupiedSeats = 1 + options.joinedHumanClients + options.hostControlledSeats;
+  if (occupiedSeats > options.playerCount) {
+    throw new Error(
+      `Host + joined humans + host-controlled seats (${occupiedSeats}) cannot exceed player count ${options.playerCount}.`
+    );
+  }
 }
 
 function parsePlayerCount(value: string): number {
@@ -846,6 +1113,14 @@ function parsePositiveInt(value: string, label: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseBoundedSeatCount(value: string, label: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 7) {
+    throw new Error(`${label} must be an integer from 0 to 7.`);
   }
   return parsed;
 }
@@ -891,6 +1166,7 @@ async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<b
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
+  validateOptions(options);
   const app = await buildApp({ store });
   await app.listen({ host: "127.0.0.1", port: 0 });
 
@@ -906,8 +1182,11 @@ async function main(): Promise<void> {
         playerCount: playerCountForGame(options, 0)
       });
       const reportPath = path.join(reportDir, `simulation-${report.tableCode.toLowerCase()}-${options.profile}.json`);
+      const csvPath = path.join(reportDir, `transactions-${report.tableCode.toLowerCase()}-${options.profile}.csv`);
       await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+      await writeFile(csvPath, transactionsToCsv(store.requireTable(report.tableCode).transactionHistory), "utf8");
       console.log(`${report.ok ? "Simulation complete" : "Simulation failed"}: ${reportPath}`);
+      console.log(`Transactions CSV: ${csvPath}`);
       console.log(JSON.stringify(singleSummary(report), null, 2));
       if (!report.ok) {
         process.exitCode = 1;

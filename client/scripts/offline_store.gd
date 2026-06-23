@@ -224,9 +224,16 @@ func _apply_intent(actor_id: String, intent: Dictionary) -> bool:
 		"platter_asset_swap_aggregate":
 			return _swap_platter_assets(actor, _aggregate_asset_to_ref(actor_id, intent.get("give", {}), "inventory"), _aggregate_asset_to_ref(actor_id, intent.get("take", {}), "platter"))
 		"create_offer":
-			return _create_offer(actor, str(intent.get("toParticipantId", "")), intent.get("offeredVoucherIds", []), intent.get("requested", {}))
+			return _create_offer(
+				actor,
+				str(intent.get("toParticipantId", "")),
+				intent.get("offeredVoucherIds", []),
+				intent.get("requested", {}),
+				intent.get("offeredAssets", []),
+				intent.get("requestedAsset", {})
+			)
 		"respond_offer":
-			return _respond_offer(actor, str(intent.get("offerId", "")), str(intent.get("response", "")), intent.get("voucherIds", []))
+			return _respond_offer(actor, str(intent.get("offerId", "")), str(intent.get("response", "")), intent.get("voucherIds", []), intent.get("assets", []))
 		"cancel_offer":
 			return _cancel_offer(actor, str(intent.get("offerId", "")))
 		"place_voucher":
@@ -552,7 +559,7 @@ func _swap_platter_assets(actor: Dictionary, give_ref: Dictionary, take_ref: Dic
 	return true
 
 
-func _create_offer(actor: Dictionary, to_id: String, offered_ids: Array, requested: Dictionary) -> bool:
+func _create_offer(actor: Dictionary, to_id: String, offered_ids: Array, requested: Dictionary, offered_assets := [], requested_asset := {}) -> bool:
 	if not _require_phase("playing") or not _require_active(actor) or not _bot_can_use_barter(actor):
 		return false
 	if to_id == str(actor.get("id", "")):
@@ -560,38 +567,45 @@ func _create_offer(actor: Dictionary, to_id: String, offered_ids: Array, request
 	var recipient := _participant_by_id(to_id)
 	if recipient.is_empty() or str(recipient.get("role", "")) != "active":
 		return _fail("Offer recipient is not active.")
-	var ingredient_id := str(requested.get("ingredientId", ""))
-	var quantity := int(requested.get("quantity", 1))
-	if ingredient_id != str(recipient.get("ingredientId", "")):
-		return _fail("Offers can only ask for the recipient's own ingredient.")
-	if _offerable_unreserved_qty(to_id, ingredient_id) < quantity:
-		return _fail("Recipient has no available vouchers for that ingredient.")
-	if offered_ids.is_empty():
-		return _fail("Offer must include a voucher.")
-	for raw_id in offered_ids:
-		var voucher := _voucher_by_id(str(raw_id))
-		if voucher.is_empty() or not _voucher_in_hand(voucher, str(actor.get("id", ""))):
-			return _fail("Offered voucher is not in hand.")
-		if not _require_voucher_backed_by_stock(voucher):
+	var normalized_offered_assets := _normalize_offer_assets(offered_ids, offered_assets)
+	if normalized_offered_assets.is_empty():
+		return _fail("Offer must include an asset.")
+	var normalized_requested_asset: Dictionary = requested_asset.duplicate(true) if requested_asset is Dictionary and not requested_asset.is_empty() else _legacy_requested_asset(recipient, requested)
+	if normalized_requested_asset.is_empty():
+		return false
+	if not _validate_offer_asset_request(to_id, normalized_requested_asset):
+		return false
+	if _offerable_unreserved_asset_qty(to_id, normalized_requested_asset) < int(normalized_requested_asset.get("quantity", 1)):
+		return _fail("Recipient does not have enough available assets for that offer.")
+	var resolved_offered_assets: Array = []
+	for raw_ref in normalized_offered_assets:
+		var asset := _resolve_asset(raw_ref)
+		if asset.is_empty() or not _asset_in_inventory(asset, str(actor.get("id", ""))):
+			return _fail("Offered asset is not held.")
+		if not _require_asset_backed_by_stock(asset):
 			return false
+		resolved_offered_assets.append(asset)
 	var offer_id := "offer_%s" % int(table.get("nextId", 2))
 	table["nextId"] = int(table.get("nextId", 2)) + 1
 	table["offers"][offer_id] = {
 		"id": offer_id,
 		"fromParticipantId": actor.get("id", ""),
 		"toParticipantId": to_id,
+		"offeredAssets": normalized_offered_assets.duplicate(true),
 		"offeredVoucherIds": offered_ids.duplicate(),
-		"requested": {"ingredientId": ingredient_id, "quantity": quantity},
+		"requested": requested.duplicate(true),
+		"requestedAsset": normalized_requested_asset.duplicate(true),
+		"acceptedAssets": [],
 		"acceptedVoucherIds": [],
 		"status": "pending",
 		"createdTurn": int(table.get("turn", 0))
 	}
-	for raw_id in offered_ids:
-		table["vouchers"][str(raw_id)]["location"] = {"type": "offer_lock", "offerId": offer_id}
+	for asset in resolved_offered_assets:
+		_move_asset_to_offer_lock(asset, offer_id)
 	return true
 
 
-func _respond_offer(actor: Dictionary, offer_id: String, response: String, voucher_ids: Array) -> bool:
+func _respond_offer(actor: Dictionary, offer_id: String, response: String, voucher_ids: Array, assets := []) -> bool:
 	if not _require_phase("playing") or not _require_active(actor) or not _bot_can_use_barter(actor):
 		return false
 	var offer := _offer_by_id(offer_id)
@@ -600,26 +614,35 @@ func _respond_offer(actor: Dictionary, offer_id: String, response: String, vouch
 	if str(offer.get("toParticipantId", "")) != str(actor.get("id", "")):
 		return _fail("Only the recipient can respond to this offer.")
 	if response == "refuse":
-		_release_offered_vouchers(offer)
+		_release_offered_assets(offer)
 		table["offers"].erase(offer_id)
 		return true
-	var requested: Dictionary = offer.get("requested", {})
-	if voucher_ids.size() != int(requested.get("quantity", 1)):
-		return _fail("Accepted voucher count does not match the request.")
-	for raw_id in voucher_ids:
-		var voucher := _voucher_by_id(str(raw_id))
-		if voucher.is_empty() or not _voucher_in_hand(voucher, str(actor.get("id", ""))):
-			return _fail("Accepted voucher is not in hand.")
-		if not _require_voucher_backed_by_stock(voucher):
+	var requested_asset: Dictionary = offer.get("requestedAsset", {})
+	if requested_asset.is_empty():
+		requested_asset = _legacy_requested_asset(actor, offer.get("requested", {}))
+	var accepted_asset_refs := _normalize_accepted_assets(voucher_ids, assets)
+	if accepted_asset_refs.size() != int(requested_asset.get("quantity", 1)):
+		return _fail("Accepted asset count does not match the request.")
+	var resolved_accepted_assets: Array = []
+	for raw_ref in accepted_asset_refs:
+		var asset := _resolve_asset(raw_ref)
+		if asset.is_empty() or not _asset_in_inventory(asset, str(actor.get("id", ""))):
+			return _fail("Accepted asset is not held.")
+		if not _require_asset_backed_by_stock(asset):
 			return false
-		if str(voucher.get("ingredientId", "")) != str(requested.get("ingredientId", "")):
-			return _fail("Accepted voucher ingredient does not match the request.")
-	for raw_id in offer.get("offeredVoucherIds", []):
-		table["vouchers"][str(raw_id)]["location"] = {"type": "hand", "participantId": actor.get("id", "")}
-	for raw_id in voucher_ids:
-		table["vouchers"][str(raw_id)]["location"] = {"type": "hand", "participantId": offer.get("fromParticipantId", "")}
+		if not _asset_matches_offer_request(asset, requested_asset):
+			return _fail("Accepted asset does not match the request.")
+		resolved_accepted_assets.append(asset)
+	offer["acceptedAssets"] = accepted_asset_refs.duplicate(true)
+	offer["acceptedVoucherIds"] = voucher_ids.duplicate()
+	for raw_ref in offer.get("offeredAssets", []):
+		var offered_asset := _resolve_asset(raw_ref)
+		if not offered_asset.is_empty():
+			_move_asset_to_inventory(offered_asset, str(actor.get("id", "")))
+	for accepted_asset in resolved_accepted_assets:
+		_move_asset_to_inventory(accepted_asset, str(offer.get("fromParticipantId", "")))
 	var creator := _participant_by_id(str(offer.get("fromParticipantId", "")))
-	_record_transaction(creator, "Exchange", str(actor.get("name", "")), _ingredient_list_label(offer.get("offeredVoucherIds", [])), _ingredient_list_label(voucher_ids), str(actor.get("id", "")))
+	_record_transaction(creator, "Exchange", str(actor.get("name", "")), _asset_list_label(offer.get("offeredAssets", [])), _asset_list_label(accepted_asset_refs), str(actor.get("id", "")))
 	table["offers"].erase(offer_id)
 	return true
 
@@ -632,7 +655,7 @@ func _cancel_offer(actor: Dictionary, offer_id: String) -> bool:
 		return _fail("Offer is not pending.")
 	if str(offer.get("fromParticipantId", "")) != str(actor.get("id", "")):
 		return _fail("Only the offer creator can cancel this offer.")
-	_release_offered_vouchers(offer)
+	_release_offered_assets(offer)
 	table["offers"].erase(offer_id)
 	return true
 
@@ -745,6 +768,8 @@ func _redeem_all_and_pass_turn(actor: Dictionary) -> bool:
 				return false
 			if not _redeem_voucher(actor, planned_voucher_id):
 				return false
+		if not _prepare_if_recipe_complete(actor):
+			return false
 	return _pass_turn(actor)
 
 
@@ -817,12 +842,26 @@ func _prepare(actor: Dictionary) -> bool:
 	return true
 
 
+func _prepare_if_recipe_complete(actor: Dictionary) -> bool:
+	if str(table.get("phase", "")) != "playing":
+		return true
+	var actor_id := str(actor.get("id", ""))
+	var recipe: Dictionary = table["recipes"].get(actor_id, {})
+	if recipe.is_empty():
+		return true
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		if int(requirement.get("redeemedQty", 0)) < int(requirement.get("requiredQty", 0)):
+			return true
+	return _prepare(actor)
+
+
 func _bite(actor: Dictionary, dish_id: String) -> bool:
 	if not _require_phase("eating") or not _require_active(actor):
 		return false
 	var account := _platter_account(str(actor.get("id", "")))
 	if not bool(account.get("cleared", false)):
-		return _fail("Clear your central platter account before eating.")
+		return _fail("Return all promise cards before eating.")
 	var dish: Dictionary = table["dishes"].get(dish_id, {})
 	if dish.is_empty():
 		return _fail("Dish not found.")
@@ -973,6 +1012,10 @@ func _public_participant(participant: Dictionary) -> Dictionary:
 		"realIngredientStock": int(participant.get("realIngredientStock", 0)),
 		"offerableOwnIngredientQty": _offerable_unreserved_qty(str(participant.get("id", "")), str(participant.get("ingredientId", ""))),
 		"ownCardsInPlatter": int(account.get("ownCardsInPlatter", 0)),
+		"ownCardsInHand": int(account.get("ownCardsInHand", 0)),
+		"foreignCardsInHand": int(account.get("foreignCardsInHand", 0)),
+		"ownCardsInOtherHands": int(account.get("ownCardsInOtherHands", 0)),
+		"expectedOwnCardsInHand": int(account.get("expectedOwnCardsInHand", 0)),
 		"platterDebt": int(account.get("platterDebt", 0)),
 		"platterShortfall": int(account.get("platterShortfall", 0)),
 		"cleared": bool(account.get("cleared", false)),
@@ -1175,7 +1218,7 @@ func _decide_bot_intent(bot_id: String) -> Dictionary:
 			if not accept_offer.is_empty():
 				return accept_offer
 			if _recipe_ready(recipe):
-				return {"type": "prepare"}
+				return {"type": "redeem_all_and_pass_turn"}
 			if str(bot.get("botType", "mixed")) != "pool_only":
 				var offer_intent := _decide_bot_create_offer(bot_id, snapshot)
 				if not offer_intent.is_empty():
@@ -1190,10 +1233,27 @@ func _decide_bot_accept_offer(bot_id: String, snapshot: Dictionary) -> Dictionar
 	for offer in snapshot.get("offers", []):
 		if str(offer.get("status", "")) != "pending" or str(offer.get("toParticipantId", "")) != bot_id:
 			continue
-		var requested: Dictionary = offer.get("requested", {})
-		var matches := _matching_hand_voucher_ids(bot_id, str(requested.get("ingredientId", "")), int(requested.get("quantity", 1)))
-		if matches.size() == int(requested.get("quantity", 1)):
-			return {"type": "respond_offer", "offerId": offer.get("id", ""), "response": "accept", "voucherIds": matches}
+		var requested: Dictionary = offer.get("requestedAsset", {})
+		if str(requested.get("kind", "")) == "voucher":
+			var matches := _matching_hand_voucher_ids(bot_id, str(requested.get("ingredientId", "")), int(requested.get("quantity", 1)))
+			if requested.has("ownerParticipantId"):
+				matches = matches.filter(func(voucher_id: String) -> bool:
+					return str(_voucher_by_id(voucher_id).get("ownerParticipantId", "")) == str(requested.get("ownerParticipantId", ""))
+				)
+			if matches.size() == int(requested.get("quantity", 1)):
+				return {"type": "respond_offer", "offerId": offer.get("id", ""), "response": "accept", "voucherIds": matches}
+		if str(requested.get("kind", "")) == "dish_part":
+			var part_refs: Array = []
+			for part in _inventory_dish_parts(bot_id):
+				if str(part.get("dishId", "")) != str(requested.get("dishId", "")):
+					continue
+				if requested.has("makerParticipantId") and str(part.get("makerParticipantId", "")) != str(requested.get("makerParticipantId", "")):
+					continue
+				part_refs.append({"kind": "dish_part", "id": part.get("id", "")})
+				if part_refs.size() >= int(requested.get("quantity", 1)):
+					break
+			if part_refs.size() == int(requested.get("quantity", 1)):
+				return {"type": "respond_offer", "offerId": offer.get("id", ""), "response": "accept", "assets": part_refs}
 	return {}
 
 
@@ -1215,12 +1275,29 @@ func _bot_has_redeemable_cards(bot_id: String, snapshot: Dictionary, recipe: Dic
 
 func _decide_bot_settlement(bot_id: String, snapshot: Dictionary) -> Dictionary:
 	var public_bot := _public_participant(_participant_by_id(bot_id))
+	if _last_transaction_is_bot_settlement_swap(bot_id):
+		return _round_robin_pass()
 	if int(public_bot.get("platterDebt", 0)) > 0:
 		var own_platter := _first_platter_voucher_by_owner(bot_id)
-		var give := _first_inventory_asset(bot_id, false)
+		var give := _settlement_give_asset(bot_id, snapshot, false)
 		if not own_platter.is_empty() and not give.is_empty():
 			return {"type": "platter_asset_swap", "give": give, "take": {"kind": "voucher", "id": own_platter.get("id", "")}}
+	if int(public_bot.get("foreignCardsInHand", 0)) > 0 and not _platter_dish_parts().is_empty():
+		var return_candidate := _foreign_card_return_candidate(bot_id, snapshot)
+		if not return_candidate.is_empty():
+			return {
+				"type": "platter_asset_swap",
+				"give": {"kind": "voucher", "id": return_candidate.get("voucherId", "")},
+				"take": {"kind": "dish_part", "id": return_candidate.get("partId", "")}
+			}
+	if int(public_bot.get("ownCardsInOtherHands", 0)) > 0 and not _platter_has_food_part_by_maker(bot_id):
+		var take_asset := _settlement_seed_take_asset(bot_id)
+		var own_food_parts := _inventory_dish_parts(bot_id)
+		if not take_asset.is_empty() and not own_food_parts.is_empty():
+			return {"type": "platter_asset_swap", "give": {"kind": "dish_part", "id": own_food_parts[0].get("id", "")}, "take": take_asset}
 	if int(public_bot.get("platterShortfall", 0)) > 0:
+		if int(public_bot.get("ownCardsInOtherHands", 0)) > 0 and not _platter_dish_parts().is_empty():
+			return _round_robin_pass()
 		var own_hand := _first_hand_voucher_by_owner(bot_id, bot_id)
 		var take := _first_platter_asset_not_owner(bot_id)
 		if not own_hand.is_empty() and not take.is_empty():
@@ -1230,6 +1307,14 @@ func _decide_bot_settlement(bot_id: String, snapshot: Dictionary) -> Dictionary:
 		if not give_other.is_empty():
 			return {"type": "platter_asset_swap", "give": {"kind": "voucher", "id": give_other.get("id", "")}, "take": {"kind": "dish_part", "id": _platter_dish_parts()[0].get("id", "")}}
 	return _round_robin_pass()
+
+
+func _last_transaction_is_bot_settlement_swap(bot_id: String) -> bool:
+	var history: Array = table.get("transactionHistory", [])
+	if history.is_empty():
+		return false
+	var last: Dictionary = history[history.size() - 1]
+	return str(last.get("participantId", "")) == bot_id and str(last.get("action", "")) == "Settlement Swap"
 
 
 func _decide_bot_pool_swap(bot_id: String, snapshot: Dictionary) -> Dictionary:
@@ -1566,14 +1651,35 @@ func _voucher_in_hand(voucher: Dictionary, holder_id: String) -> bool:
 
 func _platter_account(participant_id_for_account: String) -> Dictionary:
 	var own_cards := 0
+	var own_cards_in_hand := 0
+	var foreign_cards_in_hand := 0
+	var own_cards_in_other_hands := 0
 	for voucher in _platter_vouchers():
 		if str(voucher.get("ownerParticipantId", "")) == participant_id_for_account:
 			own_cards += 1
+	for raw_voucher in table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var owner_id := str(voucher.get("ownerParticipantId", ""))
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) != "hand":
+			continue
+		var holder_id := str(location.get("participantId", ""))
+		if owner_id == participant_id_for_account and holder_id == participant_id_for_account:
+			own_cards_in_hand += 1
+		elif owner_id != participant_id_for_account and holder_id == participant_id_for_account:
+			foreign_cards_in_hand += 1
+		elif owner_id == participant_id_for_account and holder_id != participant_id_for_account:
+			own_cards_in_other_hands += 1
+	var expected_own_cards_in_hand := _rule_int("vouchersPerIngredient", VOUCHERS_PER_INGREDIENT) - 1
 	return {
 		"ownCardsInPlatter": own_cards,
+		"ownCardsInHand": own_cards_in_hand,
+		"foreignCardsInHand": foreign_cards_in_hand,
+		"ownCardsInOtherHands": own_cards_in_other_hands,
+		"expectedOwnCardsInHand": expected_own_cards_in_hand,
 		"platterDebt": maxi(0, own_cards - 1),
 		"platterShortfall": maxi(0, 1 - own_cards),
-		"cleared": own_cards == 1
+		"cleared": own_cards == 1 and own_cards_in_hand == expected_own_cards_in_hand and foreign_cards_in_hand == 0
 	}
 
 
@@ -1588,13 +1694,116 @@ func _offerable_qty(participant_id_for_offer: String, ingredient_id: String) -> 
 	return count
 
 
+func _normalize_offer_assets(offered_ids: Array, offered_assets) -> Array:
+	if offered_assets is Array and not offered_assets.is_empty():
+		return offered_assets.duplicate(true)
+	var result: Array = []
+	for raw_id in offered_ids:
+		result.append({"kind": "voucher", "id": str(raw_id)})
+	return result
+
+
+func _normalize_accepted_assets(voucher_ids: Array, assets) -> Array:
+	if assets is Array and not assets.is_empty():
+		return assets.duplicate(true)
+	var result: Array = []
+	for raw_id in voucher_ids:
+		result.append({"kind": "voucher", "id": str(raw_id)})
+	return result
+
+
+func _legacy_requested_asset(recipient: Dictionary, requested: Dictionary) -> Dictionary:
+	var ingredient_id := str(requested.get("ingredientId", ""))
+	var quantity := int(requested.get("quantity", 1))
+	if quantity <= 0:
+		_fail("Offer request quantity must be positive.")
+		return {}
+	if ingredient_id == "":
+		_fail("Offer must request an asset.")
+		return {}
+	if ingredient_id != str(recipient.get("ingredientId", "")):
+		_fail("Legacy ingredient offers can only ask for the recipient's own ingredient.")
+		return {}
+	return {"kind": "voucher", "ingredientId": ingredient_id, "ownerParticipantId": recipient.get("id", ""), "quantity": quantity}
+
+
+func _validate_offer_asset_request(participant_id_for_offer: String, requested: Dictionary) -> bool:
+	if int(requested.get("quantity", 1)) <= 0:
+		return _fail("Offer request quantity must be positive.")
+	match str(requested.get("kind", "")):
+		"voucher":
+			return true if str(requested.get("ingredientId", "")) != "" else _fail("Requested ingredient is unknown.")
+		"dish_part":
+			if str(requested.get("dishId", "")) == "" or not table.get("dishes", {}).has(str(requested.get("dishId", ""))):
+				return _fail("Requested dish is unknown.")
+			return true
+	return _fail("Offer request asset is invalid.")
+
+
+func _offerable_asset_qty(participant_id_for_offer: String, requested: Dictionary) -> int:
+	match str(requested.get("kind", "")):
+		"voucher":
+			var count := 0
+			for voucher in _hand_vouchers(participant_id_for_offer):
+				if str(voucher.get("ingredientId", "")) != str(requested.get("ingredientId", "")):
+					continue
+				if requested.has("ownerParticipantId") and str(voucher.get("ownerParticipantId", "")) != str(requested.get("ownerParticipantId", "")):
+					continue
+				if not _voucher_has_stock(voucher):
+					continue
+				count += 1
+			return count
+		"dish_part":
+			var count := 0
+			for part in _inventory_dish_parts(participant_id_for_offer):
+				if str(part.get("dishId", "")) != str(requested.get("dishId", "")):
+					continue
+				if requested.has("makerParticipantId") and str(part.get("makerParticipantId", "")) != str(requested.get("makerParticipantId", "")):
+					continue
+				count += 1
+			return count
+	return 0
+
+
+func _offerable_unreserved_asset_qty(participant_id_for_offer: String, requested: Dictionary) -> int:
+	var count := _offerable_asset_qty(participant_id_for_offer, requested)
+	var key := _offer_asset_request_key(requested)
+	for offer in table.get("offers", {}).values():
+		if str(offer.get("status", "")) != "pending" or str(offer.get("toParticipantId", "")) != participant_id_for_offer:
+			continue
+		var offer_request: Dictionary = offer.get("requestedAsset", {})
+		if _offer_asset_request_key(offer_request) == key:
+			count -= int(offer_request.get("quantity", 1))
+	return maxi(0, count)
+
+
+func _offer_asset_request_key(requested: Dictionary) -> String:
+	match str(requested.get("kind", "")):
+		"voucher":
+			return "voucher:%s:%s" % [requested.get("ingredientId", ""), requested.get("ownerParticipantId", "")]
+		"dish_part":
+			return "dish_part:%s:%s" % [requested.get("dishId", ""), requested.get("makerParticipantId", "")]
+	return "invalid"
+
+
+func _asset_matches_offer_request(asset: Dictionary, requested: Dictionary) -> bool:
+	var value: Dictionary = asset.get("value", {})
+	match str(requested.get("kind", "")):
+		"voucher":
+			return str(asset.get("kind", "")) == "voucher" and str(value.get("ingredientId", "")) == str(requested.get("ingredientId", "")) and (not requested.has("ownerParticipantId") or str(value.get("ownerParticipantId", "")) == str(requested.get("ownerParticipantId", "")))
+		"dish_part":
+			return str(asset.get("kind", "")) == "dish_part" and str(value.get("dishId", "")) == str(requested.get("dishId", "")) and (not requested.has("makerParticipantId") or str(value.get("makerParticipantId", "")) == str(requested.get("makerParticipantId", "")))
+	return false
+
+
 func _offerable_unreserved_qty(participant_id_for_offer: String, ingredient_id: String) -> int:
 	if ingredient_id == "":
 		return 0
-	var count := _offerable_qty(participant_id_for_offer, ingredient_id)
+	var count := _offerable_asset_qty(participant_id_for_offer, {"kind": "voucher", "ingredientId": ingredient_id})
 	for offer in table.get("offers", {}).values():
-		if str(offer.get("status", "")) == "pending" and str(offer.get("toParticipantId", "")) == participant_id_for_offer and str(offer.get("requested", {}).get("ingredientId", "")) == ingredient_id:
-			count -= int(offer.get("requested", {}).get("quantity", 1))
+		var requested: Dictionary = offer.get("requestedAsset", {})
+		if str(offer.get("status", "")) == "pending" and str(offer.get("toParticipantId", "")) == participant_id_for_offer and str(requested.get("kind", "")) == "voucher" and str(requested.get("ingredientId", "")) == ingredient_id:
+			count -= int(requested.get("quantity", 1))
 	return maxi(0, count)
 
 
@@ -1604,40 +1813,56 @@ func _auto_refuse_unavailable_offers() -> void:
 		var offer: Dictionary = table["offers"][offer_id]
 		if str(offer.get("status", "")) != "pending":
 			continue
-		if _offer_has_unbacked_voucher(offer):
-			_release_offered_vouchers(offer)
+		if not _offered_assets_still_locked_and_backed(offer):
+			_release_offered_assets(offer)
 			table["offers"].erase(offer_id)
 			continue
-		var requested: Dictionary = offer.get("requested", {})
-		var key := "%s:%s" % [offer.get("toParticipantId", ""), requested.get("ingredientId", "")]
+		var requested: Dictionary = offer.get("requestedAsset", {})
+		if requested.is_empty():
+			requested = _legacy_requested_asset(_participant_by_id(str(offer.get("toParticipantId", ""))), offer.get("requested", {}))
+		var key := "%s:%s" % [offer.get("toParticipantId", ""), _offer_asset_request_key(requested)]
 		if not remaining.has(key):
-			remaining[key] = _offerable_qty(str(offer.get("toParticipantId", "")), str(requested.get("ingredientId", "")))
+			remaining[key] = _offerable_asset_qty(str(offer.get("toParticipantId", "")), requested)
 		if int(remaining[key]) >= int(requested.get("quantity", 1)):
 			remaining[key] = int(remaining[key]) - int(requested.get("quantity", 1))
 			continue
-		_release_offered_vouchers(offer)
+		_release_offered_assets(offer)
 		table["offers"].erase(offer_id)
 
 
-func _offer_has_unbacked_voucher(offer: Dictionary) -> bool:
-	for raw_id in offer.get("offeredVoucherIds", []):
-		var voucher := _voucher_by_id(str(raw_id))
-		if not _voucher_has_stock(voucher):
-			return true
-	return false
+func _offered_assets_still_locked_and_backed(offer: Dictionary) -> bool:
+	for raw_ref in offer.get("offeredAssets", []):
+		var asset := _resolve_asset(raw_ref)
+		if asset.is_empty():
+			return false
+		var location: Dictionary = asset.get("value", {}).get("location", {})
+		if str(location.get("type", "")) != "offer_lock" or str(location.get("offerId", "")) != str(offer.get("id", "")):
+			return false
+		if not _require_asset_backed_by_stock(asset):
+			return false
+	return true
+
+
+func _release_offered_assets(offer: Dictionary) -> void:
+	for raw_ref in offer.get("offeredAssets", []):
+		var asset := _resolve_asset(raw_ref)
+		if asset.is_empty():
+			continue
+		var value: Dictionary = asset.get("value", {})
+		var location: Dictionary = value.get("location", {})
+		if str(location.get("type", "")) != "offer_lock" or str(location.get("offerId", "")) != str(offer.get("id", "")):
+			continue
+		_move_asset_to_inventory(asset, str(offer.get("fromParticipantId", "")))
 
 
 func _release_offered_vouchers(offer: Dictionary) -> void:
-	for raw_id in offer.get("offeredVoucherIds", []):
-		var voucher := _voucher_by_id(str(raw_id))
-		if not voucher.is_empty() and str(voucher.get("location", {}).get("type", "")) == "offer_lock":
-			voucher["location"] = {"type": "hand", "participantId": offer.get("fromParticipantId", "")}
+	_release_offered_assets(offer)
 
 
 func _cancel_all_pending_offers() -> void:
 	for offer_id in table.get("offers", {}).keys().duplicate():
 		var offer: Dictionary = table["offers"][offer_id]
-		_release_offered_vouchers(offer)
+		_release_offered_assets(offer)
 		table["offers"].erase(offer_id)
 
 
@@ -1689,11 +1914,25 @@ func _move_asset_to_inventory(asset: Dictionary, holder_id: String) -> void:
 	value["location"] = {"type": "hand", "participantId": holder_id} if str(asset.get("kind", "")) == "voucher" else {"type": "inventory", "participantId": holder_id}
 
 
+func _move_asset_to_offer_lock(asset: Dictionary, offer_id: String) -> void:
+	var value: Dictionary = asset.get("value", {})
+	value["location"] = {"type": "offer_lock", "offerId": offer_id}
+
+
 func _asset_label(asset: Dictionary) -> String:
 	var value: Dictionary = asset.get("value", {})
 	if str(asset.get("kind", "")) == "voucher":
 		return _ingredient_name(str(value.get("ingredientId", "")))
 	return "%s %s" % [value.get("dishName", "Dish"), value.get("unitSingular", "part")]
+
+
+func _asset_list_label(asset_refs: Array) -> String:
+	var labels: Array[String] = []
+	for raw_ref in asset_refs:
+		var asset := _resolve_asset(raw_ref)
+		if not asset.is_empty():
+			labels.append(_asset_label(asset))
+	return ", ".join(labels)
 
 
 func _first_dish_part_in_inventory(dish_id: String, holder_id: String) -> Dictionary:
@@ -1744,6 +1983,28 @@ func _clone_offer(offer: Dictionary) -> Dictionary:
 		if not voucher.is_empty():
 			offered.append(voucher.duplicate(true))
 	result["offeredVouchers"] = offered
+	var offered_parts: Array = []
+	for raw_ref in offer.get("offeredAssets", []):
+		if str(raw_ref.get("kind", "")) != "dish_part":
+			continue
+		var part: Dictionary = table.get("dishParts", {}).get(str(raw_ref.get("id", "")), {})
+		if not part.is_empty():
+			offered_parts.append(part.duplicate(true))
+	result["offeredDishParts"] = offered_parts
+	var accepted_vouchers: Array = []
+	for raw_id in offer.get("acceptedVoucherIds", []):
+		var voucher := _voucher_by_id(str(raw_id))
+		if not voucher.is_empty():
+			accepted_vouchers.append(voucher.duplicate(true))
+	result["acceptedVouchers"] = accepted_vouchers
+	var accepted_parts: Array = []
+	for raw_ref in offer.get("acceptedAssets", []):
+		if str(raw_ref.get("kind", "")) != "dish_part":
+			continue
+		var part: Dictionary = table.get("dishParts", {}).get(str(raw_ref.get("id", "")), {})
+		if not part.is_empty():
+			accepted_parts.append(part.duplicate(true))
+	result["acceptedDishParts"] = accepted_parts
 	return result
 
 
@@ -1910,6 +2171,55 @@ func _first_non_owner_hand_voucher(holder_id: String) -> Dictionary:
 	return {}
 
 
+func _foreign_card_return_candidate(holder_id: String, snapshot: Dictionary) -> Dictionary:
+	for voucher in _hand_vouchers(holder_id):
+		if not _voucher_has_stock(voucher):
+			continue
+		var owner_id := str(voucher.get("ownerParticipantId", ""))
+		if owner_id == holder_id:
+			continue
+		var owner_public := _snapshot_participant(snapshot, owner_id)
+		if int(owner_public.get("platterShortfall", 0)) <= 0:
+			continue
+		var matching_part := _first_platter_food_part_by_maker(owner_id)
+		if not matching_part.is_empty():
+			return {"voucherId": voucher.get("id", ""), "partId": matching_part.get("id", "")}
+	return {}
+
+
+func _snapshot_participant(snapshot: Dictionary, participant_id_for_lookup: String) -> Dictionary:
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("id", "")) == participant_id_for_lookup:
+			return participant
+	return {}
+
+
+func _first_platter_food_part_by_maker(maker_id: String) -> Dictionary:
+	for part in _platter_dish_parts():
+		if str(part.get("makerParticipantId", "")) == maker_id:
+			return part
+	return {}
+
+
+func _platter_has_food_part_by_maker(maker_id: String) -> bool:
+	return not _first_platter_food_part_by_maker(maker_id).is_empty()
+
+
+func _first_platter_voucher_not_owner(owner_id: String) -> Dictionary:
+	for voucher in _platter_vouchers():
+		if str(voucher.get("ownerParticipantId", "")) != owner_id and _voucher_has_stock(voucher):
+			return voucher
+	return {}
+
+
+func _first_platter_voucher() -> Dictionary:
+	for voucher in _platter_vouchers():
+		if _voucher_has_stock(voucher):
+			return voucher
+	return {}
+
+
 func _first_inventory_asset(holder_id: String, allow_own_voucher: bool) -> Dictionary:
 	var parts := _inventory_dish_parts(holder_id)
 	if not parts.is_empty():
@@ -1917,6 +2227,44 @@ func _first_inventory_asset(holder_id: String, allow_own_voucher: bool) -> Dicti
 	for voucher in _hand_vouchers(holder_id):
 		if (allow_own_voucher or str(voucher.get("ownerParticipantId", "")) != holder_id) and _voucher_has_stock(voucher):
 			return {"kind": "voucher", "id": voucher.get("id", "")}
+	return {}
+
+
+func _settlement_give_asset(holder_id: String, snapshot: Dictionary, allow_own_voucher: bool) -> Dictionary:
+	var parts := _inventory_dish_parts(holder_id)
+	if not parts.is_empty():
+		return {"kind": "dish_part", "id": parts[0].get("id", "")}
+	for voucher in _hand_vouchers(holder_id):
+		if not _voucher_has_stock(voucher):
+			continue
+		var owner_id := str(voucher.get("ownerParticipantId", ""))
+		if owner_id == holder_id:
+			continue
+		var owner_public := _snapshot_participant(snapshot, owner_id)
+		if int(owner_public.get("platterShortfall", 0)) > 0:
+			return {"kind": "voucher", "id": voucher.get("id", "")}
+	for voucher in _hand_vouchers(holder_id):
+		if (allow_own_voucher or str(voucher.get("ownerParticipantId", "")) != holder_id) and _voucher_has_stock(voucher):
+			return {"kind": "voucher", "id": voucher.get("id", "")}
+	return {}
+
+
+func _settlement_seed_take_asset(holder_id: String) -> Dictionary:
+	var own_voucher := _first_platter_voucher_by_owner(holder_id)
+	if not own_voucher.is_empty():
+		return {"kind": "voucher", "id": own_voucher.get("id", "")}
+	for part in _platter_dish_parts():
+		if str(part.get("makerParticipantId", "")) != holder_id:
+			return {"kind": "dish_part", "id": part.get("id", "")}
+	var parts := _platter_dish_parts()
+	if not parts.is_empty():
+		return {"kind": "dish_part", "id": parts[0].get("id", "")}
+	var foreign_voucher := _first_platter_voucher_not_owner(holder_id)
+	if not foreign_voucher.is_empty():
+		return {"kind": "voucher", "id": foreign_voucher.get("id", "")}
+	var voucher := _first_platter_voucher()
+	if not voucher.is_empty():
+		return {"kind": "voucher", "id": voucher.get("id", "")}
 	return {}
 
 

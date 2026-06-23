@@ -121,6 +121,7 @@ var _last_csv_export_status := ""
 var _history_popup_visible_rows := TRANSACTION_VISIBLE_ROWS
 var _pending_controlled_deposit_actor_id := ""
 var _last_controlled_turn_participant_id := ""
+var _pending_controlled_follow_participant_id := ""
 var _last_popup_close_key := ""
 var _last_popup_close_ms := -1
 var _left_table_codes := {}
@@ -276,7 +277,7 @@ func _build_ui() -> void:
 
 	_table_visual_holder = Control.new()
 	_table_visual_holder.visible = false
-	_table_visual_holder.clip_contents = false
+	_table_visual_holder.clip_contents = true
 	_table_visual_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_table_visual_holder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_table_visual_holder.custom_minimum_size = Vector2(0, 620)
@@ -3244,21 +3245,68 @@ func _maybe_advance_acting_as_after_deposit(snapshot: Dictionary) -> void:
 
 
 func _maybe_follow_controlled_turn(snapshot: Dictionary) -> void:
+	if not _should_follow_controlled_turn(snapshot):
+		return
+	var participant_id := str(snapshot.get("currentTurnParticipantId", ""))
+	if participant_id == "" or _pending_controlled_follow_participant_id == participant_id:
+		return
+	_pending_controlled_follow_participant_id = participant_id
+	call_deferred("_follow_controlled_turn_deferred", participant_id)
+
+
+func _follow_controlled_turn_deferred(participant_id: String) -> void:
+	if participant_id == "":
+		_pending_controlled_follow_participant_id = ""
+		return
+	for _frame in range(1200):
+		var snapshot := RecipesClient.latest_snapshot
+		if not _should_follow_controlled_turn(snapshot):
+			if _pending_controlled_follow_participant_id == participant_id:
+				_pending_controlled_follow_participant_id = ""
+			return
+		if str(snapshot.get("currentTurnParticipantId", "")) != participant_id:
+			if _pending_controlled_follow_participant_id == participant_id:
+				_pending_controlled_follow_participant_id = ""
+			return
+		if _table_visual_ready_for_controlled_follow(participant_id):
+			RecipesClient.view_as(participant_id)
+			if _pending_controlled_follow_participant_id == participant_id:
+				_pending_controlled_follow_participant_id = ""
+			return
+		await get_tree().process_frame
+	var final_snapshot := RecipesClient.latest_snapshot
+	if _should_follow_controlled_turn(final_snapshot) and str(final_snapshot.get("currentTurnParticipantId", "")) == participant_id:
+		RecipesClient.view_as(participant_id)
+	if _pending_controlled_follow_participant_id == participant_id:
+		_pending_controlled_follow_participant_id = ""
+
+
+func _table_visual_ready_for_controlled_follow(participant_id: String) -> bool:
+	if not is_instance_valid(_table_visual):
+		return true
+	if _table_visual.has_method("visual_update_waiting") and bool(_table_visual.call("visual_update_waiting")):
+		return false
+	if _table_visual.has_method("current_visual_turn_id") and str(_table_visual.call("current_visual_turn_id")) != participant_id:
+		return false
+	return true
+
+
+func _should_follow_controlled_turn(snapshot: Dictionary) -> bool:
 	if not bool(snapshot.get("viewerCanUseHostControls", false)):
-		return
+		return false
 	if _viewer_is_witness(snapshot):
-		return
+		return false
 	var phase := str(snapshot.get("phase", ""))
 	if phase != "playing" && phase != "settlement" && phase != "eating":
-		return
+		return false
 	var current_turn_id := str(snapshot.get("currentTurnParticipantId", ""))
 	if current_turn_id == "":
-		return
+		return false
 	if current_turn_id == str(snapshot.get("viewerParticipantId", "")):
-		return
+		return false
 	if not _is_controlled_by_viewer(snapshot, current_turn_id):
-		return
-	RecipesClient.view_as(current_turn_id)
+		return false
+	return true
 
 
 func _track_last_controlled_turn(snapshot: Dictionary) -> void:
@@ -3308,7 +3356,7 @@ func _next_controlled_undeposited_actor_id(snapshot: Dictionary, after_participa
 
 func _add_playing_controls(snapshot: Dictionary) -> void:
 	_add_pass_turn_button(snapshot)
-	_add_prepare_control(snapshot)
+	_add_recipe_status_control(snapshot)
 	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
 	_add_hand_place_controls(snapshot)
 	_add_platter_swap_controls(snapshot)
@@ -3382,18 +3430,13 @@ func _add_witness_player_view(snapshot: Dictionary, participant: Dictionary) -> 
 	_offer_controls.add_child(_wrapped_label(_open_offers_label(snapshot, participant_id)))
 
 
-func _add_prepare_control(snapshot: Dictionary) -> void:
+func _add_recipe_status_control(snapshot: Dictionary) -> void:
 	var recipe: Dictionary = snapshot.get("ownRecipe", {})
 	if recipe.is_empty():
 		_recipe_controls.add_child(_wrapped_label(_dish_count_summary_label(snapshot)))
 		return
 	_add_recipe_view(_recipe_controls, snapshot, recipe)
 	_recipe_controls.add_child(_wrapped_label(_recipe_progress_label(recipe)))
-	var prepare_button := _button("Prepare Dish", func() -> void:
-		RecipesClient.send_intent({"type": "prepare"})
-	)
-	prepare_button.disabled = not _recipe_ready(recipe)
-	_recipe_controls.add_child(prepare_button)
 
 
 func _add_eating_controls(snapshot: Dictionary) -> void:
@@ -3510,7 +3553,7 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 			useful_count += mini(outstanding, int(group.get("count", 1)))
 			break
 	if useful_count > 0:
-		_hand_controls.add_child(_wrapped_label("%s useful held cards will redeem when you use Redeem Cards and Pass Turn." % useful_count))
+		_hand_controls.add_child(_wrapped_label("%s useful held cards will redeem when you use Redeem / Pass." % useful_count))
 	else:
 		_hand_controls.add_child(_wrapped_label("No held cards match the open recipe slots right now."))
 
@@ -3887,7 +3930,7 @@ func _add_pass_turn_button(snapshot: Dictionary) -> void:
 		return
 	var next_name := _next_turn_participant_name(snapshot)
 	var is_playing := phase == "playing"
-	var label := "Redeem Cards and Pass Turn" if is_playing else ("Pass Turn" if next_name == "" else "Pass Turn to %s" % next_name)
+	var label := "Redeem / Pass" if is_playing else ("Pass Turn" if next_name == "" else "Pass Turn to %s" % next_name)
 	_phase_controls.add_child(_button(label, func() -> void:
 		if is_playing:
 			_status_label.text = "Redeeming useful cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)

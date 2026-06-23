@@ -4,7 +4,7 @@ export type BotType = "pool_only" | "barter_only" | "mixed";
 export type TablePhase = "lobby" | "deposit" | "playing" | "settlement" | "eating" | "complete";
 export type TurnMode = "round_robin";
 export type VoucherLocationType = "hand" | "platter" | "placed" | "holding" | "offer_lock";
-export type DishPartLocationType = "inventory" | "platter" | "eaten";
+export type DishPartLocationType = "inventory" | "platter" | "eaten" | "offer_lock";
 export type OfferStatus = "pending" | "accepted" | "refused" | "cancelled";
 export type PlatterAssetKind = "voucher" | "dish_part";
 export type AggregateAssetKind = "voucher" | "dish_part";
@@ -85,12 +85,19 @@ export interface OfferRequest {
   quantity: number;
 }
 
+export type OfferAssetRequest =
+  | { kind: "voucher"; ingredientId: string; ownerParticipantId?: string; quantity: number }
+  | { kind: "dish_part"; dishId: string; makerParticipantId?: string; quantity: number };
+
 export interface Offer {
   id: string;
   fromParticipantId: string;
   toParticipantId: string;
+  offeredAssets: PlatterAssetRef[];
   offeredVoucherIds: string[];
-  requested: OfferRequest;
+  requestedAsset?: OfferAssetRequest;
+  requested?: OfferRequest;
+  acceptedAssets: PlatterAssetRef[];
   acceptedVoucherIds: string[];
   status: OfferStatus;
   createdTurn: number;
@@ -98,6 +105,9 @@ export interface Offer {
 
 export interface OfferSnapshot extends Offer {
   offeredVouchers: Voucher[];
+  offeredDishParts: DishPart[];
+  acceptedVouchers: Voucher[];
+  acceptedDishParts: DishPart[];
 }
 
 export interface Dish {
@@ -117,6 +127,7 @@ export interface Dish {
 export interface DishPartLocation {
   type: DishPartLocationType;
   participantId?: string;
+  offerId?: string;
 }
 
 export interface DishPart {
@@ -217,6 +228,10 @@ export interface PublicParticipant {
   realIngredientStock?: number;
   offerableOwnIngredientQty: number;
   ownCardsInPlatter: number;
+  ownCardsInHand: number;
+  foreignCardsInHand: number;
+  ownCardsInOtherHands: number;
+  expectedOwnCardsInHand: number;
   platterDebt: number;
   platterShortfall: number;
   cleared: boolean;
@@ -319,8 +334,15 @@ export type Intent =
   | { type: "platter_swap_ingredient"; giveIngredientId: string; takeIngredientId: string; quantity?: number }
   | { type: "platter_asset_swap"; give: PlatterAssetRef; take: PlatterAssetRef }
   | { type: "platter_asset_swap_aggregate"; give: AggregatePlatterAssetRef; take: AggregatePlatterAssetRef; quantity?: number }
-  | { type: "create_offer"; toParticipantId: string; offeredVoucherIds: string[]; requested: OfferRequest }
-  | { type: "respond_offer"; offerId: string; response: "accept" | "refuse"; voucherIds?: string[] }
+  | {
+      type: "create_offer";
+      toParticipantId: string;
+      offeredVoucherIds?: string[];
+      offeredAssets?: PlatterAssetRef[];
+      requested?: OfferRequest;
+      requestedAsset?: OfferAssetRequest;
+    }
+  | { type: "respond_offer"; offerId: string; response: "accept" | "refuse"; voucherIds?: string[]; assets?: PlatterAssetRef[] }
   | { type: "cancel_offer"; offerId: string }
   | { type: "place_voucher"; voucherId: string; requirementId: string }
   | { type: "redeem_voucher"; voucherId: string }

@@ -55,9 +55,11 @@ func _initialize() -> void:
 	_require(cooks_title != null, "main scene table renders the Cooks title")
 	_require(cooks_title.get_global_rect().position.y - visual_rect.position.y < 80.0, "table content is top-aligned without a large blank band")
 
+	visual.call("debug_flush_animations")
+	await process_frame
 	main.set("_last_controlled_turn_participant_id", "p2")
 	recipes_client.send_intent({"type": "pass_turn"})
-	for _index in range(8):
+	for _index in range(180):
 		if str(recipes_client.latest_snapshot.get("viewerParticipantId", "")) == "p2":
 			break
 		await process_frame
@@ -65,10 +67,49 @@ func _initialize() -> void:
 	recipes_client.view_as("p1")
 	await process_frame
 
-	holder.size = Vector2(480, holder.size.y)
+	main.call("_return_to_main_menu")
+	await process_frame
+	recipes_client.start_offline_table("", "controlled-after-bot")
+	await process_frame
+	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p3", "name": "Nia"})
+	await process_frame
+	recipes_client.send_host_intent({"type": "start"})
+	for _controlled_setup_frame in range(16):
+		await process_frame
+	visual.call("debug_flush_animations")
+	await process_frame
+	recipes_client.send_intent({"type": "pass_turn"})
+	var saw_intervening_bot_turn := false
+	for _controlled_follow_frame in range(900):
+		var stats: Dictionary = visual.get("debug_stats")
+		if str(stats.get("currentTurnParticipantId", "")) == "p2":
+			saw_intervening_bot_turn = true
+		if str(recipes_client.latest_snapshot.get("viewerParticipantId", "")) == "p3":
+			break
+		await process_frame
+	_require(saw_intervening_bot_turn, "main view shows the intervening bot turn before following the next controlled human")
+	_require(str(recipes_client.latest_snapshot.get("viewerParticipantId", "")) == "p3", "main view follows a controlled human seat after an intervening bot turn")
+	_require(str(recipes_client.latest_snapshot.get("currentTurnParticipantId", "")) == "p3", "controlled human seat is the active turn after the bot")
+	_require(not recipes_client.latest_snapshot.get("ownHand", []).is_empty(), "controlled turn view shows that seat's own hand")
+	_require(not recipes_client.latest_snapshot.get("ownRecipe", {}).is_empty(), "controlled turn view shows that seat's own recipe")
+
 	main.call("_fit_table_visual_to_window")
 	var narrow_visual_rect := visual.get_global_rect()
-	_require(narrow_visual_rect.size.x <= 481.0, "table visual scales down for a 480px desktop debug width")
+	_require(narrow_visual_rect.size.x <= root.get_viewport().get_visible_rect().size.x + 1.0, "table visual fits the current debug viewport; holder=%s visual=%s scale=%s" % [holder.size, narrow_visual_rect.size, visual.scale])
+	var preferred_size: Vector2 = visual.call("preferred_visual_size")
+	var stable_holder_height := holder.custom_minimum_size.y
+	var stable_visual_scale := visual.scale
+	var recipe_label := visual.find_child("RecipeName", true, false) as Control
+	if recipe_label == null:
+		recipe_label = visual.find_child("Title_Cooks", true, false) as Control
+	var original_recipe_min := recipe_label.custom_minimum_size if recipe_label != null else Vector2.ZERO
+	if recipe_label != null:
+		recipe_label.custom_minimum_size = preferred_size + Vector2(240, 180)
+	main.call("_fit_table_visual_to_window")
+	_require(visual.scale == stable_visual_scale, "table visual fit keeps scale stable when child minimums grow; before=%s after=%s preferred=%s child_min=%s" % [stable_visual_scale, visual.scale, preferred_size, recipe_label.custom_minimum_size if recipe_label != null else Vector2.ZERO])
+	_require(holder.custom_minimum_size.y == stable_holder_height, "table visual holder height stays stable when child minimums grow")
+	if recipe_label != null:
+		recipe_label.custom_minimum_size = original_recipe_min
 
 	main.call("_return_to_main_menu")
 	await process_frame

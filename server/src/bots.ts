@@ -56,11 +56,6 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
     return acceptDecision;
   }
 
-  const prepareDecision = decidePrepare(snapshot);
-  if (prepareDecision) {
-    return prepareDecision;
-  }
-
   if (participant.botType !== "pool_only") {
     const offerDecision = decideCreateOffer(table, botParticipantId, snapshot);
     if (offerDecision) {
@@ -124,17 +119,12 @@ export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET, onStep?
   return decisions;
 }
 
-function decidePrepare(snapshot: Snapshot): BotDecision | undefined {
-  if (!snapshot.ownRecipe) {
-    return undefined;
-  }
-  const complete = snapshot.ownRecipe.requirements.every((requirement) => requirement.redeemedQty >= requirement.requiredQty);
-  return complete ? { intent: { type: "prepare" }, reason: "recipe complete" } : undefined;
-}
-
 function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
   const bot = snapshot.participants.find((participant) => participant.id === botParticipantId);
   if (!bot) {
+    return undefined;
+  }
+  if (botJustMadeSettlementSwap(table, botParticipantId)) {
     return undefined;
   }
 
@@ -153,7 +143,49 @@ function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: 
     }
   }
 
+  if (bot.foreignCardsInHand > 0 && snapshot.platterFoodParts.length > 0) {
+    const returnCandidate = snapshot.ownHand
+      .filter((voucher) => voucher.ownerParticipantId !== botParticipantId && voucherHasStock(snapshot, voucher))
+      .map((voucher) => {
+        const owner = snapshot.participants.find((participant) => participant.id === voucher.ownerParticipantId);
+        const matchingPart = snapshot.platterFoodParts.find((part) => part.makerParticipantId === voucher.ownerParticipantId);
+        return { voucher, owner, matchingPart };
+      })
+      .find(({ owner, matchingPart }) => (owner?.platterShortfall ?? 0) > 0 && matchingPart);
+    if (returnCandidate?.matchingPart) {
+      return {
+        intent: {
+          type: "platter_asset_swap",
+          give: { kind: "voucher", id: returnCandidate.voucher.id },
+          take: { kind: "dish_part", id: returnCandidate.matchingPart.id }
+        },
+        reason: "return a foreign promise card during settlement"
+      };
+    }
+  }
+
+  if (
+    bot.ownCardsInOtherHands > 0 &&
+    !snapshot.platterFoodParts.some((part) => part.makerParticipantId === botParticipantId)
+  ) {
+    const takeAsset = preferredFoodPartSeedTake(snapshot, botParticipantId);
+    const foodPart = snapshot.ownFoodParts.find((part) => part.makerParticipantId === botParticipantId);
+    if (takeAsset && foodPart) {
+      return {
+        intent: {
+          type: "platter_asset_swap",
+          give: { kind: "dish_part", id: foodPart.id },
+          take: takeAsset
+        },
+        reason: "seed a food part so another player can return an own promise card"
+      };
+    }
+  }
+
   if (bot.platterShortfall > 0) {
+    if (bot.ownCardsInOtherHands > 0 && snapshot.platterFoodParts.length > 0) {
+      return undefined;
+    }
     const ownVoucher = snapshot.ownHand.find((voucher) => voucher.ownerParticipantId === botParticipantId && voucherHasStock(snapshot, voucher));
     const take = preferredSettlementTake(snapshot, botParticipantId);
     if (ownVoucher && take) {
@@ -186,10 +218,25 @@ function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: 
   return undefined;
 }
 
+function botJustMadeSettlementSwap(table: Table, botParticipantId: string): boolean {
+  const last = table.transactionHistory.at(-1);
+  return last?.participantId === botParticipantId && last.action === "Settlement Swap";
+}
+
 function preferredSettlementGive(snapshot: Snapshot, botParticipantId: string, allowOwnVoucher: boolean): PlatterAssetRef | undefined {
   const foodPart = snapshot.ownFoodParts[0];
   if (foodPart) {
     return { kind: "dish_part", id: foodPart.id };
+  }
+  const usefulForeignVoucher = snapshot.ownHand.find((candidate) => {
+    if (candidate.ownerParticipantId === botParticipantId || !voucherHasStock(snapshot, candidate)) {
+      return false;
+    }
+    const owner = snapshot.participants.find((participant) => participant.id === candidate.ownerParticipantId);
+    return (owner?.platterShortfall ?? 0) > 0;
+  });
+  if (usefulForeignVoucher) {
+    return { kind: "voucher", id: usefulForeignVoucher.id };
   }
   const voucher = snapshot.ownHand.find((candidate) => (allowOwnVoucher || candidate.ownerParticipantId !== botParticipantId) && voucherHasStock(snapshot, candidate));
   return voucher ? { kind: "voucher", id: voucher.id } : undefined;
@@ -201,6 +248,27 @@ function preferredSettlementTake(snapshot: Snapshot, botParticipantId: string): 
     return { kind: "dish_part", id: foodPart.id };
   }
   const voucher = snapshot.platter.find((candidate) => candidate.ownerParticipantId !== botParticipantId && voucherHasStock(snapshot, candidate));
+  return voucher ? { kind: "voucher", id: voucher.id } : undefined;
+}
+
+function preferredFoodPartSeedTake(snapshot: Snapshot, botParticipantId: string): PlatterAssetRef | undefined {
+  const ownVoucher = snapshot.platter.find((voucher) => voucher.ownerParticipantId === botParticipantId && voucherHasStock(snapshot, voucher));
+  if (ownVoucher) {
+    return { kind: "voucher", id: ownVoucher.id };
+  }
+  const otherFoodPart = snapshot.platterFoodParts.find((part) => part.makerParticipantId !== botParticipantId);
+  if (otherFoodPart) {
+    return { kind: "dish_part", id: otherFoodPart.id };
+  }
+  const foodPart = snapshot.platterFoodParts[0];
+  if (foodPart) {
+    return { kind: "dish_part", id: foodPart.id };
+  }
+  const foreignVoucher = snapshot.platter.find((voucher) => voucher.ownerParticipantId !== botParticipantId && voucherHasStock(snapshot, voucher));
+  if (foreignVoucher) {
+    return { kind: "voucher", id: foreignVoucher.id };
+  }
+  const voucher = snapshot.platter.find((candidate) => voucherHasStock(snapshot, candidate));
   return voucher ? { kind: "voucher", id: voucher.id } : undefined;
 }
 
@@ -236,19 +304,43 @@ function decideAcceptOffer(snapshot: Snapshot): BotDecision | undefined {
     if (offer.status !== "pending" || offer.toParticipantId !== snapshot.viewerParticipantId) {
       continue;
     }
-    const matching = snapshot.ownHand
-      .filter((voucher) => voucher.ingredientId === offer.requested.ingredientId)
-      .filter((voucher) => voucherHasStock(snapshot, voucher))
-      .slice(0, offer.requested.quantity);
-    if (matching.length === offer.requested.quantity) {
+    const requested = offer.requestedAsset;
+    if (!requested) {
+      continue;
+    }
+    if (requested.kind === "voucher") {
+      const matching = snapshot.ownHand
+        .filter((voucher) => voucher.ingredientId === requested.ingredientId)
+        .filter((voucher) => !requested.ownerParticipantId || voucher.ownerParticipantId === requested.ownerParticipantId)
+        .filter((voucher) => voucherHasStock(snapshot, voucher))
+        .slice(0, requested.quantity);
+      if (matching.length === requested.quantity) {
+        return {
+          intent: {
+            type: "respond_offer",
+            offerId: offer.id,
+            response: "accept",
+            voucherIds: matching.map((voucher) => voucher.id)
+          },
+          reason: "can satisfy structured offer"
+        };
+      }
+      continue;
+    }
+
+    const matchingParts = snapshot.ownFoodParts
+      .filter((part) => part.dishId === requested.dishId)
+      .filter((part) => !requested.makerParticipantId || part.makerParticipantId === requested.makerParticipantId)
+      .slice(0, requested.quantity);
+    if (matchingParts.length === requested.quantity) {
       return {
         intent: {
           type: "respond_offer",
           offerId: offer.id,
           response: "accept",
-          voucherIds: matching.map((voucher) => voucher.id)
+          assets: matchingParts.map((part) => ({ kind: "dish_part", id: part.id }))
         },
-        reason: "can satisfy structured offer"
+        reason: "can satisfy food-piece offer"
       };
     }
   }
@@ -259,6 +351,7 @@ function decideRedeemAllAndPass(table: Table, botParticipantId: string, snapshot
   if (!snapshot.ownRecipe) {
     return undefined;
   }
+  const recipeComplete = snapshot.ownRecipe.requirements.every((requirement) => requirement.redeemedQty >= requirement.requiredQty);
   const hasPlacedRedeemable = snapshot.ownRecipe.requirements.some((requirement) =>
     requirement.placedVoucherIds.some((voucherId) => {
       const voucher = table.vouchers[voucherId];
@@ -268,12 +361,12 @@ function decideRedeemAllAndPass(table: Table, botParticipantId: string, snapshot
   const hasUsefulHandVoucher = snapshot.ownHand.some(
     (voucher) => voucherHasStock(snapshot, voucher) && getUsefulRequirementIds(table, botParticipantId, voucher.ingredientId).length > 0
   );
-  if (!hasPlacedRedeemable && !hasUsefulHandVoucher) {
+  if (!recipeComplete && !hasPlacedRedeemable && !hasUsefulHandVoucher) {
     return undefined;
   }
   return {
     intent: { type: "redeem_all_and_pass_turn" },
-    reason: "redeem useful cards and pass turn"
+    reason: recipeComplete ? "prepare complete recipe and pass turn" : "redeem useful cards and pass turn"
   };
 }
 

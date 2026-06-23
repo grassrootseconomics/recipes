@@ -19,6 +19,8 @@ import type {
   DishPart,
   Intent,
   Offer,
+  OfferRequest,
+  OfferAssetRequest,
   Participant,
   ParticipantRole,
   PlatterAssetRef,
@@ -291,10 +293,10 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
         swapAggregatePlatterAssets(table, actor, intent.give, intent.take, intent.quantity ?? 1);
         break;
       case "create_offer":
-        createOffer(table, actor, intent.toParticipantId, intent.offeredVoucherIds, intent.requested);
+        createOffer(table, actor, intent.toParticipantId, intent.offeredVoucherIds ?? [], intent.requested, intent.offeredAssets, intent.requestedAsset);
         break;
       case "respond_offer":
-        respondOffer(table, actor, intent.offerId, intent.response, intent.voucherIds ?? []);
+        respondOffer(table, actor, intent.offerId, intent.response, intent.voucherIds ?? [], intent.assets);
         break;
       case "cancel_offer":
         cancelOffer(table, actor, intent.offerId);
@@ -385,6 +387,10 @@ export function inventoryDishPartIds(table: Table, participantId: string): strin
 export interface PlatterAccount {
   participantId: string;
   ownCardsInPlatter: number;
+  ownCardsInHand: number;
+  foreignCardsInHand: number;
+  ownCardsInOtherHands: number;
+  expectedOwnCardsInHand: number;
   platterDebt: number;
   platterShortfall: number;
   cleared: boolean;
@@ -394,12 +400,35 @@ export function platterAccountForParticipant(table: Table, participantId: string
   const ownCardsInPlatter = Object.values(table.vouchers).filter(
     (voucher) => voucher.ownerParticipantId === participantId && voucher.location.type === "platter"
   ).length;
+  const ownCardsInHand = Object.values(table.vouchers).filter(
+    (voucher) =>
+      voucher.ownerParticipantId === participantId &&
+      voucher.location.type === "hand" &&
+      voucher.location.participantId === participantId
+  ).length;
+  const foreignCardsInHand = Object.values(table.vouchers).filter(
+    (voucher) =>
+      voucher.ownerParticipantId !== participantId &&
+      voucher.location.type === "hand" &&
+      voucher.location.participantId === participantId
+  ).length;
+  const ownCardsInOtherHands = Object.values(table.vouchers).filter(
+    (voucher) =>
+      voucher.ownerParticipantId === participantId &&
+      voucher.location.type === "hand" &&
+      voucher.location.participantId !== participantId
+  ).length;
+  const expectedOwnCardsInHand = VOUCHERS_PER_INGREDIENT - 1;
   return {
     participantId,
     ownCardsInPlatter,
+    ownCardsInHand,
+    foreignCardsInHand,
+    ownCardsInOtherHands,
+    expectedOwnCardsInHand,
     platterDebt: Math.max(0, ownCardsInPlatter - 1),
     platterShortfall: Math.max(0, 1 - ownCardsInPlatter),
-    cleared: ownCardsInPlatter === 1
+    cleared: ownCardsInPlatter === 1 && ownCardsInHand === expectedOwnCardsInHand && foreignCardsInHand === 0
   };
 }
 
@@ -917,6 +946,7 @@ function redeemUsefulHandVouchersAndPassTurn(table: Table, actor: Participant): 
     for (const planned of plannedRedemptions) {
       redeemVoucherFromHand(table, actor, planned.voucherId, planned.requirementId);
     }
+    prepareDishIfRecipeComplete(table, actor);
   }
   passTurn(table, actor);
 }
@@ -1060,7 +1090,9 @@ function createOffer(
   actor: Participant,
   toParticipantId: string,
   offeredVoucherIds: string[],
-  requested: { ingredientId: string; quantity: number }
+  requested?: { ingredientId: string; quantity: number },
+  offeredAssets?: PlatterAssetRef[],
+  requestedAsset?: OfferAssetRequest
 ): Offer {
   requirePhase(table, "playing");
   requireActive(actor);
@@ -1070,25 +1102,22 @@ function createOffer(
   }
   const recipient = requireParticipant(table, toParticipantId);
   requireActive(recipient);
-  if (!Number.isInteger(requested.quantity) || requested.quantity <= 0) {
-    throw new GameError("Offer request quantity must be positive.", "invalid_offer");
+
+  const normalizedOfferedAssets = normalizeOfferedAssets(offeredVoucherIds, offeredAssets);
+  if (normalizedOfferedAssets.length === 0) {
+    throw new GameError("Offer must include at least one asset.", "invalid_offer");
   }
-  if (!INGREDIENTS.some((ingredient) => ingredient.id === requested.ingredientId)) {
-    throw new GameError("Requested ingredient is unknown.", "invalid_offer");
+
+  const normalizedRequestedAsset = requestedAsset ?? legacyRequestedAsset(recipient, requested);
+  validateOfferAssetRequest(table, recipient, normalizedRequestedAsset);
+  if (offerableUnreservedAssetQty(table, recipient.id, normalizedRequestedAsset) < normalizedRequestedAsset.quantity) {
+    throw new GameError("Recipient does not have enough available assets for that offer.", "offer_unavailable");
   }
-  if (offeredVoucherIds.length === 0) {
-    throw new GameError("Offer must include at least one voucher.", "invalid_offer");
-  }
-  if (!recipient.ingredientId || requested.ingredientId !== recipient.ingredientId) {
-    throw new GameError("Offers can only ask for the recipient's own ingredient.", "invalid_offer");
-  }
-  if (offerableUnreservedIngredientQty(table, recipient.id, requested.ingredientId) < requested.quantity) {
-    throw new GameError("Recipient has no available vouchers for that ingredient.", "offer_unavailable");
-  }
-  for (const voucherId of offeredVoucherIds) {
-    const voucher = requireVoucher(table, voucherId);
-    requireVoucherInHand(voucher, actor.id);
-    requireVoucherBackedByStock(table, voucher);
+
+  const resolvedOfferedAssets = normalizedOfferedAssets.map((asset) => requirePlatterAsset(table, asset));
+  for (const asset of resolvedOfferedAssets) {
+    requireAssetInInventory(asset, actor.id);
+    requireResolvedVoucherBackedByStock(table, asset);
   }
 
   const offerId = `offer_${table.nextId}`;
@@ -1097,15 +1126,18 @@ function createOffer(
     id: offerId,
     fromParticipantId: actor.id,
     toParticipantId,
+    offeredAssets: normalizedOfferedAssets.map((asset) => ({ ...asset })),
     offeredVoucherIds: [...offeredVoucherIds],
-    requested: { ...requested },
+    requested: requested ? { ...requested } : undefined,
+    requestedAsset: { ...normalizedRequestedAsset },
+    acceptedAssets: [],
     acceptedVoucherIds: [],
     status: "pending",
     createdTurn: table.turn
   };
   table.offers[offer.id] = offer;
-  for (const voucherId of offeredVoucherIds) {
-    table.vouchers[voucherId].location = { type: "offer_lock", offerId };
+  for (const asset of resolvedOfferedAssets) {
+    moveAssetToOfferLock(asset, offerId);
   }
   return offer;
 }
@@ -1115,7 +1147,8 @@ function respondOffer(
   actor: Participant,
   offerId: string,
   response: "accept" | "refuse",
-  voucherIds: string[]
+  voucherIds: string[],
+  acceptedAssets?: PlatterAssetRef[]
 ): void {
   requirePhase(table, "playing");
   requireActive(actor);
@@ -1130,30 +1163,33 @@ function respondOffer(
 
   if (response === "refuse") {
     offer.status = "refused";
-    releaseOfferedVouchers(table, offer);
+    releaseOfferedAssets(table, offer);
     delete table.offers[offer.id];
     return;
   }
 
-  if (voucherIds.length !== offer.requested.quantity) {
-    throw new GameError("Accepted voucher count does not match the request.", "invalid_offer_response");
+  const requestedAsset = offer.requestedAsset ?? legacyRequestedAsset(actor, offer.requested);
+  const acceptedAssetRefs = normalizeAcceptedAssets(voucherIds, acceptedAssets);
+  if (acceptedAssetRefs.length !== requestedAsset.quantity) {
+    throw new GameError("Accepted asset count does not match the request.", "invalid_offer_response");
   }
-  for (const voucherId of voucherIds) {
-    const voucher = requireVoucher(table, voucherId);
-    requireVoucherInHand(voucher, actor.id);
-    requireVoucherBackedByStock(table, voucher);
-    if (voucher.ingredientId !== offer.requested.ingredientId) {
-      throw new GameError("Accepted voucher ingredient does not match the request.", "invalid_offer_response");
+  const resolvedAcceptedAssets = acceptedAssetRefs.map((asset) => requirePlatterAsset(table, asset));
+  for (const asset of resolvedAcceptedAssets) {
+    requireAssetInInventory(asset, actor.id);
+    requireResolvedVoucherBackedByStock(table, asset);
+    if (!assetMatchesOfferRequest(asset, requestedAsset)) {
+      throw new GameError("Accepted asset does not match the request.", "invalid_offer_response");
     }
   }
 
   offer.status = "accepted";
+  offer.acceptedAssets = acceptedAssetRefs.map((asset) => ({ ...asset }));
   offer.acceptedVoucherIds = [...voucherIds];
-  for (const voucherId of offer.offeredVoucherIds) {
-    table.vouchers[voucherId].location = { type: "hand", participantId: offer.toParticipantId };
+  for (const asset of offer.offeredAssets.map((ref) => requirePlatterAsset(table, ref))) {
+    moveAssetToInventory(asset, offer.toParticipantId);
   }
-  for (const voucherId of voucherIds) {
-    table.vouchers[voucherId].location = { type: "hand", participantId: offer.fromParticipantId };
+  for (const asset of resolvedAcceptedAssets) {
+    moveAssetToInventory(asset, offer.fromParticipantId);
   }
   const creator = requireParticipant(table, offer.fromParticipantId);
   recordTransaction(
@@ -1161,8 +1197,8 @@ function respondOffer(
     creator,
     "Exchange",
     actor.name,
-    ingredientListLabel(table, offer.offeredVoucherIds),
-    ingredientListLabel(table, voucherIds),
+    assetListLabel(table, offer.offeredAssets),
+    assetListLabel(table, acceptedAssetRefs),
     actor.id
   );
   delete table.offers[offer.id];
@@ -1178,12 +1214,122 @@ function cancelOffer(table: Table, actor: Participant, offerId: string): void {
     throw new GameError("Only the offer creator can cancel this offer.", "not_offer_creator");
   }
   offer.status = "cancelled";
-  releaseOfferedVouchers(table, offer);
+  releaseOfferedAssets(table, offer);
   delete table.offers[offer.id];
 }
 
+function normalizeOfferedAssets(offeredVoucherIds: string[], offeredAssets?: PlatterAssetRef[]): PlatterAssetRef[] {
+  if (offeredAssets && offeredAssets.length > 0) {
+    return offeredAssets.map((asset) => ({ ...asset }));
+  }
+  return offeredVoucherIds.map((voucherId) => ({ kind: "voucher", id: voucherId }));
+}
+
+function normalizeAcceptedAssets(voucherIds: string[], acceptedAssets?: PlatterAssetRef[]): PlatterAssetRef[] {
+  if (acceptedAssets && acceptedAssets.length > 0) {
+    return acceptedAssets.map((asset) => ({ ...asset }));
+  }
+  return voucherIds.map((voucherId) => ({ kind: "voucher", id: voucherId }));
+}
+
+function legacyRequestedAsset(recipient: Participant, requested?: OfferRequest): OfferAssetRequest {
+  if (!requested) {
+    throw new GameError("Offer must request an asset.", "invalid_offer");
+  }
+  if (!Number.isInteger(requested.quantity) || requested.quantity <= 0) {
+    throw new GameError("Offer request quantity must be positive.", "invalid_offer");
+  }
+  if (!INGREDIENTS.some((ingredient) => ingredient.id === requested.ingredientId)) {
+    throw new GameError("Requested ingredient is unknown.", "invalid_offer");
+  }
+  if (!recipient.ingredientId || requested.ingredientId !== recipient.ingredientId) {
+    throw new GameError("Legacy ingredient offers can only ask for the recipient's own ingredient.", "invalid_offer");
+  }
+  return { kind: "voucher", ingredientId: requested.ingredientId, ownerParticipantId: recipient.id, quantity: requested.quantity };
+}
+
+function validateOfferAssetRequest(table: Table, recipient: Participant, requested: OfferAssetRequest): void {
+  if (!Number.isInteger(requested.quantity) || requested.quantity <= 0) {
+    throw new GameError("Offer request quantity must be positive.", "invalid_offer");
+  }
+  if (requested.kind === "voucher") {
+    if (!INGREDIENTS.some((ingredient) => ingredient.id === requested.ingredientId)) {
+      throw new GameError("Requested ingredient is unknown.", "invalid_offer");
+    }
+    if (requested.ownerParticipantId) {
+      requireParticipant(table, requested.ownerParticipantId);
+    }
+    return;
+  }
+  const dish = table.dishes[requested.dishId];
+  if (!dish) {
+    throw new GameError("Requested dish is unknown.", "invalid_offer");
+  }
+  if (requested.makerParticipantId) {
+    requireParticipant(table, requested.makerParticipantId);
+  }
+  if (offerableAssetQty(table, recipient.id, requested) < requested.quantity) {
+    throw new GameError("Recipient does not hold enough requested assets.", "offer_unavailable");
+  }
+}
+
+function offerableAssetQty(table: Table, participantId: string, requested: OfferAssetRequest): number {
+  if (requested.kind === "voucher") {
+    const participant = table.participants[participantId];
+    if ((participant?.realIngredientStock ?? 0) <= 0) {
+      return 0;
+    }
+    return Object.values(table.vouchers).filter(
+      (voucher) =>
+        voucher.ingredientId === requested.ingredientId &&
+        (!requested.ownerParticipantId || voucher.ownerParticipantId === requested.ownerParticipantId) &&
+        voucher.location.type === "hand" &&
+        voucher.location.participantId === participantId &&
+        voucherIsBackedByStock(table, voucher)
+    ).length;
+  }
+  return Object.values(table.dishParts ?? {}).filter(
+    (part) =>
+      part.dishId === requested.dishId &&
+      (!requested.makerParticipantId || part.makerParticipantId === requested.makerParticipantId) &&
+      part.location.type === "inventory" &&
+      part.location.participantId === participantId
+  ).length;
+}
+
+function offerableUnreservedAssetQty(table: Table, participantId: string, requested: OfferAssetRequest): number {
+  const rawAvailable = offerableAssetQty(table, participantId, requested);
+  const pendingRequested = Object.values(table.offers)
+    .filter((offer) => offer.status === "pending" && offer.toParticipantId === participantId)
+    .filter((offer) => offer.requestedAsset && offerAssetRequestKey(offer.requestedAsset) === offerAssetRequestKey(requested))
+    .reduce((total, offer) => total + (offer.requestedAsset?.quantity ?? 0), 0);
+  return Math.max(0, rawAvailable - pendingRequested);
+}
+
+function offerAssetRequestKey(requested: OfferAssetRequest): string {
+  if (requested.kind === "voucher") {
+    return `voucher:${requested.ingredientId}:${requested.ownerParticipantId ?? ""}`;
+  }
+  return `dish_part:${requested.dishId}:${requested.makerParticipantId ?? ""}`;
+}
+
+function assetMatchesOfferRequest(asset: ResolvedPlatterAsset, requested: OfferAssetRequest): boolean {
+  if (requested.kind === "voucher") {
+    return (
+      asset.kind === "voucher" &&
+      asset.value.ingredientId === requested.ingredientId &&
+      (!requested.ownerParticipantId || asset.value.ownerParticipantId === requested.ownerParticipantId)
+    );
+  }
+  return (
+    asset.kind === "dish_part" &&
+    asset.value.dishId === requested.dishId &&
+    (!requested.makerParticipantId || asset.value.makerParticipantId === requested.makerParticipantId)
+  );
+}
+
 function autoRefuseUnavailableOffers(table: Table): void {
-  const remainingByParticipantIngredient = new Map<string, number>();
+  const remainingByRequest = new Map<string, number>();
   for (const offer of Object.values(table.offers)) {
     if (offer.status !== "pending") {
       continue;
@@ -1191,25 +1337,25 @@ function autoRefuseUnavailableOffers(table: Table): void {
     const recipient = table.participants[offer.toParticipantId];
     if (!recipient) {
       offer.status = "refused";
-      releaseOfferedVouchers(table, offer);
+      releaseOfferedAssets(table, offer);
       delete table.offers[offer.id];
       continue;
     }
-    if (offer.offeredVoucherIds.some((voucherId) => !voucherIsBackedByStock(table, table.vouchers[voucherId]))) {
+    if (!offeredAssetsStillLockedAndBacked(table, offer)) {
       offer.status = "refused";
-      releaseOfferedVouchers(table, offer);
+      releaseOfferedAssets(table, offer);
       delete table.offers[offer.id];
       continue;
     }
-    const key = `${recipient.id}:${offer.requested.ingredientId}`;
-    const remaining =
-      remainingByParticipantIngredient.get(key) ?? offerableIngredientQty(table, recipient.id, offer.requested.ingredientId);
-    if (remaining >= offer.requested.quantity) {
-      remainingByParticipantIngredient.set(key, remaining - offer.requested.quantity);
+    const requestedAsset = offer.requestedAsset ?? legacyRequestedAsset(recipient, offer.requested);
+    const key = `${recipient.id}:${offerAssetRequestKey(requestedAsset)}`;
+    const remaining = remainingByRequest.get(key) ?? offerableAssetQty(table, recipient.id, requestedAsset);
+    if (remaining >= requestedAsset.quantity) {
+      remainingByRequest.set(key, remaining - requestedAsset.quantity);
       continue;
     }
     offer.status = "refused";
-    releaseOfferedVouchers(table, offer);
+    releaseOfferedAssets(table, offer);
     delete table.offers[offer.id];
   }
 }
@@ -1218,7 +1364,7 @@ function cancelAllPendingOffers(table: Table): void {
   for (const offer of Object.values(table.offers)) {
     if (offer.status === "pending") {
       offer.status = "cancelled";
-      releaseOfferedVouchers(table, offer);
+      releaseOfferedAssets(table, offer);
     }
     delete table.offers[offer.id];
   }
@@ -1233,7 +1379,7 @@ function cancelPendingOffersForParticipant(table: Table, participantId: string):
       continue;
     }
     offer.status = "cancelled";
-    releaseOfferedVouchers(table, offer);
+    releaseOfferedAssets(table, offer);
     delete table.offers[offer.id];
   }
 }
@@ -1375,12 +1521,25 @@ function prepareDish(table: Table, actor: Participant): void {
   }
 }
 
+function prepareDishIfRecipeComplete(table: Table, actor: Participant): void {
+  if (table.phase !== "playing") {
+    return;
+  }
+  const recipe = table.recipes[actor.id];
+  if (!recipe) {
+    return;
+  }
+  if (recipe.requirements.every((requirement) => requirement.redeemedQty >= requirement.requiredQty)) {
+    prepareDish(table, actor);
+  }
+}
+
 function biteDish(table: Table, actor: Participant, dishId: string): void {
   requirePhase(table, "eating");
   requireActive(actor);
   const account = platterAccountForParticipant(table, actor.id);
   if (!account.cleared) {
-    throw new GameError("Clear your central platter account before eating.", "account_not_cleared");
+    throw new GameError("Return all promise cards before eating.", "account_not_cleared");
   }
   const dish = table.dishes[dishId];
   if (!dish) {
@@ -1553,11 +1712,23 @@ function moveAssetToInventory(asset: ResolvedPlatterAsset, participantId: string
   asset.value.location = { type: "inventory", participantId };
 }
 
+function moveAssetToOfferLock(asset: ResolvedPlatterAsset, offerId: string): void {
+  if (asset.kind === "voucher") {
+    asset.value.location = { type: "offer_lock", offerId };
+    return;
+  }
+  asset.value.location = { type: "offer_lock", offerId };
+}
+
 function platterAssetLabel(asset: ResolvedPlatterAsset): string {
   if (asset.kind === "voucher") {
     return voucherCardLabel(asset.value);
   }
   return dishPartLabel(asset.value);
+}
+
+function assetListLabel(table: Table, assetRefs: PlatterAssetRef[]): string {
+  return assetRefs.map((assetRef) => platterAssetLabel(requirePlatterAsset(table, assetRef))).join(", ");
 }
 
 function dishPartLabel(part: DishPart): string {
@@ -1589,19 +1760,46 @@ export function offerableUnreservedIngredientQty(table: Table, participantId: st
       (offer) =>
         offer.status === "pending" &&
         offer.toParticipantId === participantId &&
-        offer.requested.ingredientId === ingredientId
+        offer.requestedAsset?.kind === "voucher" &&
+        offer.requestedAsset.ingredientId === ingredientId
     )
-    .reduce((total, offer) => total + offer.requested.quantity, 0);
+    .reduce((total, offer) => total + (offer.requestedAsset?.quantity ?? 0), 0);
   return Math.max(0, rawAvailable - pendingRequested);
 }
 
-function releaseOfferedVouchers(table: Table, offer: Offer): void {
-  for (const voucherId of offer.offeredVoucherIds) {
-    const voucher = table.vouchers[voucherId];
-    if (voucher?.location.type === "offer_lock" && voucher.location.offerId === offer.id) {
-      voucher.location = { type: "hand", participantId: offer.fromParticipantId };
+function offeredAssetsStillLockedAndBacked(table: Table, offer: Offer): boolean {
+  for (const assetRef of offer.offeredAssets) {
+    const asset = requirePlatterAsset(table, assetRef);
+    if (asset.kind === "voucher") {
+      if (asset.value.location.type !== "offer_lock" || asset.value.location.offerId !== offer.id || !voucherIsBackedByStock(table, asset.value)) {
+        return false;
+      }
+      continue;
+    }
+    if (asset.value.location.type !== "offer_lock" || asset.value.location.offerId !== offer.id) {
+      return false;
     }
   }
+  return true;
+}
+
+function releaseOfferedAssets(table: Table, offer: Offer): void {
+  for (const assetRef of offer.offeredAssets) {
+    const asset = requirePlatterAsset(table, assetRef);
+    if (asset.kind === "voucher") {
+      if (asset.value.location.type === "offer_lock" && asset.value.location.offerId === offer.id) {
+        asset.value.location = { type: "hand", participantId: offer.fromParticipantId };
+      }
+      continue;
+    }
+    if (asset.value.location.type === "offer_lock" && asset.value.location.offerId === offer.id) {
+      asset.value.location = { type: "inventory", participantId: offer.fromParticipantId };
+    }
+  }
+}
+
+function releaseOfferedVouchers(table: Table, offer: Offer): void {
+  releaseOfferedAssets(table, offer);
 }
 
 function enterSettlementPhase(table: Table): void {

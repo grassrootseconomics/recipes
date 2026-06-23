@@ -98,7 +98,7 @@ Manual smoke path:
 4. Use the seat grid to edit seat names and switch available bot seats between `Player` and `Bot` before start.
 5. Click `Start Cooking`.
 6. Watch the automatic opening offerings fill the Common Basket.
-7. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem / Pass`, dish totals, transaction history, `Prepare Dish`, `End Game`, and dish bites.
+7. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem / Pass` with automatic dish preparation, dish totals, transaction history, `End Game`, and dish bites.
 
 To test multiple humans locally, open another Godot client and join using the invite code.
 

@@ -25,7 +25,8 @@
 - [x] Add host-controlled multi-seat support with participant identity separated from controller identity.
 - [x] Use round-robin as the single online/offline turn model and remove market-mode setup controls.
 - [x] Add UI controls for switching controlled seats and showing the active round-robin turn.
-- [x] Add batch `Redeem Cards and Pass Turn` action for cooking turns in online and offline rules.
+- [x] Add batch `Redeem / Pass` action for cooking turns in online and offline rules.
+- [x] Automatically prepare a completed recipe during `Redeem / Pass` before advancing the turn.
 - [x] Align bot cooking turns so non-ending swaps, offers, and preparation happen before one batch turn-ending redemption, with duplicate surplus cards tradable by count.
 - [x] Add recipe generation tooling for one committed 8-player ingredient set with four recipes per ingredient.
 - [x] Fix the current playable MVP table size at exactly 8 active seats.
@@ -33,6 +34,7 @@
 - [x] Allow offline and online hosts to take over prefilled bot seats before start while preserving filtered per-seat views.
 - [x] Add editable pre-start seat grid with ingredient image, name field, and Player/Bot toggle for all 8 seats.
 - [x] Automatically contribute one opening promise card from every active player into the Common Basket at start.
+- [x] Require full settlement before eating: one own card in the Common Basket, six own cards in hand, no foreign cards held, and no own cards held by others.
 - [ ] Add polished visual assets and table layout inspired by potluck dinners and cooking apps.
 - [x] Add structured offer creation/acceptance flows.
 - [x] Unify offer popups around ingredient-card visuals and public recipe-help summaries for the other cook.

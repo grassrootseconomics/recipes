@@ -24,6 +24,26 @@ const aggregateAssetRefSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("dish_part"), dishId: z.string(), makerParticipantId: z.string().optional() })
 ]);
 
+const exactAssetRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("voucher"), id: z.string() }),
+  z.object({ kind: z.literal("dish_part"), id: z.string() })
+]);
+
+const offerAssetRequestSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("voucher"),
+    ingredientId: z.string(),
+    ownerParticipantId: z.string().optional(),
+    quantity: z.number().int().positive()
+  }),
+  z.object({
+    kind: z.literal("dish_part"),
+    dishId: z.string(),
+    makerParticipantId: z.string().optional(),
+    quantity: z.number().int().positive()
+  })
+]);
+
 const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("leave_table") }),
   z.object({ type: z.literal("close_table") }),
@@ -52,8 +72,8 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("platter_asset_swap"),
-    give: z.object({ kind: z.enum(["voucher", "dish_part"]), id: z.string() }),
-    take: z.object({ kind: z.enum(["voucher", "dish_part"]), id: z.string() })
+    give: exactAssetRefSchema,
+    take: exactAssetRefSchema
   }),
   z.object({
     type: z.literal("platter_asset_swap_aggregate"),
@@ -64,14 +84,17 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("create_offer"),
     toParticipantId: z.string(),
-    offeredVoucherIds: z.array(z.string()).min(1),
-    requested: z.object({ ingredientId: z.string(), quantity: z.number().int().positive() })
+    offeredVoucherIds: z.array(z.string()).min(1).optional(),
+    offeredAssets: z.array(exactAssetRefSchema).min(1).optional(),
+    requested: z.object({ ingredientId: z.string(), quantity: z.number().int().positive() }).optional(),
+    requestedAsset: offerAssetRequestSchema.optional()
   }),
   z.object({
     type: z.literal("respond_offer"),
     offerId: z.string(),
     response: z.enum(["accept", "refuse"]),
-    voucherIds: z.array(z.string()).optional()
+    voucherIds: z.array(z.string()).optional(),
+    assets: z.array(exactAssetRefSchema).optional()
   }),
   z.object({ type: z.literal("cancel_offer"), offerId: z.string() }),
   z.object({ type: z.literal("place_voucher"), voucherId: z.string(), requirementId: z.string() }),

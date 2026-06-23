@@ -124,6 +124,10 @@ function publicParticipant(table: Table, participant: Participant): PublicPartic
     realIngredientStock: participant.realIngredientStock,
     offerableOwnIngredientQty: participant.ingredientId ? offerableUnreservedIngredientQty(table, participant.id, participant.ingredientId) : 0,
     ownCardsInPlatter: account.ownCardsInPlatter,
+    ownCardsInHand: account.ownCardsInHand,
+    foreignCardsInHand: account.foreignCardsInHand,
+    ownCardsInOtherHands: account.ownCardsInOtherHands,
+    expectedOwnCardsInHand: account.expectedOwnCardsInHand,
     platterDebt: account.platterDebt,
     platterShortfall: account.platterShortfall,
     cleared: account.cleared,
@@ -193,13 +197,30 @@ function cloneRecipe(recipe?: Recipe): Recipe | undefined {
 function cloneOffer(table: Table, offer: Offer): OfferSnapshot {
   return {
     ...offer,
+    offeredAssets: offer.offeredAssets.map((asset) => ({ ...asset })),
     offeredVoucherIds: [...offer.offeredVoucherIds],
     offeredVouchers: offer.offeredVoucherIds
       .map((voucherId) => table.vouchers[voucherId])
       .filter((voucher): voucher is Voucher => Boolean(voucher))
       .map(cloneVoucher),
+    offeredDishParts: offer.offeredAssets
+      .filter((asset) => asset.kind === "dish_part")
+      .map((asset) => table.dishParts[asset.id])
+      .filter((part): part is DishPart => Boolean(part))
+      .map(cloneDishPart),
+    requestedAsset: offer.requestedAsset ? { ...offer.requestedAsset } : undefined,
+    requested: offer.requested ? { ...offer.requested } : undefined,
+    acceptedAssets: offer.acceptedAssets.map((asset) => ({ ...asset })),
     acceptedVoucherIds: [...offer.acceptedVoucherIds],
-    requested: { ...offer.requested }
+    acceptedVouchers: offer.acceptedVoucherIds
+      .map((voucherId) => table.vouchers[voucherId])
+      .filter((voucher): voucher is Voucher => Boolean(voucher))
+      .map(cloneVoucher),
+    acceptedDishParts: offer.acceptedAssets
+      .filter((asset) => asset.kind === "dish_part")
+      .map((asset) => table.dishParts[asset.id])
+      .filter((part): part is DishPart => Boolean(part))
+      .map(cloneDishPart)
   };
 }
 

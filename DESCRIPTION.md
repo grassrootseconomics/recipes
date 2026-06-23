@@ -14,9 +14,9 @@ Every recipe has 6 item slots and uses 4, 5, or 6 distinct ingredients. Valid re
 
 The player’s own ingredient must appear in each of their recipes. Every required ingredient must belong to an active participant at the table, so requested recipe ingredients are physically available through that ingredient owner’s vouchers. The catalog contains four recipes per ingredient-set participant: one initial recipe and three followups. When a player prepares a dish, their next recipe must also be generated from ingredients currently active at the table.
 
-A player places matching vouchers into recipe requirements. Placed vouchers are locked. The player then redeems placed vouchers. Redeeming a voucher closes one needed unit of that recipe requirement, decrements the voucher issuer's real ingredient stock by one, and returns the voucher card to the issuer's hand while stock remains. In normal player UI, cooking turns use `Redeem Cards and Pass Turn`: the authoritative rules redeem every useful voucher that was in the acting player's hand when clicked, at most once per voucher, then end that player's turn. A requirement group is complete when its delivered quantity equals its required quantity.
+A player places matching vouchers into recipe requirements. Placed vouchers are locked. The player then redeems placed vouchers. Redeeming a voucher closes one needed unit of that recipe requirement, decrements the voucher issuer's real ingredient stock by one, and returns the voucher card to the issuer's hand while stock remains. In normal player UI, cooking turns use `Redeem / Pass`: the authoritative rules redeem every useful voucher that was in the acting player's hand when clicked, at most once per voucher. If those redemptions complete the recipe, the dish is prepared automatically before the turn passes. A requirement group is complete when its delivered quantity equals its required quantity.
 
-When every requirement group is complete, the player can click `Prepare`. The ingredients on their final plate transform into a finished dish with exactly 10 food parts. The part name comes from the recipe catalog, such as slices, cups, scoops, pieces, portions, or servings. These parts begin in the maker's inventory, and the player’s dish count increases by one. The player then receives a new recipe while keeping the same ingredient identity.
+When every requirement group is complete through `Redeem / Pass`, the ingredients on the final plate transform into a finished dish with exactly 10 food parts. The part name comes from the recipe catalog, such as slices, cups, scoops, pieces, portions, or servings. These parts begin in the maker's inventory, and the player’s dish count increases by one. If the player is still below the dish goal, they receive a new recipe while keeping the same ingredient identity.
 
 The table should show each active player’s finished dish count and the names of the dishes they have prepared.
 
@@ -30,7 +30,7 @@ Players can also trade directly with each other. A player zooms out to see the f
 
 Players can only be asked for their own ingredient while they still have at least one available voucher for that ingredient in hand and at least one real unit of stock remaining. If a pending offer asks for an ingredient that the recipient no longer has available, the server automatically refuses that offer and returns the offered card to the sender. Clients should not show players with zero available own-ingredient vouchers or zero real stock as offer targets.
 
-After all active players reach the dish goal, the table enters settlement unless everyone is already clear. During settlement, voucher cards and finished dish parts are both 1:1 value assets. A player may give any held card or food part to the platter and take any visible card or food part from the platter. Final clearance requires each active player to have exactly one of their own voucher cards in the central platter. A player with more than one own card in the platter has platter debt; a player with zero own cards in the platter has platter shortfall. Only own cards in the platter count toward clearance.
+After all active players reach the dish goal, the table enters settlement unless everyone is already clear. During settlement, voucher cards and finished dish parts are both 1:1 value assets. A player may give any held card or food part to the platter and take any visible card or food part from the platter. Final clearance requires each active player to have exactly one of their own voucher cards in the central platter, exactly six of their own voucher cards in their own hand, and zero other players' voucher cards in their hand. This also means none of that player's cards can remain in another player's hand. A player with more than one own card in the platter has platter debt; a player with zero own cards in the platter has platter shortfall. Only own cards in the platter count toward platter debt and shortfall, but eating remains locked until all promise cards are fully returned to their owners.
 
 Successful table transactions are public history entries with: turn number, player name, action, counterparty, item out, and item back. MVP transaction actions are `Deposit`, `Swap`, `Settlement Swap`, `Exchange`, `Redeem`, `Prepare`, `Eat`, and `Pass Turn`.
 
@@ -46,7 +46,7 @@ Bot types are:
 
 Bots see only legal player information: their own hand, their own recipe, public current-recipe help summaries for other players, the visible central platter, public dish counts, and offers involving them. Bots cannot inspect hidden hands or full hidden recipe state.
 
-During a cooking turn, bots may make useful non-ending moves first: swap with the central platter when it helps their current recipe, respond to offers, prepare a completed dish, and create a legal structured offer. Bots must protect only the number of useful cards still needed for the current recipe, so duplicate cards beyond outstanding recipe demand are true surplus and can be traded before redemption. When a bot reaches the redemption step, it uses the same batch `Redeem Cards and Pass Turn` behavior as a human: every currently redeemable useful card is redeemed with the authoritative rules, then the bot's turn ends. Bot behavior should be deterministic from the table seed.
+During a cooking turn, bots may make useful non-ending moves first: swap with the central platter when it helps their current recipe, respond to offers, and create a legal structured offer. Bots must protect only the number of useful cards still needed for the current recipe, so duplicate cards beyond outstanding recipe demand are true surplus and can be traded before redemption. When a bot reaches the redemption step, it uses the same batch `Redeem / Pass` behavior as a human: every currently redeemable useful card is redeemed with the authoritative rules, a completed recipe is prepared automatically, and then the bot's turn ends. Bot behavior should be deterministic from the table seed.
 
 If an active human player leaves an online table, their seat stays reserved for that same reconnect token so they can come back. No new player can claim an already-started active seat. The host may manually switch a connected or disconnected active player seat to a `mixed` bot at any time. This conversion should require an explicit confirmation in the client because the original player can no longer reclaim that seat after conversion.
 
@@ -72,7 +72,7 @@ Host-controlled seats must not weaken hidden-information rules. The host can act
 
 Recipes uses one turn model for both online and offline play: active participants take turns in a circle using deterministic table order.
 
-Only the current active seat can perform turn-gated gameplay actions. The current seat keeps the turn across swaps, offers, preparation, settlement, and eating until they explicitly pass. During cooking, `Redeem / Pass` redeems all useful held cards first, plays those animations, and then advances to the next active seat.
+Only the current active seat can perform turn-gated gameplay actions. The current seat keeps the turn across swaps, offers, settlement, and eating until they explicitly pass. During cooking, `Redeem / Pass` redeems all useful held cards first, automatically prepares the dish if the recipe becomes complete, plays those animations, and then advances to the next active seat.
 
 Online multiplayer must keep active turn and turn advancement server-owned. Offline mode mirrors the same turn semantics locally.
 
@@ -82,7 +82,7 @@ The MVP dish goal is fixed at 4 dishes per active player. Starting stock is fixe
 
 The MVP does not expose a timer in the normal client setup flow. The host can pause or resume the game for everyone. While paused, gameplay actions and bot turns stop. Only the host can stop the game for everyone. When the host stops the game, the player with the most prepared dishes wins.
 
-Winning can also mean that all active players have reached the configured dish goal. Players that have made an equal number of dishes can tie as winners. Before eating, the table must settle the central platter accounts. Eating begins only when every active player has exactly one own card in the platter and no food parts remain in the platter. A cleared player may eat food parts they hold in their own inventory. Bots should settle accounts and eat held food parts deterministically. The game is fully complete when all prepared food parts have been eaten.
+Winning can also mean that all active players have reached the configured dish goal. Players that have made an equal number of dishes can tie as winners. Before eating, the table must settle the central platter accounts and all outstanding promise-card debts. Eating begins only when every active player has exactly one own card in the platter, exactly six own cards in their own hand, no other players' cards in their hand, and no food parts remain in the platter. A cleared player may eat food parts they hold in their own inventory. Bots should settle accounts, return outstanding promise cards through food-piece swaps, and eat held food parts deterministically. The game is fully complete when all prepared food parts have been eaten.
 
 ## Visibility Rules
 
@@ -139,7 +139,7 @@ The server should include focused unit and integration tests for:
 - recipe requirement ingredients are owned by active table participants.
 - new recipes after preparing a dish obey the same table-valid ingredient and quantity rules.
 - all quantities must be redeemed before preparation.
-- `Redeem Cards and Pass Turn` redeems each useful initially held voucher at most once, records redemptions, then advances the round-robin turn.
+- `Redeem / Pass` redeems each useful initially held voucher at most once, records redemptions, automatically prepares a completed recipe, then advances the round-robin turn.
 - total vouchers per ingredient owner always equals 7.
 - active vouchers match physical ingredient availability.
 - default stock is 40 real ingredient units per active ingredient owner.
@@ -167,6 +167,7 @@ The server should include focused unit and integration tests for:
 - prepared dishes create exactly 10 named food parts from the recipe catalog.
 - settlement swaps allow any held card or food part to be swapped 1:1 with any platter card or food part.
 - platter clearance requires exactly one own card in the platter for every active player.
+- full settlement clearance also requires each active player to hold exactly six own cards, hold zero foreign cards, and have zero own cards held by other players before eating.
 - players cannot eat until cleared, and can only eat food parts they hold.
 - generated client fixtures match the server recipe catalog and shared rule constants.
 - offline smoke/parity coverage exercises the same intent names, fixture data, hidden-information boundaries, turn mode defaults, bot-seat takeover, deposits, swaps, offers, redemption, preparation, settlement, eating, and fixed stock/dish-goal assumptions as online play.
