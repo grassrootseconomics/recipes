@@ -18,6 +18,7 @@ import {
   MIN_ACTIVE_PARTICIPANTS,
   MIN_STOCK_PER_INGREDIENT,
   MIN_TARGET_DISH_COUNT,
+  OPENING_OFFERINGS_PER_PLAYER,
   REAL_UNITS_PER_INGREDIENT,
   VOUCHERS_PER_INGREDIENT
 } from "../src/constants.js";
@@ -58,6 +59,7 @@ function buildClientGameConfig() {
     minActiveParticipants: MIN_ACTIVE_PARTICIPANTS,
     maxActiveParticipants: MAX_ACTIVE_PARTICIPANTS,
     vouchersPerIngredient: VOUCHERS_PER_INGREDIENT,
+    openingOfferingsPerPlayer: OPENING_OFFERINGS_PER_PLAYER,
     realUnitsPerIngredient: REAL_UNITS_PER_INGREDIENT,
     minStockPerIngredient: MIN_STOCK_PER_INGREDIENT,
     maxStockPerIngredient: MAX_STOCK_PER_INGREDIENT,
@@ -97,7 +99,8 @@ function buildClientGameConfig() {
       "redeem_from_hand",
       "redeem_all_and_pass_turn",
       "prepare",
-      "bite"
+      "bite",
+      "bite_all"
     ]
   };
 }
@@ -148,6 +151,8 @@ function buildSpreadsheetTables(): string {
     recipes_per_ingredient: configuration.recipesPerIngredient,
     total_recipes: configuration.playerCount * RECIPE_VARIANT_COUNT,
     required_items_per_recipe: configuration.requiredItemsPerRecipe,
+    opening_offerings_per_player: OPENING_OFFERINGS_PER_PLAYER,
+    vouchers_per_ingredient: VOUCHERS_PER_INGREDIENT,
     real_units_per_ingredient: REAL_UNITS_PER_INGREDIENT,
     max_catalog_demand_per_ingredient: maxDemandForConfiguration(configuration.configurationId),
     allowed_distinct_ingredient_counts: RECIPE_DISTINCT_COUNTS.join(", ")

@@ -54,7 +54,7 @@ func _smoke_controlled_seats(store: Node) -> void:
 	_require(int(start_snapshot.get("targetDishCount", 0)) == 1, "dish goal reflected")
 	_require(start_snapshot.get("participants", []).size() == 8, "eight participants")
 	_require(str(start_snapshot.get("phase", "")) == "playing", "start automatically enters play after offerings")
-	_require(start_snapshot.get("platter", []).size() == 8, "platter has eight initial offerings")
+	_require(start_snapshot.get("platter", []).size() == 16, "platter has sixteen initial offerings")
 	_require(start_snapshot.get("ownHand", []).size() == 6, "host starts with six cards after offering")
 
 	var playing_snapshot: Dictionary = store.latest_snapshot
@@ -75,13 +75,14 @@ func _smoke_bots(store: Node) -> void:
 
 	var after_deposit: Dictionary = store.latest_snapshot
 	_require(str(after_deposit.get("phase", "")) == "playing", "automatic offerings enter play")
-	_require(after_deposit.get("platter", []).size() == 8, "bot table has eight offerings")
+	_require(after_deposit.get("platter", []).size() == 16, "bot table has sixteen offerings")
 	var bot_names: Array[String] = []
 	for participant in after_deposit.get("participants", []):
 		if str(participant.get("kind", "")) == "bot":
 			_require(bool(participant.get("depositedInitial", false)), "bot deposited")
+			_require(int(participant.get("openingOfferingsCount", 0)) == 2, "bot deposited two offerings")
 			bot_names.append(str(participant.get("name", "")))
-	_require(bot_names == ["Yan_b", "Mia_b", "Leo_b", "Ava_b"], "offline bot names use legit short _b names")
+	_require(bot_names == ["Ava_b", "Leo_b", "Mia_b", "Yan_b"], "offline bot names use legit short _b names")
 
 
 func _active_ids(snapshot: Dictionary) -> Array:

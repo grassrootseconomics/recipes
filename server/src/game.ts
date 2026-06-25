@@ -8,6 +8,7 @@ import {
   MIN_TARGET_DISH_COUNT,
   MIN_ACTIVE_PARTICIPANTS,
   MIN_STOCK_PER_INGREDIENT,
+  OPENING_OFFERINGS_PER_PLAYER,
   REAL_UNITS_PER_INGREDIENT,
   VOUCHERS_PER_INGREDIENT
 } from "./constants.js";
@@ -16,6 +17,7 @@ import { generateRecipe } from "./recipes.js";
 import type {
   AggregatePlatterAssetRef,
   BotType,
+  Dish,
   DishPart,
   Intent,
   Offer,
@@ -53,13 +55,13 @@ const GENERATED_NAMES = [
 ] as const;
 
 const GENERATED_BOT_NAMES = [
-  "Ben",
+  "Jim",
   "Nia",
   "Luc",
-  "Yan",
-  "Mia",
-  "Leo",
   "Ava",
+  "Leo",
+  "Mia",
+  "Yan",
   "Eli",
   "Noa",
   "Sam",
@@ -86,7 +88,7 @@ export class GameError extends Error {
   }
 }
 
-export function createEmptyTable(code: string, seed: string, hostName: string, seatToken: string): Table {
+export function createEmptyTable(code: string, seed: string, hostName: string, seatToken: string, isPublic = true): Table {
   const host: Participant = {
     id: "p1",
     name: resolveHumanName([], hostName, 1),
@@ -96,12 +98,14 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
     seatToken,
     dishCount: 0,
     depositedInitial: false,
+    openingOfferingsCount: 0,
     connected: true
   };
 
   const table: Table = {
     code,
     seed,
+    isPublic,
     version: 0,
     phase: "lobby",
     paused: false,
@@ -114,6 +118,7 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
     dishes: {},
     dishParts: {},
     transactionHistory: [],
+    scarcityPressureByIngredient: {},
     winnerParticipantIds: [],
     targetDishCount: DEFAULT_TARGET_DISH_COUNT,
     stockPerIngredient: REAL_UNITS_PER_INGREDIENT,
@@ -122,6 +127,7 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
     nextId: 2
   };
   fillOpenBotSeats(table);
+  assignRandomLobbyIngredients(table);
   return table;
 }
 
@@ -160,6 +166,55 @@ function fillOpenBotSeats(table: Table): void {
   }
 }
 
+function assignRandomLobbyIngredients(table: Table): void {
+  const active = activeParticipants(table);
+  const ingredientOrder = shuffledIngredientsForTable(table, active.length);
+  active.forEach((participant, index) => {
+    const ingredient = ingredientOrder[index];
+    if (ingredient) {
+      participant.ingredientId = ingredient.id;
+    }
+  });
+}
+
+function ensureLobbyIngredientAssignments(table: Table): void {
+  const active = activeParticipants(table);
+  if (active.length < MIN_ACTIVE_PARTICIPANTS || active.length > MAX_ACTIVE_PARTICIPANTS) {
+    return;
+  }
+  const allowedIngredientIds = new Set(ingredientsForPlayerCount(active.length).map((ingredient) => ingredient.id));
+  const assignedIngredientIds = new Set<string>();
+  for (const participant of active) {
+    if (!participant.ingredientId || !allowedIngredientIds.has(participant.ingredientId) || assignedIngredientIds.has(participant.ingredientId)) {
+      assignRandomLobbyIngredients(table);
+      return;
+    }
+    assignedIngredientIds.add(participant.ingredientId);
+  }
+}
+
+function shuffledIngredientsForTable(table: Table, activeCount: number) {
+  return deterministicShuffle(ingredientsForPlayerCount(activeCount), `${table.seed}:ingredient-assignment`, (ingredient) => ingredient.id);
+}
+
+function deterministicShuffle<T>(items: readonly T[], seed: string, keyForItem: (item: T) => string = (item) => String(item)): T[] {
+  return [...items].sort((left, right) => {
+    const leftKey = keyForItem(left);
+    const rightKey = keyForItem(right);
+    const rank = hashString(`${seed}:${leftKey}`) - hashString(`${seed}:${rightKey}`);
+    return rank === 0 ? leftKey.localeCompare(rightKey) : rank;
+  });
+}
+
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 function firstAvailableBotSeat(table: Table): Participant | undefined {
   return table.participantOrder
     .map((participantId) => table.participants[participantId])
@@ -184,6 +239,7 @@ function claimBotSeat(table: Table, participant: Participant, name: string, seat
   participant.connected = true;
   participant.dishCount = 0;
   participant.depositedInitial = false;
+  participant.openingOfferingsCount = 0;
   delete participant.botType;
   if (controllerParticipantId) {
     participant.controllerParticipantId = controllerParticipantId;
@@ -234,6 +290,9 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
         break;
       case "reset_table":
         resetTable(table, actor);
+        break;
+      case "set_table_visibility":
+        setTableVisibility(table, actor, intent.isPublic);
         break;
       case "set_role":
         setRole(table, actor, intent.participantId, intent.role);
@@ -316,10 +375,16 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       case "bite":
         biteDish(table, actor, intent.dishId);
         break;
+      case "bite_all":
+        biteAllHeldFoodParts(table, actor);
+        break;
       default:
         assertNever(intent);
     }
     autoRefuseUnavailableOffers(table);
+    if (table.phase === "settlement") {
+      advanceSettlementIfReady(table);
+    }
     if (shouldAdvanceTurnAfterIntent(table, intent)) {
       advanceTurn(table, actor.id);
     }
@@ -418,7 +483,7 @@ export function platterAccountForParticipant(table: Table, participantId: string
       voucher.location.type === "hand" &&
       voucher.location.participantId !== participantId
   ).length;
-  const expectedOwnCardsInHand = VOUCHERS_PER_INGREDIENT - 1;
+  const expectedOwnCardsInHand = VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER;
   return {
     participantId,
     ownCardsInPlatter,
@@ -426,9 +491,9 @@ export function platterAccountForParticipant(table: Table, participantId: string
     foreignCardsInHand,
     ownCardsInOtherHands,
     expectedOwnCardsInHand,
-    platterDebt: Math.max(0, ownCardsInPlatter - 1),
-    platterShortfall: Math.max(0, 1 - ownCardsInPlatter),
-    cleared: ownCardsInPlatter === 1 && ownCardsInHand === expectedOwnCardsInHand && foreignCardsInHand === 0
+    platterDebt: Math.max(0, ownCardsInPlatter - OPENING_OFFERINGS_PER_PLAYER),
+    platterShortfall: Math.max(0, OPENING_OFFERINGS_PER_PLAYER - ownCardsInPlatter),
+    cleared: ownCardsInPlatter === OPENING_OFFERINGS_PER_PLAYER && ownCardsInHand === expectedOwnCardsInHand && foreignCardsInHand === 0
   };
 }
 
@@ -600,6 +665,7 @@ function createParticipant(
     botType,
     dishCount: 0,
     depositedInitial: false,
+    openingOfferingsCount: 0,
     connected: kind === "human"
   };
 }
@@ -636,15 +702,24 @@ function resetTable(table: Table, actor: Participant): void {
   table.dishes = {};
   table.dishParts = {};
   table.transactionHistory = [];
+  table.scarcityPressureByIngredient = {};
   table.winnerParticipantIds = [];
   table.currentTurnParticipantId = undefined;
   clearTimerRuntime(table);
   for (const participant of Object.values(table.participants)) {
     participant.dishCount = 0;
     participant.depositedInitial = false;
+    participant.openingOfferingsCount = 0;
     delete participant.ingredientId;
     delete participant.realIngredientStock;
   }
+  assignRandomLobbyIngredients(table);
+}
+
+function setTableVisibility(table: Table, actor: Participant, isPublic: boolean): void {
+  requireHost(actor);
+  requireLobby(table);
+  table.isPublic = isPublic;
 }
 
 function setRole(table: Table, actor: Participant, participantId: string, role: ParticipantRole): void {
@@ -660,6 +735,7 @@ function setRole(table: Table, actor: Participant, participantId: string, role: 
     participant.role = "witness";
     throw new GameError(`At most ${MAX_ACTIVE_PARTICIPANTS} active participants are allowed.`, "too_many_active");
   }
+  ensureLobbyIngredientAssignments(table);
 }
 
 function renameParticipant(table: Table, actor: Participant, participantId: string, name: string): void {
@@ -696,6 +772,7 @@ function addBot(table: Table, actor: Participant, name = "Bot", botType: BotType
   );
   table.participants[participant.id] = participant;
   table.participantOrder.push(participant.id);
+  ensureLobbyIngredientAssignments(table);
   return participant;
 }
 
@@ -721,6 +798,7 @@ function addControlledSeat(table: Table, actor: Participant, name = "Player", pa
   participant.connected = true;
   table.participants[participant.id] = participant;
   table.participantOrder.push(participant.id);
+  ensureLobbyIngredientAssignments(table);
   return participant;
 }
 
@@ -820,6 +898,7 @@ function startTable(table: Table, actor: Participant): void {
       "stock_too_low"
     );
   }
+  ensureLobbyIngredientAssignments(table);
 
   table.phase = "deposit";
   table.paused = false;
@@ -829,6 +908,7 @@ function startTable(table: Table, actor: Participant): void {
   table.dishes = {};
   table.dishParts = {};
   table.transactionHistory = [];
+  table.scarcityPressureByIngredient = {};
   table.winnerParticipantIds = [];
   if (table.timer) {
     const nowMs = Date.now();
@@ -838,16 +918,15 @@ function startTable(table: Table, actor: Participant): void {
     delete table.timer.expiredAtMs;
   }
 
-  const ingredientOrder = ingredientsForPlayerCount(active.length);
-  active.forEach((participant, index) => {
-    const ingredient = ingredientOrder[index];
-    if (!ingredient) {
+  const allowedIngredientIds = new Set(ingredientsForPlayerCount(active.length).map((ingredient) => ingredient.id));
+  active.forEach((participant) => {
+    if (!participant.ingredientId || !allowedIngredientIds.has(participant.ingredientId)) {
       throw new GameError("Missing ingredient assignment.", "ingredient_assignment_failed");
     }
-    participant.ingredientId = ingredient.id;
     participant.realIngredientStock = table.stockPerIngredient;
     participant.dishCount = 0;
     participant.depositedInitial = false;
+    participant.openingOfferingsCount = 0;
     createParticipantVouchers(table, participant);
   });
 
@@ -861,14 +940,16 @@ function startTable(table: Table, actor: Participant): void {
 }
 
 function depositInitialOffer(table: Table, participant: Participant): void {
-  const voucher = Object.values(table.vouchers)
-    .filter((candidate) => candidate.location.type === "hand" && candidate.location.participantId === participant.id)
-    .filter((candidate) => candidate.ingredientId === participant.ingredientId)
-    .sort((left, right) => left.id.localeCompare(right.id))[0];
-  if (!voucher) {
-    throw new GameError("No backed initial offering is available.", "voucher_not_in_hand");
+  for (let count = participant.openingOfferingsCount; count < OPENING_OFFERINGS_PER_PLAYER; count += 1) {
+    const voucher = Object.values(table.vouchers)
+      .filter((candidate) => candidate.location.type === "hand" && candidate.location.participantId === participant.id)
+      .filter((candidate) => candidate.ingredientId === participant.ingredientId)
+      .sort((left, right) => left.id.localeCompare(right.id))[0];
+    if (!voucher) {
+      throw new GameError("No backed initial offering is available.", "voucher_not_in_hand");
+    }
+    depositToPlatter(table, participant, voucher.id);
   }
-  depositToPlatter(table, participant, voucher.id);
 }
 
 function stopTable(table: Table, actor: Participant): void {
@@ -981,14 +1062,15 @@ function clearTimerRuntime(table: Table): void {
 function depositToPlatter(table: Table, actor: Participant, voucherId: string): void {
   requirePhase(table, "deposit");
   requireActive(actor);
-  if (actor.depositedInitial) {
+  if (actor.openingOfferingsCount >= OPENING_OFFERINGS_PER_PLAYER) {
     throw new GameError("Participant already deposited.", "already_deposited");
   }
   const voucher = requireVoucher(table, voucherId);
   requireVoucherInHand(voucher, actor.id);
   requireVoucherBackedByStock(table, voucher);
   voucher.location = { type: "platter" };
-  actor.depositedInitial = true;
+  actor.openingOfferingsCount += 1;
+  actor.depositedInitial = actor.openingOfferingsCount >= OPENING_OFFERINGS_PER_PLAYER;
   recordTransaction(table, actor, "Deposit", "Platter", ingredientName(voucher.ingredientId), "None");
   if (activeParticipants(table).every((participant) => participant.depositedInitial)) {
     table.phase = "playing";
@@ -1094,9 +1176,13 @@ function createOffer(
   offeredAssets?: PlatterAssetRef[],
   requestedAsset?: OfferAssetRequest
 ): Offer {
-  requirePhase(table, "playing");
+  if (table.phase !== "playing" && table.phase !== "settlement") {
+    throw new GameError("Action requires phase playing or settlement.", "invalid_phase");
+  }
   requireActive(actor);
-  ensureBotCanUseBarter(actor);
+  if (table.phase === "playing") {
+    ensureBotCanUseBarter(actor);
+  }
   if (toParticipantId === actor.id) {
     throw new GameError("Cannot trade with yourself.", "invalid_offer");
   }
@@ -1118,6 +1204,9 @@ function createOffer(
   for (const asset of resolvedOfferedAssets) {
     requireAssetInInventory(asset, actor.id);
     requireResolvedVoucherBackedByStock(table, asset);
+  }
+  if (requestsOfferedVoucherResource(resolvedOfferedAssets, normalizedRequestedAsset)) {
+    throw new GameError("Offer must exchange different promise-card resources.", "invalid_offer");
   }
 
   const offerId = `offer_${table.nextId}`;
@@ -1142,6 +1231,18 @@ function createOffer(
   return offer;
 }
 
+function requestsOfferedVoucherResource(offeredAssets: ResolvedPlatterAsset[], requested: OfferAssetRequest): boolean {
+  if (requested.kind !== "voucher") {
+    return false;
+  }
+  return offeredAssets.some(
+    (asset) =>
+      asset.kind === "voucher" &&
+      asset.value.ingredientId === requested.ingredientId &&
+      (!requested.ownerParticipantId || asset.value.ownerParticipantId === requested.ownerParticipantId)
+  );
+}
+
 function respondOffer(
   table: Table,
   actor: Participant,
@@ -1150,9 +1251,13 @@ function respondOffer(
   voucherIds: string[],
   acceptedAssets?: PlatterAssetRef[]
 ): void {
-  requirePhase(table, "playing");
+  if (table.phase !== "playing" && table.phase !== "settlement") {
+    throw new GameError("Action requires phase playing or settlement.", "invalid_phase");
+  }
   requireActive(actor);
-  ensureBotCanUseBarter(actor);
+  if (table.phase === "playing") {
+    ensureBotCanUseBarter(actor);
+  }
   const offer = requireOffer(table, offerId);
   if (offer.status !== "pending") {
     throw new GameError("Offer is not pending.", "offer_not_pending");
@@ -1205,7 +1310,9 @@ function respondOffer(
 }
 
 function cancelOffer(table: Table, actor: Participant, offerId: string): void {
-  requirePhase(table, "playing");
+  if (table.phase !== "playing" && table.phase !== "settlement") {
+    throw new GameError("Action requires phase playing or settlement.", "invalid_phase");
+  }
   const offer = requireOffer(table, offerId);
   if (offer.status !== "pending") {
     throw new GameError("Offer is not pending.", "offer_not_pending");
@@ -1261,8 +1368,7 @@ function validateOfferAssetRequest(table: Table, recipient: Participant, request
     }
     return;
   }
-  const dish = table.dishes[requested.dishId];
-  if (!dish) {
+  if (requested.dishId && !table.dishes[requested.dishId]) {
     throw new GameError("Requested dish is unknown.", "invalid_offer");
   }
   if (requested.makerParticipantId) {
@@ -1290,7 +1396,7 @@ function offerableAssetQty(table: Table, participantId: string, requested: Offer
   }
   return Object.values(table.dishParts ?? {}).filter(
     (part) =>
-      part.dishId === requested.dishId &&
+      (!requested.dishId || part.dishId === requested.dishId) &&
       (!requested.makerParticipantId || part.makerParticipantId === requested.makerParticipantId) &&
       part.location.type === "inventory" &&
       part.location.participantId === participantId
@@ -1310,7 +1416,7 @@ function offerAssetRequestKey(requested: OfferAssetRequest): string {
   if (requested.kind === "voucher") {
     return `voucher:${requested.ingredientId}:${requested.ownerParticipantId ?? ""}`;
   }
-  return `dish_part:${requested.dishId}:${requested.makerParticipantId ?? ""}`;
+  return `dish_part:${requested.dishId ?? "*"}:${requested.makerParticipantId ?? ""}`;
 }
 
 function assetMatchesOfferRequest(asset: ResolvedPlatterAsset, requested: OfferAssetRequest): boolean {
@@ -1323,7 +1429,7 @@ function assetMatchesOfferRequest(asset: ResolvedPlatterAsset, requested: OfferA
   }
   return (
     asset.kind === "dish_part" &&
-    asset.value.dishId === requested.dishId &&
+    (!requested.dishId || asset.value.dishId === requested.dishId) &&
     (!requested.makerParticipantId || asset.value.makerParticipantId === requested.makerParticipantId)
   );
 }
@@ -1354,10 +1460,20 @@ function autoRefuseUnavailableOffers(table: Table): void {
       remainingByRequest.set(key, remaining - requestedAsset.quantity);
       continue;
     }
+    recordScarcityPressure(table, requestedAsset, Math.max(1, requestedAsset.quantity - Math.max(0, remaining)));
     offer.status = "refused";
     releaseOfferedAssets(table, offer);
     delete table.offers[offer.id];
   }
+}
+
+function recordScarcityPressure(table: Table, requested: OfferAssetRequest, amount: number): void {
+  if (requested.kind !== "voucher" || !requested.ingredientId) {
+    return;
+  }
+  table.scarcityPressureByIngredient ??= {};
+  table.scarcityPressureByIngredient[requested.ingredientId] =
+    (table.scarcityPressureByIngredient[requested.ingredientId] ?? 0) + Math.max(1, amount);
 }
 
 function cancelAllPendingOffers(table: Table): void {
@@ -1554,6 +1670,34 @@ function biteDish(table: Table, actor: Participant, dishId: string): void {
   if (!part) {
     throw new GameError("You do not hold any uneaten parts of this dish.", "dish_part_not_held");
   }
+  eatDishPart(table, actor, dish, part);
+  completeIfAllFoodPartsEaten(table);
+}
+
+function biteAllHeldFoodParts(table: Table, actor: Participant): void {
+  requirePhase(table, "eating");
+  requireActive(actor);
+  const account = platterAccountForParticipant(table, actor.id);
+  if (!account.cleared) {
+    throw new GameError("Return all promise cards before eating.", "account_not_cleared");
+  }
+  const heldParts = Object.values(table.dishParts ?? {})
+    .filter((part) => part.location.type === "inventory" && part.location.participantId === actor.id)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (heldParts.length === 0) {
+    throw new GameError("You do not hold any uneaten food parts.", "dish_part_not_held");
+  }
+  for (const part of heldParts) {
+    const dish = table.dishes[part.dishId];
+    if (!dish) {
+      throw new GameError("Dish not found.", "missing_dish");
+    }
+    eatDishPart(table, actor, dish, part);
+  }
+  completeIfAllFoodPartsEaten(table);
+}
+
+function eatDishPart(table: Table, actor: Participant, dish: Dish, part: DishPart): void {
   const biteCounts = dish.biteCounts ?? {};
   dish.biteCounts = biteCounts;
   const actorBites = biteCounts[actor.id] ?? 0;
@@ -1563,6 +1707,9 @@ function biteDish(table: Table, actor: Participant, dishId: string): void {
   dish.bitesRemaining = dish.partsRemaining;
   biteCounts[actor.id] = actorBites + 1;
   recordTransaction(table, actor, "Eat", actor.name, platterAssetLabel({ kind: "dish_part", value: part }), "Eaten");
+}
+
+function completeIfAllFoodPartsEaten(table: Table): void {
   if (Object.values(table.dishParts ?? {}).every((candidate) => candidate.location.type === "eaten")) {
     table.phase = "complete";
   }
@@ -1847,7 +1994,9 @@ function shouldGateTurn(table: Table, intent: Intent): boolean {
     case "redeem_from_hand":
     case "prepare":
     case "bite":
-      return true;
+      return table.phase !== "eating";
+    case "bite_all":
+      return false;
     default:
       return false;
   }
@@ -1879,19 +2028,22 @@ function advanceTurn(table: Table, actorParticipantId: string): void {
 }
 
 function nextTurnParticipantId(table: Table, afterParticipantId?: string): string | undefined {
-  const candidates = activeParticipants(table).filter((participant) => participantCanReceiveTurn(table, participant));
+  const turnOrderIds = table.participantOrder.filter((participantId) => table.participants[participantId]?.role === "active");
+  const candidates = turnOrderIds
+    .map((participantId) => table.participants[participantId])
+    .filter((participant): participant is Participant => Boolean(participant) && participantCanReceiveTurn(table, participant));
   if (candidates.length === 0) {
     return undefined;
   }
   if (!afterParticipantId) {
     return candidates[0]?.id;
   }
-  const afterIndex = table.participantOrder.indexOf(afterParticipantId);
+  const afterIndex = turnOrderIds.indexOf(afterParticipantId);
   const sorted = [...candidates].sort((left, right) => {
-    const leftIndex = table.participantOrder.indexOf(left.id);
-    const rightIndex = table.participantOrder.indexOf(right.id);
-    const normalizedLeft = leftIndex > afterIndex ? leftIndex : leftIndex + table.participantOrder.length;
-    const normalizedRight = rightIndex > afterIndex ? rightIndex : rightIndex + table.participantOrder.length;
+    const leftIndex = turnOrderIds.indexOf(left.id);
+    const rightIndex = turnOrderIds.indexOf(right.id);
+    const normalizedLeft = leftIndex > afterIndex ? leftIndex : leftIndex + turnOrderIds.length;
+    const normalizedRight = rightIndex > afterIndex ? rightIndex : rightIndex + turnOrderIds.length;
     return normalizedLeft - normalizedRight;
   });
   return sorted[0]?.id;

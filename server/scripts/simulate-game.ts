@@ -324,13 +324,50 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
     if (!pendingOffer) {
       return false;
     }
+    const requestedAsset =
+      pendingOffer.requestedAsset ??
+      (pendingOffer.requested
+        ? { kind: "voucher" as const, ingredientId: pendingOffer.requested.ingredientId, quantity: pendingOffer.requested.quantity }
+        : undefined);
+    if (!requestedAsset) {
+      await sendIntentForParticipant(participantId, {
+        type: "respond_offer",
+        offerId: pendingOffer.id,
+        response: "refuse"
+      });
+      return true;
+    }
+    if (requestedAsset.kind === "dish_part") {
+      const matchingPartIds = inventoryDishPartIds(currentTable(), participantId)
+        .filter((partId) => {
+          const part = currentTable().dishParts[partId];
+          return (
+            (!requestedAsset.dishId || part.dishId === requestedAsset.dishId) &&
+            (!requestedAsset.makerParticipantId || part.makerParticipantId === requestedAsset.makerParticipantId)
+          );
+        })
+        .slice(0, requestedAsset.quantity);
+      await sendIntentForParticipant(participantId, {
+        type: "respond_offer",
+        offerId: pendingOffer.id,
+        response: matchingPartIds.length === requestedAsset.quantity ? "accept" : "refuse",
+        assets: matchingPartIds.map((id) => ({ kind: "dish_part", id }))
+      });
+      return true;
+    }
     const matchingVoucherIds = handVoucherIds(currentTable(), participantId)
-      .filter((voucherId) => currentTable().vouchers[voucherId].ingredientId === pendingOffer.requested.ingredientId)
-      .slice(0, pendingOffer.requested.quantity);
+      .filter((voucherId) => {
+        const voucher = currentTable().vouchers[voucherId];
+        return (
+          voucher.ingredientId === requestedAsset.ingredientId &&
+          (!requestedAsset.ownerParticipantId || voucher.ownerParticipantId === requestedAsset.ownerParticipantId)
+        );
+      })
+      .slice(0, requestedAsset.quantity);
     await sendIntentForParticipant(participantId, {
       type: "respond_offer",
       offerId: pendingOffer.id,
-      response: matchingVoucherIds.length === pendingOffer.requested.quantity ? "accept" : "refuse",
+      response: matchingVoucherIds.length === requestedAsset.quantity ? "accept" : "refuse",
       voucherIds: matchingVoucherIds
     });
     return true;
@@ -407,7 +444,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
             type: "create_offer",
             toParticipantId: holderId,
             offeredVoucherIds: [offeredVoucherId],
-            requested: { ingredientId, quantity: 1 }
+            requestedAsset: { kind: "voucher", ingredientId, quantity: 1 }
           },
           true
         );
@@ -430,6 +467,55 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
         throw new Error("Settlement did not converge.");
       }
       const controllableParticipants = activeParticipants(table).filter((participant) => controllerByParticipantId.has(participant.id));
+
+      for (const participant of controllableParticipants) {
+        if (await respondToIncomingOffer(participant.id)) {
+          continue;
+        }
+      }
+
+      const directReturn = controllableParticipants
+        .flatMap((holder) =>
+          handVoucherIds(table, holder.id)
+            .filter((voucherId) => table.vouchers[voucherId].ownerParticipantId !== holder.id)
+            .map((voucherId) => ({ holder, voucherId, ownerId: table.vouchers[voucherId].ownerParticipantId }))
+        )
+        .filter((candidate) => controllerByParticipantId.has(candidate.ownerId))
+        .filter((candidate) => inventoryDishPartIds(table, candidate.ownerId).length > 0)
+        .sort((left, right) => {
+          const leftAccount = platterAccountForParticipant(table, left.ownerId);
+          const rightAccount = platterAccountForParticipant(table, right.ownerId);
+          return (
+            rightAccount.ownCardsInOtherHands - leftAccount.ownCardsInOtherHands ||
+            rightAccount.platterShortfall - leftAccount.platterShortfall ||
+            left.voucherId.localeCompare(right.voucherId)
+          );
+        })[0];
+      if (directReturn) {
+        const beforeOfferIds = new Set(Object.keys(table.offers));
+        await sendIntentForParticipant(
+          directReturn.holder.id,
+          {
+            type: "create_offer",
+            toParticipantId: directReturn.ownerId,
+            offeredVoucherIds: [directReturn.voucherId],
+            requestedAsset: { kind: "dish_part", quantity: 1 }
+          },
+          true
+        );
+        const createdOffer = Object.values(table.offers).find(
+          (offer) =>
+            !beforeOfferIds.has(offer.id) &&
+            offer.status === "pending" &&
+            offer.fromParticipantId === directReturn.holder.id &&
+            offer.toParticipantId === directReturn.ownerId
+        );
+        if (createdOffer) {
+          await respondToIncomingOffer(directReturn.ownerId);
+        }
+        continue;
+      }
+
       const debtor = controllableParticipants.find((participant) => platterAccountForParticipant(table, participant.id).platterDebt > 0);
       if (debtor) {
         const ownPlatterVoucherId = platterVoucherIds(table).find((id) => table.vouchers[id].ownerParticipantId === debtor.id);
@@ -472,19 +558,16 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
         const account = platterAccountForParticipant(table, participant.id);
         const ownPostedPart = platterDishPartIds(table).some((partId) => table.dishParts[partId].makerParticipantId === participant.id);
         const ownHeldPart = inventoryDishPartIds(table, participant.id).some((partId) => table.dishParts[partId].makerParticipantId === participant.id);
-        return account.ownCardsInOtherHands > 0 && !ownPostedPart && ownHeldPart;
+        return account.ownCardsInOtherHands > 0 && !ownPostedPart && ownHeldPart && platterDishPartIds(table).length > 0;
       });
       if (seeder) {
         const seedPartId = inventoryDishPartIds(table, seeder.id).find((partId) => table.dishParts[partId].makerParticipantId === seeder.id) as string;
-        const takeVoucherId =
-          platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId === seeder.id) ??
-          platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId !== seeder.id) ??
-          platterVoucherIds(table)[0];
-        if (takeVoucherId) {
+        const takePartId = platterDishPartIds(table).find((partId) => table.dishParts[partId].makerParticipantId !== seeder.id);
+        if (takePartId) {
           await sendIntentForParticipant(seeder.id, {
             type: "platter_asset_swap",
             give: { kind: "dish_part", id: seedPartId },
-            take: { kind: "voucher", id: takeVoucherId }
+            take: { kind: "dish_part", id: takePartId }
           }, true);
           continue;
         }
@@ -499,20 +582,11 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
         }
         const ownHandVoucherId = handVoucherIds(table, shortfall.id).find((id) => table.vouchers[id].ownerParticipantId === shortfall.id);
         const takePartId = platterDishPartIds(table)[0];
-        const takeVoucherId = platterVoucherIds(table).find((id) => table.vouchers[id].ownerParticipantId !== shortfall.id);
         if (ownHandVoucherId && takePartId) {
           await sendIntentForParticipant(shortfall.id, {
             type: "platter_asset_swap",
             give: { kind: "voucher", id: ownHandVoucherId },
             take: { kind: "dish_part", id: takePartId }
-          }, true);
-          continue;
-        }
-        if (ownHandVoucherId && takeVoucherId) {
-          await sendIntentForParticipant(shortfall.id, {
-            type: "platter_asset_swap",
-            give: { kind: "voucher", id: ownHandVoucherId },
-            take: { kind: "voucher", id: takeVoucherId }
           }, true);
           continue;
         }
@@ -542,7 +616,7 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
           controllerByParticipantId.has(candidate.location.participantId)
       );
       if (part?.location.participantId) {
-        await sendIntentForParticipant(part.location.participantId, { type: "bite", dishId: part.dishId });
+        await sendIntentForParticipant(part.location.participantId, { type: "bite_all" });
         continue;
       }
 
@@ -692,7 +766,7 @@ function playerCountForGame(options: SimulationOptions, index: number): number {
 }
 
 function phaseUsesTurnGate(phase: TablePhase): boolean {
-  return phase === "playing" || phase === "settlement" || phase === "eating";
+  return phase === "playing" || phase === "settlement";
 }
 
 function shouldAutoAdvanceTurn(intent: Intent): boolean {
@@ -1075,7 +1149,7 @@ function parseOptions(args: string[]): SimulationOptions {
     playerMax,
     gameCount,
     concurrency: Math.min(gameCount, parsePositiveInt(getValue("concurrency", process.env.SIM_CONCURRENCY ?? "4"), "Simulation concurrency")),
-    dishGoal: Number.parseInt(getValue("dish-goal", process.env.SIM_DISH_GOAL ?? "4"), 10),
+    dishGoal: Number.parseInt(getValue("dish-goal", process.env.SIM_DISH_GOAL ?? "3"), 10),
     joinedHumanClients: parseBoundedSeatCount(
       getValue("joined-humans", process.env.SIM_JOINED_HUMANS ?? String(playerCount - 1)),
       "Joined human clients"

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { decideBotIntent, runBots } from "../src/bots.js";
+import { computeGameStats } from "../src/gameStats.js";
 import {
   BOT_TYPES,
   DEFAULT_TARGET_DISH_COUNT,
@@ -13,6 +14,7 @@ import {
   MIN_ACTIVE_PARTICIPANTS,
   MIN_STOCK_PER_INGREDIENT,
   MIN_TARGET_DISH_COUNT,
+  OPENING_OFFERINGS_PER_PLAYER,
   REAL_UNITS_PER_INGREDIENT,
   VOUCHERS_PER_INGREDIENT
 } from "../src/constants.js";
@@ -91,6 +93,14 @@ function addBots(table: Table, hostId: string, botTypes: BotType[]): Participant
   return bots;
 }
 
+function activeParticipantByIngredient(table: Table, ingredientId: string): Participant {
+  const participant = activeParticipants(table).find((candidate) => candidate.ingredientId === ingredientId);
+  if (!participant) {
+    throw new Error(`Expected active participant for ${ingredientId}`);
+  }
+  return participant;
+}
+
 function firstOtherActive(table: Table, participantId: string): Participant {
   const participant = activeParticipants(table).find((candidate) => candidate.id !== participantId);
   if (!participant) {
@@ -158,7 +168,7 @@ describe("catalog and startup", () => {
     expect(INGREDIENTS.every((ingredient) => ingredient.description && ingredient.imagePath)).toBe(true);
   });
 
-  it("creates 7 fixed vouchers per active ingredient owner", () => {
+  it("creates fixed vouchers per active ingredient owner", () => {
     const { table } = startTable(8);
     for (const participant of activeParticipants(table)) {
       expect(vouchersForIngredientOwner(table, participant.id)).toHaveLength(VOUCHERS_PER_INGREDIENT);
@@ -175,11 +185,17 @@ describe("catalog and startup", () => {
 
     store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
     expect(created.table.phase).toBe("playing");
-    expect(platterVoucherIds(created.table)).toHaveLength(8);
-    expect(created.table.transactionHistory.filter((row) => row.action === "Deposit")).toHaveLength(8);
+    expect(platterVoucherIds(created.table)).toHaveLength(8 * OPENING_OFFERINGS_PER_PLAYER);
+    expect(created.table.transactionHistory.filter((row) => row.action === "Deposit")).toHaveLength(8 * OPENING_OFFERINGS_PER_PLAYER);
     for (const participant of activeParticipants(created.table)) {
       expect(participant.depositedInitial).toBe(true);
-      expect(handVoucherIds(created.table, participant.id)).toHaveLength(VOUCHERS_PER_INGREDIENT - 1);
+      expect(participant.openingOfferingsCount).toBe(OPENING_OFFERINGS_PER_PLAYER);
+      expect(handVoucherIds(created.table, participant.id)).toHaveLength(VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER);
+      expect(platterAccountForParticipant(created.table, participant.id)).toMatchObject({
+        ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER,
+        ownCardsInHand: VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER,
+        cleared: true
+      });
     }
   });
 
@@ -214,11 +230,60 @@ describe("catalog and startup", () => {
     expect(store.getTableStatus("rice55")).toMatchObject({ code: "RICE55", valid: true, exists: true, joinable: false, reason: "started" });
   });
 
+  it("lists only public joinable lobby tables", () => {
+    const store = new TableStore();
+    const publicTable = store.createTable("Public Host", "public-list", "public77");
+    const privateTable = store.createTable("Private Host", "private-list", "private77");
+    const startedTable = store.createTable("Started Host", "started-list", "started77");
+
+    store.handleIntent(privateTable.table.code, privateTable.seatToken, { type: "set_table_visibility", isPublic: false }, false);
+    store.handleIntent(startedTable.table.code, startedTable.seatToken, { type: "start" }, false);
+
+    expect(store.listPublicJoinableTables()).toEqual([
+      {
+        code: "PUBLIC77",
+        hostName: "Public Host",
+        activeSeats: 8,
+        humanSeats: 1,
+        openSeats: 7
+      }
+    ]);
+
+    expect(store.getTableStatus(privateTable.table.code)).toMatchObject({ exists: true, joinable: true });
+    store.handleIntent(publicTable.table.code, publicTable.seatToken, { type: "set_table_visibility", isPublic: false }, false);
+    expect(store.listPublicJoinableTables()).toEqual([]);
+  });
+
+  it("serves public joinable tables over HTTP", async () => {
+    const store = new TableStore();
+    store.createTable("Public Host", "http-public-list", "beans44");
+    const privateTable = store.createTable("Private Host", "http-private-list", "eggs44");
+    store.handleIntent(privateTable.table.code, privateTable.seatToken, { type: "set_table_visibility", isPublic: false }, false);
+    const app = await buildApp({ store });
+
+    const response = await app.inject({ method: "GET", url: "/tables" });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      result: {
+        tables: [
+          {
+            code: "BEANS44",
+            hostName: "Public Host",
+            openSeats: 7
+          }
+        ]
+      }
+    });
+  });
+
   it("allows start with exactly 8 active participants", () => {
     const { table } = startTable(8, "allowed-8");
     expect(table.phase).toBe("playing");
     expect(activeParticipants(table)).toHaveLength(8);
-    expect(platterVoucherIds(table)).toHaveLength(8);
+    expect(platterVoucherIds(table)).toHaveLength(8 * OPENING_OFFERINGS_PER_PLAYER);
   });
 
   it("makes running joins witnesses", () => {
@@ -338,6 +403,7 @@ describe("catalog and startup", () => {
 
     const actorSnapshot = buildSnapshot(created.table, controlledId, created.participant.id);
     expect(created.table.participants[controlledId].depositedInitial).toBe(true);
+    expect(created.table.participants[controlledId].openingOfferingsCount).toBe(OPENING_OFFERINGS_PER_PLAYER);
     expect(actorSnapshot.viewerParticipantId).toBe(controlledId);
     expect(actorSnapshot.connectionParticipantId).toBe(created.participant.id);
   });
@@ -540,12 +606,12 @@ describe("catalog and startup", () => {
 
     expect(created.participant.name).toBe("Amina");
     expect(joined.participant.name).toBe("Ben");
-    expect(bots.map((bot) => bot.name)).toEqual(["Nia_b", "Luc_b", "Yan_b", "Mia_b", "Leo_b", "Ava_b"]);
+    expect(bots.map((bot) => bot.name)).toEqual(["Nia_b", "Luc_b", "Ava_b", "Leo_b", "Mia_b", "Yan_b"]);
 
     const botOnlyStore = new TableStore();
     const botOnly = botOnlyStore.createTable("Host", "first-bot-name");
     const firstBot = activeParticipants(botOnly.table).find((participant) => participant.kind === "bot");
-    expect(firstBot?.name).toBe("Ben_b");
+    expect(firstBot?.name).toBe("Jim_b");
   });
 
   it("starts a host plus bots through the store without repeat bot deposits", () => {
@@ -560,11 +626,13 @@ describe("catalog and startup", () => {
     expect(created.table.phase).toBe("playing");
     expect(active).toHaveLength(8);
     expect(bots.every((participant) => participant.depositedInitial)).toBe(true);
+    expect(bots.every((participant) => participant.openingOfferingsCount === OPENING_OFFERINGS_PER_PLAYER)).toBe(true);
     expect(created.table.participants[created.table.hostParticipantId].depositedInitial).toBe(true);
-    expect(historyAfterStart).toHaveLength(8);
+    expect(created.table.participants[created.table.hostParticipantId].openingOfferingsCount).toBe(OPENING_OFFERINGS_PER_PLAYER);
+    expect(historyAfterStart).toHaveLength(8 * OPENING_OFFERINGS_PER_PLAYER);
     expect(historyAfterStart.every((action) => action === "Deposit")).toBe(true);
     expect(snapshot.phase).toBe("playing");
-    expect(snapshot.ownHand).toHaveLength(VOUCHERS_PER_INGREDIENT - 1);
+    expect(snapshot.ownHand).toHaveLength(VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER);
     expect(snapshot.ownRecipe).toBeDefined();
   });
 
@@ -767,18 +835,32 @@ describe("recipe catalog generator", () => {
     const { table } = startTable(8, "runtime-committed-set");
     const runtimeIngredientIds = activeParticipants(table).map((participant) => participant.ingredientId);
 
-    expect(runtimeIngredientIds).toEqual(activeIngredientsForPlayerCount.map((ingredient) => ingredient.id));
+    expect([...runtimeIngredientIds].sort()).toEqual(activeIngredientsForPlayerCount.map((ingredient) => ingredient.id).sort());
+    expect(new Set(runtimeIngredientIds).size).toBe(activeIngredientsForPlayerCount.length);
 
     const participant = activeParticipants(table)[0] as Participant;
-    const catalogRecipe = catalogRecipeForIngredients(
-      activeIngredientsForPlayerCount,
-      participant.ingredientId as string,
-      "initial",
-      "players_8"
+    const runtimeRecipe = table.recipes[participant.id];
+    const matchingCatalogRecipe = RECIPE_SLOTS.map((slot) =>
+      catalogRecipeForIngredients(activeIngredientsForPlayerCount, participant.ingredientId as string, slot, "players_8")
+    ).find((recipe) => recipe.dishName === runtimeRecipe.name);
+    expect(matchingCatalogRecipe).toBeDefined();
+    expect(runtimeRecipe.requirements.map((requirement) => requirement.ingredientId)).toEqual(
+      matchingCatalogRecipe?.requirements.map((requirement) => requirement.ingredientId)
     );
-    expect(table.recipes[participant.id].requirements.map((requirement) => requirement.ingredientId)).toEqual(
-      catalogRecipe.requirements.map((requirement) => requirement.ingredientId)
-    );
+  });
+
+  it("randomizes lobby ingredient seats per table seed while preserving the committed set", () => {
+    const first = makeHarness(8, "lobby-random-a").table;
+    const second = makeHarness(8, "lobby-random-b").table;
+    const committedIds = ingredientsForPlayerCount(8).map((ingredient) => ingredient.id).sort();
+    const firstOrder = activeParticipants(first).map((participant) => participant.ingredientId as string);
+    const secondOrder = activeParticipants(second).map((participant) => participant.ingredientId as string);
+
+    expect([...firstOrder].sort()).toEqual(committedIds);
+    expect([...secondOrder].sort()).toEqual(committedIds);
+    expect(new Set(firstOrder).size).toBe(8);
+    expect(new Set(secondOrder).size).toBe(8);
+    expect(firstOrder).not.toEqual(secondOrder);
   });
 
   it("writes a client recipe fixture matching the generated catalog", () => {
@@ -808,6 +890,7 @@ describe("recipe catalog generator", () => {
       minActiveParticipants: MIN_ACTIVE_PARTICIPANTS,
       maxActiveParticipants: MAX_ACTIVE_PARTICIPANTS,
       vouchersPerIngredient: VOUCHERS_PER_INGREDIENT,
+      openingOfferingsPerPlayer: OPENING_OFFERINGS_PER_PLAYER,
       realUnitsPerIngredient: REAL_UNITS_PER_INGREDIENT,
       minStockPerIngredient: MIN_STOCK_PER_INGREDIENT,
       maxStockPerIngredient: MAX_STOCK_PER_INGREDIENT,
@@ -1184,11 +1267,11 @@ describe("platter, offers, and visibility", () => {
     expect(initialSnapshot.ownHandGroups).toContainEqual({
       ingredientId: first.ingredientId,
       ownerParticipantId: first.id,
-      count: VOUCHERS_PER_INGREDIENT - 1
+      count: VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER
     });
 
     expect(table.phase).toBe("playing");
-    expect(platterVoucherIds(table).filter((voucherId) => table.vouchers[voucherId].ownerParticipantId === first.id)).toHaveLength(1);
+    expect(platterVoucherIds(table).filter((voucherId) => table.vouchers[voucherId].ownerParticipantId === first.id)).toHaveLength(OPENING_OFFERINGS_PER_PLAYER);
 
     applyIntent(table, first.id, {
       type: "platter_swap_ingredient",
@@ -1197,7 +1280,7 @@ describe("platter, offers, and visibility", () => {
     });
 
     const snapshot = buildSnapshot(table, first.id);
-    expect(snapshot.platterVoucherGroups.find((group) => group.ingredientId === first.ingredientId)?.count).toBe(2);
+    expect(snapshot.platterVoucherGroups.find((group) => group.ingredientId === first.ingredientId)?.count).toBe(OPENING_OFFERINGS_PER_PLAYER + 1);
     expect(snapshot.ownHandGroups.find((group) => group.ingredientId === second.ingredientId)?.count).toBe(1);
   });
 
@@ -1336,6 +1419,66 @@ describe("platter, offers, and visibility", () => {
     });
   });
 
+  it("allows returning a participant's promise card for any food piece they hold", () => {
+    const { table } = startAndDeposit(8, "return-owner-card-for-any-food-piece");
+    const from = activeParticipants(table)[0] as Participant;
+    const to = firstOtherActive(table, from.id);
+    completeRecipeBySetup(table, to.id);
+    applyAsTurn(table, to.id, { type: "prepare" });
+    const offeredVoucherId = handVoucherIds(table, to.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === to.id
+    ) as string;
+    const requestedPartId = inventoryDishPartIds(table, to.id)[0] as string;
+    table.vouchers[offeredVoucherId].location = { type: "hand", participantId: from.id };
+
+    applyAsTurn(table, from.id, {
+      type: "create_offer",
+      toParticipantId: to.id,
+      offeredAssets: [{ kind: "voucher", id: offeredVoucherId }],
+      requestedAsset: { kind: "dish_part", quantity: 1 }
+    });
+    const offer = Object.values(table.offers)[0];
+
+    expect(table.vouchers[offeredVoucherId].location).toEqual({ type: "offer_lock", offerId: offer.id });
+
+    applyAsTurn(table, to.id, {
+      type: "respond_offer",
+      offerId: offer.id,
+      response: "accept",
+      assets: [{ kind: "dish_part", id: requestedPartId }]
+    });
+
+    expect(table.offers[offer.id]).toBeUndefined();
+    expect(table.vouchers[offeredVoucherId].location).toEqual({ type: "hand", participantId: to.id });
+    expect(table.dishParts[requestedPartId].location).toEqual({ type: "inventory", participantId: from.id });
+  });
+
+  it("rejects direct offers that trade the same promise-card resource", () => {
+    const { table } = startAndDeposit(8, "reject-same-card-offer");
+    const from = activeParticipants(table)[0] as Participant;
+    const to = firstOtherActive(table, from.id);
+    const offeredVoucherId = handVoucherIds(table, to.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === to.id
+    ) as string;
+    table.vouchers[offeredVoucherId].location = { type: "hand", participantId: from.id };
+
+    expect(() =>
+      applyAsTurn(table, from.id, {
+        type: "create_offer",
+        toParticipantId: to.id,
+        offeredAssets: [{ kind: "voucher", id: offeredVoucherId }],
+        requestedAsset: {
+          kind: "voucher",
+          ingredientId: table.vouchers[offeredVoucherId].ingredientId,
+          ownerParticipantId: to.id,
+          quantity: 1
+        }
+      })
+    ).toThrow(GameError);
+    expect(table.vouchers[offeredVoucherId].location).toEqual({ type: "hand", participantId: from.id });
+    expect(Object.values(table.offers)).toHaveLength(0);
+  });
+
   it("records successful deposit, swap, exchange, and redemption transactions", () => {
     const { table } = startTable(8, "transactions");
     const [first, second] = activeParticipants(table);
@@ -1397,6 +1540,65 @@ describe("platter, offers, and visibility", () => {
     expect(snapshot.transactionHistory).toEqual(table.transactionHistory);
   });
 
+  it("summarizes player turns, cycles, and interaction categories", () => {
+    const { table } = startTable(8, "stats");
+    const [first] = activeParticipants(table);
+    applyAsTurn(table, first.id, { type: "pass_turn" });
+    first.realIngredientStock = (first.realIngredientStock ?? table.stockPerIngredient) - 2;
+    table.scarcityPressureByIngredient = { cheese: 2 };
+    table.transactionHistory.push({
+      id: "tx_test_food_piece_settlement",
+      turn: table.turn,
+      participantId: first.id,
+      name: first.name,
+      action: "Settlement Swap",
+      counterparty: "Platter",
+      itemOut: "Flour card 1",
+      itemBack: "Cheese Frittata slice"
+    });
+    for (let index = 0; index < 5; index += 1) {
+      table.transactionHistory.push({
+        id: `tx_test_eat_${index}`,
+        turn: table.turn,
+        participantId: first.id,
+        name: first.name,
+        action: "Eat",
+        counterparty: first.name,
+        itemOut: `Cheese Frittata slice ${index + 1}`,
+        itemBack: "Eaten"
+      });
+    }
+
+    const stats = computeGameStats(table);
+    const snapshot = buildSnapshot(table, first.id);
+
+    expect(stats).toMatchObject({
+      activePlayerCount: 8,
+      playerTurnCount: 1,
+      cycleCount: 0.125,
+      openingOfferingCount: 8 * OPENING_OFFERINGS_PER_PLAYER,
+      settlementSwapCount: 1,
+      foodPieceSettlementSwapCount: 1
+    });
+    expect(stats.assetLossCount).toBe(2);
+    expect(stats.productivityCount).toBe(5);
+    expect(stats.profitCount).toBe(3);
+    expect(stats.profitGainPercent).toBe(150);
+    expect(stats.interactionCount).toBe(table.transactionHistory.length - 1);
+    expect(stats.averageTurnsPerDish).toBe(0);
+    expect(stats.averageInteractionsPerDish).toBe(0);
+    expect(stats.basketVelocity).toBe(8);
+    expect(stats.directExchangeShare).toBe(0);
+    expect(stats.settlementBurden).toBeCloseTo(1 / stats.interactionCount);
+    expect(stats.scarcityPressureByIngredient).toEqual({ cheese: 2 });
+    expect(stats.hoardingIndex).toBe(0);
+    expect(stats.liquidityDepth).toBeGreaterThan(0);
+    expect(stats.settlementTimeTurns).toBe(0);
+    expect(stats.consumptionVariance).toBe(0);
+    expect(stats.tradeBalanceByParticipant[first.id]).toEqual([1, 1, 0]);
+    expect(snapshot.gameStats).toEqual(stats);
+  });
+
   it("includes offered card details in filtered offer snapshots", () => {
     const { table } = startAndDeposit(8);
     const from = activeParticipants(table)[0] as Participant;
@@ -1413,6 +1615,28 @@ describe("platter, offers, and visibility", () => {
     const snapshot = buildSnapshot(table, to.id);
     expect(snapshot.offers).toHaveLength(1);
     expect(snapshot.offers[0].offeredVouchers).toEqual([expect.objectContaining({ id: offeredVoucherId })]);
+    expect(snapshot.allHands).toBeUndefined();
+  });
+
+  it("includes asset-offered card details in filtered offer snapshots", () => {
+    const { table } = startAndDeposit(8);
+    const from = activeParticipants(table)[0] as Participant;
+    const to = firstOtherActive(table, from.id);
+    const offeredVoucherId = handVoucherIds(table, from.id)[0] as string;
+
+    applyAsTurn(table, from.id, {
+      type: "create_offer",
+      toParticipantId: to.id,
+      offeredAssets: [{ kind: "voucher", id: offeredVoucherId }],
+      requestedAsset: { kind: "voucher", ingredientId: to.ingredientId as string, ownerParticipantId: to.id, quantity: 1 }
+    });
+
+    const snapshot = buildSnapshot(table, to.id);
+    expect(snapshot.offers).toHaveLength(1);
+    expect(snapshot.offers[0].offeredVouchers).toEqual([
+      expect.objectContaining({ id: offeredVoucherId, ingredientId: from.ingredientId })
+    ]);
+    expect(snapshot.offers[0].offeredAssets).toEqual([{ kind: "voucher", id: offeredVoucherId }]);
     expect(snapshot.allHands).toBeUndefined();
   });
 
@@ -1826,6 +2050,126 @@ describe("platter, offers, and visibility", () => {
     expect(table.recipes[bot.id]?.requirements.some((requirement) => requirement.ingredientId === take.ingredientId)).toBe(true);
   });
 
+  it("has bots spend dish pieces to take needed cards from the platter", () => {
+    const { table } = startAndDeposit(8, "bot-food-piece-for-platter-card");
+    const bot = activeParticipantByIngredient(table, "flour");
+    bot.kind = "bot";
+    bot.botType = "mixed";
+    table.currentTurnParticipantId = bot.id;
+
+    const recipe = table.recipes[bot.id];
+    expect(recipe).toBeDefined();
+    if (!recipe) {
+      throw new Error("Expected bot recipe");
+    }
+    table.recipes[bot.id] = {
+      ...recipe,
+      requirements: [
+        { id: "flour-protected", ingredientId: "flour", requiredQty: 6, redeemedQty: 0, placedVoucherIds: [] },
+        { id: "cheese-needed", ingredientId: "cheese", requiredQty: 1, redeemedQty: 0, placedVoucherIds: [] }
+      ]
+    };
+    table.dishParts.bot_food_piece = {
+      id: "bot_food_piece",
+      dishId: "bot_dish",
+      dishName: "Flatbread",
+      makerParticipantId: bot.id,
+      unitSingular: "slice",
+      unitPlural: "slices",
+      location: { type: "inventory", participantId: bot.id }
+    };
+
+    const decision = decideBotIntent(table, bot.id);
+    expect(decision?.intent.type).toBe("platter_asset_swap");
+    if (decision?.intent.type !== "platter_asset_swap") {
+      throw new Error(`Expected platter_asset_swap, got ${decision?.intent.type ?? "none"}`);
+    }
+    expect(decision.intent.give).toEqual({ kind: "dish_part", id: "bot_food_piece" });
+    expect(decision.intent.take.kind).toBe("voucher");
+    expect(table.vouchers[decision.intent.take.id].ingredientId).toBe("cheese");
+  });
+
+  it("has bots request the smallest missing ingredient group before duplicate groups", () => {
+    const { table } = startAndDeposit(8, "bot-offer-smallest-missing");
+    const bot = activeParticipantByIngredient(table, "flour");
+    const vegetablesOwner = activeParticipantByIngredient(table, "vegetables");
+    bot.kind = "bot";
+    bot.botType = "barter_only";
+    table.currentTurnParticipantId = bot.id;
+
+    const recipe = table.recipes[bot.id];
+    expect(recipe).toBeDefined();
+    if (!recipe) {
+      throw new Error("Expected bot recipe");
+    }
+    table.recipes[bot.id] = {
+      ...recipe,
+      name: "Herb Dumplings",
+      requirements: [
+        { id: "flour-test", ingredientId: "flour", requiredQty: 2, redeemedQty: 2, placedVoucherIds: [] },
+        { id: "herbs-test", ingredientId: "herbs", requiredQty: 2, redeemedQty: 0, placedVoucherIds: [] },
+        { id: "vegetables-test", ingredientId: "vegetables", requiredQty: 1, redeemedQty: 0, placedVoucherIds: [] },
+        { id: "eggs-test", ingredientId: "eggs", requiredQty: 1, redeemedQty: 1, placedVoucherIds: [] }
+      ]
+    };
+
+    const decision = decideBotIntent(table, bot.id);
+    expect(decision?.intent.type).toBe("create_offer");
+    if (decision?.intent.type !== "create_offer") {
+      throw new Error(`Expected create_offer, got ${decision?.intent.type ?? "none"}`);
+    }
+    expect(decision.intent.requestedAsset).toEqual({
+      kind: "voucher",
+      ingredientId: "vegetables",
+      ownerParticipantId: vegetablesOwner.id,
+      quantity: 1
+    });
+  });
+
+  it("has bots offer dish pieces for missing cards when no surplus promise card is available", () => {
+    const { table } = startAndDeposit(8, "bot-food-piece-offer");
+    const bot = activeParticipantByIngredient(table, "flour");
+    const vegetablesOwner = activeParticipantByIngredient(table, "vegetables");
+    bot.kind = "bot";
+    bot.botType = "barter_only";
+    table.currentTurnParticipantId = bot.id;
+
+    const recipe = table.recipes[bot.id];
+    expect(recipe).toBeDefined();
+    if (!recipe) {
+      throw new Error("Expected bot recipe");
+    }
+    table.recipes[bot.id] = {
+      ...recipe,
+      requirements: [
+        { id: "flour-protected", ingredientId: "flour", requiredQty: 6, redeemedQty: 0, placedVoucherIds: [] },
+        { id: "vegetables-needed", ingredientId: "vegetables", requiredQty: 1, redeemedQty: 0, placedVoucherIds: [] }
+      ]
+    };
+    table.dishParts.bot_offer_piece = {
+      id: "bot_offer_piece",
+      dishId: "bot_dish",
+      dishName: "Flatbread",
+      makerParticipantId: bot.id,
+      unitSingular: "slice",
+      unitPlural: "slices",
+      location: { type: "inventory", participantId: bot.id }
+    };
+
+    const decision = decideBotIntent(table, bot.id);
+    expect(decision?.intent.type).toBe("create_offer");
+    if (decision?.intent.type !== "create_offer") {
+      throw new Error(`Expected create_offer, got ${decision?.intent.type ?? "none"}`);
+    }
+    expect(decision.intent.offeredAssets).toEqual([{ kind: "dish_part", id: "bot_offer_piece" }]);
+    expect(decision.intent.requestedAsset).toEqual({
+      kind: "voucher",
+      ingredientId: "vegetables",
+      ownerParticipantId: vegetablesOwner.id,
+      quantity: 1
+    });
+  });
+
   it("has goal-complete bots accept incoming offers even without an active recipe", () => {
     const { table } = startAndDeposit(8, "goal-complete-bot-offer");
     const [sender, recipient] = activeParticipants(table);
@@ -1908,13 +2252,13 @@ describe("platter, offers, and visibility", () => {
     expect(messages.at(-1)?.type).toBe("snapshot");
     const firstVersion = messages.at(-1)?.snapshot?.version;
 
-    applyIntent(table, host.id, { type: "set_target_dish_count", count: 3 });
+    applyIntent(table, host.id, { type: "set_target_dish_count", count: 2 });
     hub.broadcastTable(table);
 
     const delta = messages.at(-1);
     expect(delta?.type).toBe("delta");
     expect(delta?.patch?.version).toBe(table.version);
-    expect(delta?.patch?.targetDishCount).toBe(3);
+    expect(delta?.patch?.targetDishCount).toBe(2);
     expect(delta?.patch?.participants).toBeUndefined();
     expect(delta?.append?.transactionHistory).toEqual([]);
     expect(table.version).toBeGreaterThan(firstVersion ?? -1);
@@ -2009,7 +2353,7 @@ describe("platter, offers, and visibility", () => {
       connected: true
     });
     expect(rejoinedHand).toEqual(firstHand);
-    expect(rejoinedHand).toHaveLength(VOUCHERS_PER_INGREDIENT - 1);
+    expect(rejoinedHand).toHaveLength(VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER);
   });
 
   it("lets the host manually convert a connected or disconnected active player to a mixed bot", () => {
@@ -2076,15 +2420,15 @@ describe("platter, offers, and visibility", () => {
 });
 
 describe("winning and eating", () => {
-  it("keeps cooking after everyone has one dish when the dish goal is the default 4", () => {
-    const { table } = startAndDeposit(8, "default-four-dishes");
+  it("keeps cooking after everyone has one dish when the dish goal is the default 3", () => {
+    const { table } = startAndDeposit(8, "default-three-dishes");
 
     for (const participant of activeParticipants(table)) {
       completeRecipeBySetup(table, participant.id);
       applyAsTurn(table, participant.id, { type: "prepare" });
     }
 
-    expect(table.targetDishCount).toBe(4);
+    expect(table.targetDishCount).toBe(DEFAULT_TARGET_DISH_COUNT);
     expect(table.phase).toBe("playing");
     expect(table.winnerParticipantIds).toHaveLength(0);
     for (const participant of activeParticipants(table)) {
@@ -2185,9 +2529,9 @@ describe("winning and eating", () => {
     }
 
     expect(harness.table.phase).toBe("settlement");
-    expect(platterAccountForParticipant(harness.table, debtor.id)).toMatchObject({ ownCardsInPlatter: 2, platterDebt: 1, cleared: false });
+    expect(platterAccountForParticipant(harness.table, debtor.id)).toMatchObject({ ownCardsInPlatter: 3, platterDebt: 1, cleared: false });
     expect(platterAccountForParticipant(harness.table, shortfall.id)).toMatchObject({
-      ownCardsInPlatter: 0,
+      ownCardsInPlatter: 1,
       platterShortfall: 1,
       cleared: false
     });
@@ -2236,14 +2580,14 @@ describe("winning and eating", () => {
 
     expect(harness.table.phase).toBe("settlement");
     expect(platterAccountForParticipant(harness.table, holder.id)).toMatchObject({
-      ownCardsInPlatter: 1,
-      ownCardsInHand: VOUCHERS_PER_INGREDIENT - 1,
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER,
+      ownCardsInHand: VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER,
       foreignCardsInHand: 1,
       cleared: false
     });
     expect(platterAccountForParticipant(harness.table, owner.id)).toMatchObject({
-      ownCardsInPlatter: 1,
-      ownCardsInHand: VOUCHERS_PER_INGREDIENT - 2,
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER,
+      ownCardsInHand: VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER - 1,
       ownCardsInOtherHands: 1,
       cleared: false
     });
@@ -2259,7 +2603,7 @@ describe("winning and eating", () => {
     });
 
     expect(platterAccountForParticipant(harness.table, owner.id)).toMatchObject({
-      ownCardsInPlatter: 0,
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER - 1,
       platterShortfall: 1,
       ownCardsInOtherHands: 1,
       cleared: false
@@ -2273,14 +2617,14 @@ describe("winning and eating", () => {
     });
 
     expect(platterAccountForParticipant(harness.table, holder.id)).toMatchObject({
-      ownCardsInPlatter: 1,
-      ownCardsInHand: VOUCHERS_PER_INGREDIENT - 1,
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER,
+      ownCardsInHand: VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER,
       foreignCardsInHand: 0,
       cleared: true
     });
     expect(platterAccountForParticipant(harness.table, owner.id)).toMatchObject({
-      ownCardsInPlatter: 1,
-      ownCardsInHand: VOUCHERS_PER_INGREDIENT - 1,
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER,
+      ownCardsInHand: VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER,
       ownCardsInOtherHands: 0,
       cleared: true
     });
@@ -2366,6 +2710,31 @@ describe("winning and eating", () => {
     expect(harness.table.transactionHistory.at(-1)).toMatchObject({ name: owner.name, action: "Eat" });
   });
 
+  it("lets a cleared player eat all held food parts at once without turn gating", () => {
+    const harness = makeHarness(8, "eat-all-held-parts");
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
+    for (const participant of activeParticipants(harness.table)) {
+      completeRecipeBySetup(harness.table, participant.id);
+      applyAsTurn(harness.table, participant.id, { type: "prepare" });
+    }
+
+    const [owner, other] = activeParticipants(harness.table);
+    const heldBefore = inventoryDishPartIds(harness.table, owner.id);
+    harness.table.currentTurnParticipantId = other.id;
+
+    applyIntent(harness.table, owner.id, { type: "bite_all" });
+
+    expect(heldBefore.length).toBe(DISH_PARTS_PER_DISH);
+    expect(inventoryDishPartIds(harness.table, owner.id)).toHaveLength(0);
+    for (const partId of heldBefore) {
+      expect(harness.table.dishParts[partId].location).toEqual({ type: "eaten", participantId: owner.id });
+    }
+    const ownerBites = Object.values(harness.table.dishes).reduce((total, dish) => total + (dish.biteCounts[owner.id] ?? 0), 0);
+    expect(ownerBites).toBe(DISH_PARTS_PER_DISH);
+    expect(harness.table.transactionHistory.filter((row) => row.name === owner.name && row.action === "Eat")).toHaveLength(DISH_PARTS_PER_DISH);
+  });
+
   it("has bots settle accounts and eat held food parts deterministically", () => {
     const harness = makeHarness(1, "bot-settlement-eating");
     addBots(harness.table, harness.table.hostParticipantId, ["mixed", "mixed", "mixed", "mixed", "mixed", "mixed", "mixed"]);
@@ -2377,14 +2746,14 @@ describe("winning and eating", () => {
     }
 
     harness.table.currentTurnParticipantId = activeParticipants(harness.table).find((participant) => participant.kind === "bot")?.id;
-    const decisions = runBots(harness.table, 40).filter((decision) => decision.intent.type === "bite");
+    const decisions = runBots(harness.table, 40).filter((decision) => decision.intent.type === "bite_all");
 
     expect(harness.table.phase).toBe("eating");
     expect(decisions.length).toBeGreaterThan(0);
     expect(Object.values(harness.table.dishes).some((dish) => dish.partsRemaining < DISH_PARTS_PER_DISH)).toBe(true);
   });
 
-  it("lets a bot seed one settlement food part without looping on its own platter card", () => {
+  it("has a settlement bot offer food for its own stranded promise card", () => {
     const harness = makeHarness(1, "bot-settlement-no-deposit-loop");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
@@ -2402,28 +2771,168 @@ describe("winning and eating", () => {
 
     harness.table.currentTurnParticipantId = bot.id;
     expect(platterAccountForParticipant(harness.table, bot.id)).toMatchObject({
-      ownCardsInPlatter: 1,
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER,
       ownCardsInOtherHands: 1,
       cleared: false
     });
 
     const decision = decideBotIntent(harness.table, bot.id);
 
-    expect(decision?.intent.type).toBe("platter_asset_swap");
+    expect(decision?.intent).toMatchObject({
+      type: "create_offer",
+      toParticipantId: host.id,
+      offeredAssets: [{ kind: "dish_part" }],
+      requestedAsset: { kind: "voucher", ingredientId: bot.ingredientId, ownerParticipantId: bot.id, quantity: 1 }
+    });
+    expect(platterDishPartIds(harness.table)).toHaveLength(0);
+  });
+
+  it("has settlement bots fill a platter shortfall with an extra own promise card", () => {
+    const harness = makeHarness(1, "bot-settlement-shortfall-extra-own-card");
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
+    const host = harness.table.participants[harness.table.hostParticipantId];
+    const bot = activeParticipants(harness.table).find((participant) => participant.kind === "bot") as Participant;
+
+    for (const participant of activeParticipants(harness.table)) {
+      completeRecipeBySetup(harness.table, participant.id);
+      applyAsTurn(harness.table, participant.id, { type: "prepare" });
+    }
+
+    const botOwnPlatterVoucher = platterVoucherIds(harness.table).find(
+      (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === bot.id
+    ) as string;
+    const hostFoodPart = inventoryDishPartIds(harness.table, host.id)[0] as string;
+    harness.table.vouchers[botOwnPlatterVoucher].location = { type: "hand", participantId: bot.id };
+    harness.table.dishParts[hostFoodPart].location = { type: "platter" };
+    harness.table.phase = "settlement";
+    harness.table.currentTurnParticipantId = bot.id;
+
+    expect(platterAccountForParticipant(harness.table, bot.id)).toMatchObject({
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER - 1,
+      ownCardsInHand: VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER + 1,
+      platterShortfall: 1,
+      cleared: false
+    });
+
+    const decision = decideBotIntent(harness.table, bot.id);
+
+    expect(decision?.intent).toEqual({
+      type: "platter_asset_swap",
+      give: { kind: "voucher", id: botOwnPlatterVoucher },
+      take: { kind: "dish_part", id: hostFoodPart }
+    });
     applyIntent(harness.table, bot.id, decision?.intent ?? { type: "pass_turn" });
     expect(platterAccountForParticipant(harness.table, bot.id)).toMatchObject({
-      ownCardsInPlatter: 0,
-      platterShortfall: 1,
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER,
+      ownCardsInHand: VOUCHERS_PER_INGREDIENT - OPENING_OFFERINGS_PER_PLAYER,
+      platterShortfall: 0,
+      cleared: true
+    });
+  });
+
+  it("has settlement bots prefer direct return over reversible platter food swaps", () => {
+    const harness = makeHarness(1, "bot-settlement-return-foreign-any-piece");
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
+    const [owner, holder, third] = activeParticipants(harness.table);
+    holder.kind = "bot";
+    holder.botType = "mixed";
+    for (const participant of activeParticipants(harness.table)) {
+      completeRecipeBySetup(harness.table, participant.id);
+      applyAsTurn(harness.table, participant.id, { type: "prepare" });
+    }
+
+    const ownerHandVoucher = handVoucherIds(harness.table, owner.id).find(
+      (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === owner.id
+    ) as string;
+    const thirdFoodPart = inventoryDishPartIds(harness.table, third.id)[0] as string;
+    harness.table.vouchers[ownerHandVoucher].location = { type: "hand", participantId: holder.id };
+    harness.table.dishParts[thirdFoodPart].location = { type: "platter" };
+    harness.table.phase = "settlement";
+    harness.table.currentTurnParticipantId = holder.id;
+
+    expect(platterAccountForParticipant(harness.table, owner.id)).toMatchObject({
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER,
       ownCardsInOtherHands: 1,
       cleared: false
     });
-    expect(platterDishPartIds(harness.table)).toHaveLength(1);
+    expect(platterAccountForParticipant(harness.table, holder.id)).toMatchObject({
+      foreignCardsInHand: 1,
+      cleared: false
+    });
 
-    const nextDecision = decideBotIntent(harness.table, bot.id);
-    expect(nextDecision?.intent).toEqual({ type: "pass_turn" });
+    const decision = decideBotIntent(harness.table, holder.id);
+
+    expect(decision?.intent).toEqual({
+      type: "create_offer",
+      toParticipantId: owner.id,
+      offeredVoucherIds: [ownerHandVoucher],
+      requestedAsset: { kind: "dish_part", quantity: 1 }
+    });
+    applyIntent(harness.table, holder.id, decision?.intent ?? { type: "pass_turn" });
+    const offerId = Object.keys(harness.table.offers)[0] as string;
+    const ownerFoodPart = inventoryDishPartIds(harness.table, owner.id)[0] as string;
+    harness.table.currentTurnParticipantId = owner.id;
+    applyIntent(harness.table, owner.id, {
+      type: "respond_offer",
+      offerId,
+      response: "accept",
+      assets: [{ kind: "dish_part", id: ownerFoodPart }]
+    });
+    expect(harness.table.dishParts[thirdFoodPart].location).toEqual({ type: "platter" });
+    expect(platterAccountForParticipant(harness.table, holder.id)).toMatchObject({ foreignCardsInHand: 0, cleared: true });
+    expect(platterAccountForParticipant(harness.table, owner.id)).toMatchObject({ ownCardsInOtherHands: 0, cleared: true });
   });
 
-  it("has settlement bots seed food by taking an existing food part before a random foreign card", () => {
+  it("has settlement bots offer a stranded foreign card directly for any held food piece", () => {
+    const harness = makeHarness(1, "bot-settlement-direct-offer-food-piece");
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
+    const [owner, holder] = activeParticipants(harness.table);
+    holder.kind = "bot";
+    holder.botType = "mixed";
+    for (const participant of activeParticipants(harness.table)) {
+      completeRecipeBySetup(harness.table, participant.id);
+      applyAsTurn(harness.table, participant.id, { type: "prepare" });
+    }
+
+    const ownerHandVoucher = handVoucherIds(harness.table, owner.id).find(
+      (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === owner.id
+    ) as string;
+    const ownerFoodPart = inventoryDishPartIds(harness.table, owner.id)[0] as string;
+    harness.table.vouchers[ownerHandVoucher].location = { type: "hand", participantId: holder.id };
+    harness.table.phase = "settlement";
+    harness.table.currentTurnParticipantId = holder.id;
+
+    const decision = decideBotIntent(harness.table, holder.id);
+
+    expect(decision?.intent).toEqual({
+      type: "create_offer",
+      toParticipantId: owner.id,
+      offeredVoucherIds: [ownerHandVoucher],
+      requestedAsset: { kind: "dish_part", quantity: 1 }
+    });
+    applyIntent(harness.table, holder.id, decision?.intent ?? { type: "pass_turn" });
+    const offerId = Object.keys(harness.table.offers)[0] as string;
+    expect(harness.table.vouchers[ownerHandVoucher].location).toEqual({ type: "offer_lock", offerId });
+
+    harness.table.currentTurnParticipantId = owner.id;
+    applyIntent(harness.table, owner.id, {
+      type: "respond_offer",
+      offerId,
+      response: "accept",
+      assets: [{ kind: "dish_part", id: ownerFoodPart }]
+    });
+
+    expect(harness.table.vouchers[ownerHandVoucher].location).toEqual({ type: "hand", participantId: owner.id });
+    expect(harness.table.dishParts[ownerFoodPart].location).toEqual({ type: "inventory", participantId: holder.id });
+    expect(platterAccountForParticipant(harness.table, owner.id).cleared).toBe(true);
+    expect(platterAccountForParticipant(harness.table, holder.id).cleared).toBe(true);
+    expect(harness.table.phase).toBe("eating");
+  });
+
+  it("has settlement bots recover own stranded cards before seeding basket food", () => {
     const harness = makeHarness(1, "bot-settlement-seed-food-for-food");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
@@ -2449,7 +2958,7 @@ describe("winning and eating", () => {
     harness.table.currentTurnParticipantId = bot.id;
 
     expect(platterAccountForParticipant(harness.table, bot.id)).toMatchObject({
-      ownCardsInPlatter: 0,
+      ownCardsInPlatter: OPENING_OFFERINGS_PER_PLAYER - 1,
       platterShortfall: 1,
       ownCardsInOtherHands: 2,
       cleared: false
@@ -2458,10 +2967,12 @@ describe("winning and eating", () => {
     const decision = decideBotIntent(harness.table, bot.id);
 
     expect(decision?.intent).toMatchObject({
-      type: "platter_asset_swap",
-      give: { kind: "dish_part" },
-      take: { kind: "dish_part", id: hostFoodPart }
+      type: "create_offer",
+      toParticipantId: host.id,
+      offeredAssets: [{ kind: "dish_part" }],
+      requestedAsset: { kind: "voucher", ingredientId: bot.ingredientId, ownerParticipantId: bot.id, quantity: 1 }
     });
+    expect(platterDishPartIds(harness.table)).toEqual([hostFoodPart]);
   });
 
   it("expires a configured timer into settlement instead of bypassing accountability", () => {
@@ -2531,7 +3042,8 @@ describe("winning and eating", () => {
     for (const participant of Object.values(table.participants)) {
       expect(participant.dishCount).toBe(0);
       expect(participant.depositedInitial).toBe(false);
-      expect(participant.ingredientId).toBeUndefined();
+      expect(participant.openingOfferingsCount).toBe(0);
+      expect(participant.ingredientId).toBeDefined();
     }
   });
 });

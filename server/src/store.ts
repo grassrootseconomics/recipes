@@ -2,15 +2,15 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { runBots } from "./bots.js";
 import { addHumanParticipant, applyIntent, createEmptyTable, disconnectParticipant, expireTimer, GameError } from "./game.js";
 import { buildSnapshot } from "./snapshots.js";
-import type { CreateTableResult, Intent, JoinTableResult, Participant, Snapshot, Table, TransactionRecord } from "./types.js";
+import type { CreateTableResult, Intent, JoinTableResult, Participant, PublicTableSummary, Snapshot, Table, TransactionRecord } from "./types.js";
 
 export class TableStore {
   readonly tables = new Map<string, Table>();
 
-  createTable(hostName: string, seed?: string, requestedCode?: string): CreateTableResult {
+  createTable(hostName: string, seed?: string, requestedCode?: string, isPublic = true): CreateTableResult {
     const code = requestedCode ? this.reserveRequestedCode(requestedCode) : this.nextCode();
     const seatToken = this.nextSeatToken();
-    const table = createEmptyTable(code, seed ?? randomUUID(), hostName, seatToken);
+    const table = createEmptyTable(code, seed ?? randomUUID(), hostName, seatToken, isPublic);
     this.tables.set(code, table);
     const participant = table.participants[table.hostParticipantId];
     return {
@@ -53,6 +53,23 @@ export class TableStore {
       joinable,
       reason: joinable ? undefined : table.phase === "lobby" ? "full" : "started"
     };
+  }
+
+  listPublicJoinableTables(): PublicTableSummary[] {
+    return [...this.tables.values()]
+      .filter((table) => table.isPublic && table.phase === "lobby" && openBotSeatCount(table) > 0)
+      .sort((left, right) => left.code.localeCompare(right.code))
+      .map((table) => {
+        const participants = Object.values(table.participants);
+        const activeParticipants = participants.filter((participant) => participant.role === "active");
+        return {
+          code: table.code,
+          hostName: table.participants[table.hostParticipantId]?.name ?? "Host",
+          activeSeats: activeParticipants.length,
+          humanSeats: activeParticipants.filter((participant) => participant.kind === "human").length,
+          openSeats: openBotSeatCount(table)
+        };
+      });
   }
 
   getSnapshotByToken(code: string, seatToken: string, viewerParticipantId?: string): Snapshot {
@@ -183,6 +200,10 @@ export class TableStore {
   private nextSeatToken(): string {
     return randomUUID();
   }
+}
+
+function openBotSeatCount(table: Table): number {
+  return Object.values(table.participants).filter((participant) => participant.role === "active" && participant.kind === "bot").length;
 }
 
 function shouldRunBotsAfterIntent(intent: Intent): boolean {

@@ -7,13 +7,13 @@ import {
 } from "./constants.js";
 import type { Ingredient } from "./types.js";
 
-export const RECIPE_VARIANT_COUNT = 4;
-export const RECIPE_REQUIRED_ITEMS = VOUCHERS_PER_INGREDIENT - 1;
+export const RECIPE_VARIANT_COUNT = 3;
+export const RECIPE_REQUIRED_ITEMS = 6;
 export const RECIPE_DISTINCT_COUNTS = [4, 5, 6] as const;
 export const MIN_TEMPLATE_INGREDIENTS = RECIPE_DISTINCT_COUNTS[0];
 export const MAX_TEMPLATE_INGREDIENTS = RECIPE_DISTINCT_COUNTS[RECIPE_DISTINCT_COUNTS.length - 1];
 
-export const RECIPE_SLOTS = ["initial", "followup_1", "followup_2", "followup_3"] as const;
+export const RECIPE_SLOTS = ["initial", "followup_1", "followup_2"] as const;
 
 export type RecipeSlot = (typeof RECIPE_SLOTS)[number];
 export type RecipeQuantityShape = "two_doubles_two_singles" | "one_double_four_singles" | "six_singles";
@@ -349,7 +349,7 @@ export function generateRecipeCatalog(): RecipeCatalog {
   }
 
   const catalog = {
-    generatorVersion: "4",
+    generatorVersion: "5",
     ingredients: [...INGREDIENTS],
     dishTemplates: catalogDishTemplates(),
     configurations,
@@ -607,7 +607,7 @@ function validateCatalog(catalog: RecipeCatalog): void {
     throw new Error("Recipes MVP requires one 8-player catalog configuration.");
   }
   if (catalog.recipes.length !== 8 * RECIPE_VARIANT_COUNT) {
-    throw new Error(`Recipes MVP requires 32 recipes, got ${catalog.recipes.length}.`);
+    throw new Error(`Recipes MVP requires ${8 * RECIPE_VARIANT_COUNT} recipes, got ${catalog.recipes.length}.`);
   }
 }
 

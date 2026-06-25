@@ -25,6 +25,8 @@ func _initialize() -> void:
 	_require(transaction_section != null and not transaction_section.visible, "Successful Transactions section is hidden below the table")
 	var post_controls := _control_from_property(main, "_post_table_controls")
 	_require(post_controls != null and not post_controls.visible, "post-table End Game controls are hidden during play")
+	var table_main_menu_button := visual.find_child("TableMainMenuButton", true, false) as Control
+	_require(table_main_menu_button != null and not table_main_menu_button.visible, "table hides the direct Main Menu button until the game is over")
 	var root_scroll := _control_from_property(main, "_root_scroll") as ScrollContainer
 	_require(root_scroll != null and root_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED, "main table view disables root page scrolling during play")
 	var offline_end_overlay := _control_from_property(main, "_offline_end_popup")
@@ -39,21 +41,23 @@ func _initialize() -> void:
 	_require(stop_panel != null and stop_panel.get_global_rect().size.y <= 170, "offline stop cooking popup stays compact, got %s" % [stop_panel.get_global_rect().size if stop_panel != null else Vector2.ZERO])
 	offline_end_overlay.hide()
 	var short_popup_rows := int(main.call("_history_popup_row_count_for_size", Vector2i(480, 520)))
-	_require(short_popup_rows <= 8 and short_popup_rows >= 1, "short history popup uses an internal scroller instead of overflowing the screen")
+	_require(short_popup_rows <= 6 and short_popup_rows >= 1, "short history popup uses an internal scroller instead of overflowing the screen")
 	var tall_popup_rows := int(main.call("_history_popup_row_count_for_size", Vector2i(680, 900)))
-	_require(tall_popup_rows <= 8, "history popup caps visible rows even on tall screens")
+	_require(tall_popup_rows <= 6, "history popup caps visible rows even on tall screens")
 	var transaction_label := str(main.call("_transaction_history_label", _transaction_order_fixture()))
 	_require(transaction_label.find("3 | Cara") < transaction_label.find("1 | Amina"), "transaction history display shows newest rows first")
 
 	var viewport_width := root.get_viewport().get_visible_rect().size.x
+	var viewport_height := root.get_viewport().get_visible_rect().size.y
 	var holder_rect := holder.get_global_rect()
 	var visual_rect := visual.get_global_rect()
 	_require(holder_rect.end.x <= viewport_width + 1.0, "table holder fits the viewport width")
 	_require(visual_rect.end.x <= viewport_width + 1.0, "table visual fits the viewport width")
+	_require(visual_rect.end.y <= viewport_height - 6.0, "table visual leaves a bottom safety margin; visual=%s viewport=%s" % [visual_rect, root.get_viewport().get_visible_rect()])
 	_require(visual_rect.size.y < 1000.0, "table visual height follows content without a large blank bottom band")
-	var cooks_title := visual.find_child("Title_Cooks", true, false) as Control
-	_require(cooks_title != null, "main scene table renders the Cooks title")
-	_require(cooks_title.get_global_rect().position.y - visual_rect.position.y < 80.0, "table content is top-aligned without a large blank band")
+	var basket_area := visual.find_child("BasketTableArea", true, false) as Control
+	_require(visual.find_child("Title_Cooks", true, false) == null, "main scene table omits the separate Cooks title")
+	_require(basket_area != null and basket_area.get_global_rect().position.y - visual_rect.position.y < 80.0, "table content is top-aligned without a large blank band")
 
 	visual.call("debug_flush_animations")
 	await process_frame
@@ -80,7 +84,7 @@ func _initialize() -> void:
 	await process_frame
 	recipes_client.send_intent({"type": "pass_turn"})
 	var saw_intervening_bot_turn := false
-	for _controlled_follow_frame in range(900):
+	for _controlled_follow_frame in range(1200):
 		var stats: Dictionary = visual.get("debug_stats")
 		if str(stats.get("currentTurnParticipantId", "")) == "p2":
 			saw_intervening_bot_turn = true
@@ -101,7 +105,7 @@ func _initialize() -> void:
 	var stable_visual_scale := visual.scale
 	var recipe_label := visual.find_child("RecipeName", true, false) as Control
 	if recipe_label == null:
-		recipe_label = visual.find_child("Title_Cooks", true, false) as Control
+		recipe_label = visual.find_child("BasketTableArea", true, false) as Control
 	var original_recipe_min := recipe_label.custom_minimum_size if recipe_label != null else Vector2.ZERO
 	if recipe_label != null:
 		recipe_label.custom_minimum_size = preferred_size + Vector2(240, 180)
@@ -116,6 +120,7 @@ func _initialize() -> void:
 	_require(post_controls != null and not post_controls.visible, "post-table End Game controls hide on the title screen")
 	var table_menu_button := visual.find_child("TableMenuButton", true, false) as Control
 	_require(table_menu_button != null and not table_menu_button.visible, "table hamburger menu hides on the title screen")
+	_require(table_main_menu_button != null and not table_main_menu_button.visible, "table Main Menu overlay hides on the title screen")
 
 	recipes_client.start_offline_table("", "renamed-bot-visual")
 	await process_frame

@@ -1,7 +1,7 @@
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
-import { MAX_STOCK_PER_INGREDIENT, MIN_STOCK_PER_INGREDIENT } from "./constants.js";
+import { MAX_STOCK_PER_INGREDIENT, MAX_TARGET_DISH_COUNT, MIN_STOCK_PER_INGREDIENT, MIN_TARGET_DISH_COUNT } from "./constants.js";
 import { GameError } from "./game.js";
 import { ConnectionHub, type HubConnection } from "./hub.js";
 import { TableStore } from "./store.js";
@@ -11,7 +11,8 @@ import type { Intent } from "./types.js";
 const createTableSchema = z.object({
   hostName: z.string().max(40).default(""),
   seed: z.string().min(1).max(120).optional(),
-  requestedCode: z.string().min(4).max(24).optional()
+  requestedCode: z.string().min(4).max(24).optional(),
+  isPublic: z.boolean().default(true)
 });
 
 const joinTableSchema = z.object({
@@ -38,7 +39,7 @@ const offerAssetRequestSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("dish_part"),
-    dishId: z.string(),
+    dishId: z.string().optional(),
     makerParticipantId: z.string().optional(),
     quantity: z.number().int().positive()
   })
@@ -48,13 +49,14 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("leave_table") }),
   z.object({ type: z.literal("close_table") }),
   z.object({ type: z.literal("reset_table") }),
+  z.object({ type: z.literal("set_table_visibility"), isPublic: z.boolean() }),
   z.object({ type: z.literal("set_role"), participantId: z.string(), role: z.enum(["active", "witness"]) }),
   z.object({ type: z.literal("rename_participant"), participantId: z.string(), name: z.string().max(40) }),
   z.object({ type: z.literal("add_bot"), name: z.string().optional(), botType: z.enum(["pool_only", "barter_only", "mixed"]) }),
   z.object({ type: z.literal("add_controlled_seat"), name: z.string().optional(), participantId: z.string().optional() }),
   z.object({ type: z.literal("convert_to_bot"), participantId: z.string(), botType: z.enum(["pool_only", "barter_only", "mixed"]).optional() }),
   z.object({ type: z.literal("set_timer"), seconds: z.number().int().positive().nullable() }),
-  z.object({ type: z.literal("set_target_dish_count"), count: z.number().int().min(1).max(4) }),
+  z.object({ type: z.literal("set_target_dish_count"), count: z.number().int().min(MIN_TARGET_DISH_COUNT).max(MAX_TARGET_DISH_COUNT) }),
   z.object({ type: z.literal("set_stock"), count: z.number().int().min(MIN_STOCK_PER_INGREDIENT).max(MAX_STOCK_PER_INGREDIENT) }),
   z.object({ type: z.literal("set_pause"), paused: z.boolean() }),
   z.object({ type: z.literal("start") }),
@@ -101,7 +103,8 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("redeem_voucher"), voucherId: z.string() }),
   z.object({ type: z.literal("redeem_from_hand"), voucherId: z.string(), requirementId: z.string() }),
   z.object({ type: z.literal("prepare") }),
-  z.object({ type: z.literal("bite"), dishId: z.string() })
+  z.object({ type: z.literal("bite"), dishId: z.string() }),
+  z.object({ type: z.literal("bite_all") })
 ]);
 
 const intentEnvelopeSchema = z.object({
@@ -128,6 +131,23 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   const hub = options.hub ?? new ConnectionHub();
   const timerHandles = new Map<string, ReturnType<typeof setTimeout>>();
 
+  app.addHook("onRequest", (request, reply, done) => {
+    const origin = request.headers.origin;
+    reply
+      .header("Access-Control-Allow-Origin", typeof origin === "string" ? origin : "*")
+      .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+      .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+      .header("Access-Control-Max-Age", "86400")
+      .header("Vary", "Origin");
+
+    if (request.method === "OPTIONS") {
+      reply.status(204).send();
+      return;
+    }
+
+    done();
+  });
+
   await app.register(websocket);
 
   app.setErrorHandler((error, _request, reply) => {
@@ -147,13 +167,28 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     ok: true,
     result: {
       service: "recipes-server",
-      features: ["pause", "manual_bot_conversion", "transaction_history", "dish_part_settlement", "host_controlled_seats", "turn_modes"]
+      features: [
+        "pause",
+        "manual_bot_conversion",
+        "transaction_history",
+        "dish_part_settlement",
+        "host_controlled_seats",
+        "turn_modes",
+        "public_tables"
+      ]
+    }
+  }));
+
+  app.get("/tables", async () => ({
+    ok: true,
+    result: {
+      tables: store.listPublicJoinableTables()
     }
   }));
 
   app.post("/tables", async (request) => {
     const body = createTableSchema.parse(request.body ?? {});
-    const result = store.createTable(body.hostName, body.seed, body.requestedCode);
+    const result = store.createTable(body.hostName, body.seed, body.requestedCode, body.isPublic);
     return {
       ok: true,
       result: {

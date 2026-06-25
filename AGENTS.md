@@ -6,6 +6,5 @@
 - Offline mode is the only client-side rules runtime exception. It is local-only, GDScript-only, and must mirror online server semantics for pass-and-play seats and bots.
 - Any gameplay rule change must update both the TypeScript online rules and the GDScript offline mirror, or add/adjust parity coverage that proves the paths still match.
 - Prefer deterministic game logic and seedable bot/recipe behavior.
-- Preserve hidden-information boundaries: active players and bots must not receive other active hands or full hidden recipe state. Public recipe-help summaries are allowed when they include only the other cook's current recipe name and net still-missing ingredient counts after useful held promise cards are counted.
 - Add focused server tests for every rules change before broad client work.
 - Do not add blockchain, wallets, accounts, borrowing, free chat, or a global leaderboard unless the design doc is updated first.

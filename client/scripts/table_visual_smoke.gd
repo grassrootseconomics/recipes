@@ -41,10 +41,12 @@ func _initialize() -> void:
 	visual.size = Vector2(720, 1100)
 	await process_frame
 	_require(int(visual.debug_stats.get("participantCount", 0)) == 8, "renders all 8 cooks in the Cooks grid")
-	var cook_rows := visual.find_child("CookRows", true, false) as VBoxContainer
-	_require(cook_rows != null and cook_rows.get_child_count() == 2, "renders the 8 cooks as two rows")
-	if cook_rows != null and cook_rows.get_child_count() == 2:
-		_require(cook_rows.get_child(0).get_child_count() == 4 and cook_rows.get_child(1).get_child_count() == 4, "renders four cooks per row")
+	var cook_ring := visual.find_child("CookRing", true, false) as Control
+	_require(cook_ring != null and cook_ring.get_child_count() == 8, "renders the 8 cooks around the basket")
+	if cook_ring != null and cook_ring.get_child_count() == 8:
+		var p5 := visual.find_child("Participant_p5", true, false) as Control
+		var p8 := visual.find_child("Participant_p8", true, false) as Control
+		_require(p5 != null and p8 != null and p5.position.x > p8.position.x, "lower cooks are positioned clockwise around the basket")
 	_require(visual.find_child("Participant_p1", true, false) != null, "keeps the viewing cook visible in the 8-cook grid")
 	_require(bool(visual.debug_stats.get("viewerCookVisible", false)), "shows the viewing cook in the 8-cook grid")
 	_assert_key_visuals_fit_assigned_width(visual, 720.0)
@@ -56,7 +58,11 @@ func _initialize() -> void:
 	_require(promise_title != null and promise_title.size.x >= 150.0, "Promise Cards title has enough width and does not wrap vertically")
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
-	var cooks_title := visual.find_child("Title_Cooks", true, false) as Label
+	var hand_card := visual.find_child("HandCard_rice", true, false) as Button
+	_require(hand_card != null and hand_card.custom_minimum_size == Vector2(96, 90), "Promise card keeps its fixed tile size")
+	_require(hand_card != null and hand_card.find_child("CardInsetOutline", true, false) != null, "Promise card draws an inset outline so borders are not clipped")
+	_require(visual.find_child("Title_Cooks", true, false) == null, "visual table removes the separate Cooks title")
+	_require(_has_label_containing(visual, "Amina's Actions"), "Actions panel title includes the viewing cook name")
 	var table_menu_button := visual.find_child("TableMenuButton", true, false) as Button
 	_require(table_menu_button != null and table_menu_button.visible, "renders a table menu button")
 	_require(table_menu_button != null and table_menu_button.size.x <= 48.0 and table_menu_button.size.y <= 40.0, "table menu button stays compact")
@@ -80,6 +86,9 @@ func _initialize() -> void:
 	_require(menu_actions.has("View History"), "table menu exposes transaction history")
 	_require(menu_actions.has("Fast Bots"), "table menu exposes Fast Bots toggle by default")
 	_require(menu_actions.has("End Game"), "host table menu exposes End Game")
+	_require(menu_actions.has("Main Menu"), "table menu exposes Main Menu")
+	var main_menu_overlay := visual.find_child("TableMainMenuButton", true, false) as Button
+	_require(main_menu_overlay != null and not main_menu_overlay.visible, "visual table hides top Main Menu button before the game is over")
 	_require(visual.debug_fast_bots_enabled(), "Fast Bots mode is enabled by default")
 	_require(absf(float(visual.debug_animation_speed_scale_for_type("swap")) - 1.35) <= 0.001, "viewer swap animations stay slower and smoother in Fast Bots mode")
 	_require(absf(float(visual.debug_animation_speed_scale_for_type("redeem")) - 1.35) <= 0.001, "viewer redemption animations stay slower and smoother in Fast Bots mode")
@@ -112,7 +121,7 @@ func _initialize() -> void:
 	visual.debug_toggle_bot_animation_speed()
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
-	_require(cooks_title != null and cooks_title.text == "Cooks" and cooks_title.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "centers the Cooks title")
+	_require(visual.find_child("Title_Cooks", true, false) == null, "keeps the separate Cooks title removed after rerender")
 	_require(visual.find_child("BasketBackdrop", true, false) != null, "renders a basket backdrop behind platter cards")
 	_require(visual.find_child("BasketSlot_rice", true, false) != null, "keeps a stable basket slot for an ingredient before it appears")
 	_require(visual.find_child("BasketSlot_cheese", true, false) != null, "keeps all ingredient basket slots available for animation anchors")
@@ -126,8 +135,29 @@ func _initialize() -> void:
 	_require(participant_tile != null, "renders non-viewer cook tile")
 	var cook_name := participant_tile.find_child("CookNameLabel", true, false) as Label
 	var cook_ingredient := participant_tile.find_child("CookIngredientLabel", true, false) as Label
-	_require(cook_name != null and cook_name.text == "Ben", "cook tile shows participant name")
+	var cook_icon := participant_tile.find_child("CookIngredientIcon", true, false) as TextureRect
+	var cook_avatar := participant_tile.find_child("CookAvatar", true, false) as TextureRect
+	_require(cook_name != null and cook_name.text == "Ben", "cook tile keeps participant name text separate from progress glyphs")
+	_require(_progress_node_matches(participant_tile.find_child("CookProgressStars", true, false), 0, 3), "cook tile shows empty dish progress stars")
 	_require(cook_ingredient != null and cook_ingredient.text.find("Beans x28") >= 0, "cook tile shows ingredient stock label")
+	_require(cook_icon != null and cook_avatar != null and cook_avatar.position.x > cook_icon.position.x, "cook tile places avatar slightly to the right of the ingredient")
+	_require(cook_icon != null and cook_avatar != null and cook_avatar.position.x >= cook_icon.position.x + cook_icon.size.x - 2.0, "cook tile keeps avatar side-by-side instead of on top of the ingredient")
+	_require(cook_icon != null and cook_icon.position.y - cook_name.position.y <= 24.0, "cook tile keeps name close to ingredient and avatar")
+	var cook_progress := snapshot.duplicate(true)
+	cook_progress["participants"][1]["dishCount"] = 1
+	cook_progress["participants"][2]["dishCount"] = 2
+	cook_progress["participants"][3]["dishCount"] = 3
+	visual.debug_apply_snapshot(cook_progress)
+	await process_frame
+	var one_star_tile := visual.find_child("Participant_p2", true, false) as Control
+	var two_star_tile := visual.find_child("Participant_p3", true, false) as Control
+	var three_star_tile := visual.find_child("Participant_p4", true, false) as Control
+	_require(_progress_node_matches(one_star_tile.find_child("CookProgressStars", true, false), 1, 3), "cook tile shows one filled star after one dish")
+	_require(_progress_node_matches(two_star_tile.find_child("CookProgressStars", true, false), 2, 3), "cook tile shows two filled stars after two dishes")
+	_require(_progress_node_matches(three_star_tile.find_child("CookProgressStars", true, false), 3, 3), "cook tile shows three filled stars after completion")
+	visual.debug_apply_snapshot(snapshot)
+	await process_frame
+	participant_tile = visual.find_child("Participant_p2", true, false)
 	_require(participant_tile.find_child("OfferBadgeIncoming", true, false) != null, "incoming offers render a visible pulsing badge")
 	var outgoing_tile := visual.find_child("Participant_p3", true, false)
 	_require(outgoing_tile != null and outgoing_tile.find_child("OfferBadgeOutgoing", true, false) != null, "outgoing offers render a visible pulsing badge")
@@ -146,7 +176,7 @@ func _initialize() -> void:
 	await process_frame
 	_require(int(visual.debug_stats.get("handGroupCount", 0)) == 5 and int(visual.debug_stats.get("handGridColumns", 0)) == 6, "Promise Cards tray uses a fixed six-column grid")
 	var hand_scroll := visual.find_child("HandScroll", true, false) as ScrollContainer
-	_require(hand_scroll != null and hand_scroll.custom_minimum_size.y >= 208.0, "Promise Cards tray reserves enough height for two rows with labels")
+	_require(hand_scroll != null and hand_scroll.custom_minimum_size.y >= 202.0, "Promise Cards tray reserves enough height for two rows with labels")
 	_require(hand_scroll != null and hand_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED, "Promise Cards tray does not require horizontal scrolling for 12 items")
 	var mixed_hand := snapshot.duplicate(true)
 	mixed_hand["ownFoodParts"] = [
@@ -158,6 +188,18 @@ func _initialize() -> void:
 	var second_row_piece := visual.find_child("HandFood_dish_b", true, false) as Control
 	_require(second_row_piece != null and second_row_piece.size.y >= 92.0, "second-row finished dish pieces keep enough height for their text labels")
 	_require(second_row_piece != null and second_row_piece.tooltip_text == "Ben's Bean Dip - 1 scoop", "held finished dish piece tooltip shows maker, full recipe name, unit, and quantity")
+	visual.debug_press_own_food_part("Bean Dip")
+	await process_frame
+	var food_popup := visual.find_child("OfferPopup", true, false) as PopupPanel
+	_require(food_popup != null and not food_popup.visible, "single-tapping a held finished dish piece selects it without opening its info popup")
+	visual.debug_open_own_food_part_info("Bean Dip")
+	await process_frame
+	_require(food_popup != null and food_popup.visible, "double-tapping a held finished dish piece opens its food-piece info popup")
+	_require(_has_text_containing(visual, "Ben's Bean Dip - 1 scoop"), "food-piece info popup shows maker, full recipe name, unit, and quantity")
+	visual.debug_apply_snapshot(mixed_hand)
+	await process_frame
+	_require(food_popup != null and food_popup.visible, "food-piece info popup stays open across table refreshes")
+	food_popup.hide()
 	_require(visual.preferred_visual_size() == Vector2(700, 960), "visual table reports a stable preferred size")
 	var full_tray := snapshot.duplicate(true)
 	full_tray["ownHand"] = [
@@ -188,13 +230,25 @@ func _initialize() -> void:
 	_require(visual.find_child("RecipeCheck_rice_0", true, false) != null, "redeemed recipe slot shows a green checkmark")
 	_require(visual.find_child("RecipeCheck_rice_1", true, false) == null, "unredeemed duplicate recipe slot does not show a checkmark")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "renders the recipe name")
-	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Recipe 1/4: Rice Bean Bowl", "renders current recipe number in title")
+	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Amina's Recipe 0/3: Rice Bean Bowl", "active first recipe starts with empty drawn progress stars and viewer name")
+	_require(_progress_node_matches(visual.find_child("RecipeTitleStars", true, false), 0, 3), "active first recipe title renders empty progress stars")
+	var recipe_title := visual.find_child("RecipeTitleLabel", true, false) as Label
+	var recipe_title_row := visual.find_child("RecipeTitleRow", true, false) as HBoxContainer
+	_require(recipe_title != null and recipe_title_row != null and recipe_title_row.alignment == BoxContainer.ALIGNMENT_CENTER, "recipe title is centered above the recipe grid")
 	var second_recipe := snapshot.duplicate(true)
 	second_recipe["participants"][0]["dishCount"] = 1
 	second_recipe["ownRecipe"]["name"] = "Cheese Frittata"
 	visual.debug_apply_snapshot(second_recipe)
 	await process_frame
-	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Recipe 2/4: Cheese Frittata", "updates recipe number after a dish is completed")
+	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Amina's Recipe 1/3: Cheese Frittata", "updates recipe progress after one dish is completed")
+	_require(_progress_node_matches(visual.find_child("RecipeTitleStars", true, false), 1, 3), "active second recipe title renders one filled star")
+	var third_recipe := snapshot.duplicate(true)
+	third_recipe["participants"][0]["dishCount"] = 2
+	third_recipe["ownRecipe"]["name"] = "Masala Omelet"
+	visual.debug_apply_snapshot(third_recipe)
+	await process_frame
+	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Amina's Recipe 2/3: Masala Omelet", "active third recipe shows two completed dishes")
+	_require(_progress_node_matches(visual.find_child("RecipeTitleStars", true, false), 2, 3), "active third recipe title renders two filled stars")
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
 	_require(int(visual.debug_stats.get("platterGroupCount", 0)) == 3, "renders platter card and food-part groups")
@@ -205,6 +259,15 @@ func _initialize() -> void:
 	_require(visual.find_child("PlatterFood_dish_1", true, false) != null, "platter food piece remains visible inside a fixed basket slot")
 	var platter_food := visual.find_child("PlatterFood_dish_1", true, false) as Control
 	_require(platter_food != null and platter_food.tooltip_text == "Diego's Vegetable Chili - 2 cups", "basket finished dish piece tooltip shows maker, full recipe name, unit, and quantity")
+	if food_popup != null:
+		food_popup.hide()
+	visual.debug_press_platter_food_part("Vegetable Chili")
+	await process_frame
+	_require(food_popup != null and not food_popup.visible, "single-tapping a basket finished dish piece does not open its info popup")
+	visual.debug_open_platter_food_part_info("Vegetable Chili")
+	await process_frame
+	_require(food_popup != null and food_popup.visible, "double-tapping a basket finished dish piece opens its food-piece info popup")
+	food_popup.hide()
 	_require(int(visual.debug_stats.get("incomingOfferCount", 0)) == 1, "counts incoming offer indicators")
 	_require(int(visual.debug_stats.get("outgoingOfferCount", 0)) == 1, "counts outgoing offer indicators")
 	var initial_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
@@ -212,14 +275,17 @@ func _initialize() -> void:
 	_require(not initial_actions.has("Prepare Dish"), "incomplete recipe does not show Prepare Dish action")
 	var finished_waiting := snapshot.duplicate(true)
 	finished_waiting["ownRecipe"] = {}
-	finished_waiting["participants"][0]["dishCount"] = int(finished_waiting.get("targetDishCount", 4))
+	finished_waiting["participants"][0]["dishCount"] = int(finished_waiting.get("targetDishCount", 3))
 	finished_waiting["currentTurnParticipantId"] = "p2"
 	visual.debug_apply_snapshot(finished_waiting)
 	await process_frame
-	_require(_has_label_containing(visual, "Help the other players make their dishes."), "finished cook Actions panel tells the player to help others")
-	_require(_has_label_containing(visual, "one of your cards in the basket"), "finished cook Actions panel explains settlement target")
+	_require(_has_label_containing(visual, "Help the other cooks make their dishes."), "finished cook Actions panel tells the player to help others")
+	_require(not _has_label_containing(visual, "settle their debts"), "finished cook Actions panel does not show settlement text before everyone is done")
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
+	visual.debug_flush_animations()
+	await process_frame
+	_intents.clear()
 	visual.debug_press_hand_ingredient("rice")
 	await process_frame
 	var selected_swap_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
@@ -256,6 +322,7 @@ func _initialize() -> void:
 	await _assert_start_snapshot_animates_offerings_from_empty_basket(visual)
 	await _assert_eight_start_snapshot_animates_offerings_from_cooks_to_fixed_basket(visual)
 	_assert_turn_update_waits_for_animation(visual)
+	_assert_turn_handoff_does_not_preempt_animation_actor(visual)
 	_assert_batch_redeem_updates_counts_one_by_one(visual)
 	_assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual)
 	_assert_in_place_delta_redeem_pass_waits_for_animation(visual)
@@ -285,7 +352,9 @@ func _initialize() -> void:
 	_assert_animation_event(visual, _offer_before(), _snapshot_fixture(), "offer", "offer badge change queues animation")
 	_assert_animation_event(visual, _settlement_before(), _settlement_after(), "settlement_swap", "settlement swap queues animation")
 	_assert_animation_event(visual, _eating_before(), _eating_after(), "eat", "bite confirmation queues animation")
-	_assert_eat_animation_starts_at_held_food_part(visual)
+	_assert_animation_count(visual, _eating_many_before(), _eating_many_after(), "eat", 3, "bite-all queues one animation per held dish piece")
+	await _assert_eat_animation_starts_at_held_food_part(visual)
+	await _assert_eat_animation_reanchors_after_food_group_reflow(visual)
 	_assert_animation_event(visual, _complete_before(), _complete_after(), "complete", "complete confirmation queues animation")
 	visual.render(snapshot)
 	visual.debug_play_animation_event({"type": "deposit", "ingredientId": "rice", "participantId": "p1"})
@@ -431,21 +500,35 @@ func _initialize() -> void:
 	visual.debug_press_participant("p4")
 	_require(visual.debug_selected_hand_ingredient() == "rice", "player tap defaults offer-card to viewer main ingredient")
 	var create_offer_height := int(visual.debug_stats.get("offerPopupHeight", 0))
-	_require(create_offer_height > 0 and create_offer_height <= 430, "create-offer popup stays compact with recipe context, height=%s" % create_offer_height)
-	_require(not bool(visual.debug_stats.get("offerPopupScrollEnabled", true)), "create-offer popup does not show a scrollbar")
+	_require(create_offer_height > 0 and create_offer_height <= 620, "create-offer popup stays within portrait bounds with recipe and hand context, height=%s" % create_offer_height)
+	_require(not bool(visual.debug_stats.get("offerPopupScrollEnabled", true)), "create-offer popup is tall enough to avoid a scrollbar")
 	_require(visual.find_child("OfferGiveCard_rice", true, false) != null, "create-offer popup shows the offered card")
 	_require(visual.find_child("OfferGetCard_vegetables", true, false) != null, "create-offer popup shows the requested card")
 	_require(visual.find_child("OfferRecipeContext_p4", true, false) != null, "create-offer popup shows target recipe context")
 	_require(visual.find_child("OfferMissing_beans", true, false) != null, "create-offer popup shows target missing ingredients")
 	_require(visual.find_child("OfferMissing_vegetables", true, false) == null, "create-offer popup omits cards the target already has")
 	_require(not (visual.find_child("OfferMissing_beans", true, false) is Button), "offer missing ingredients use grey recipe-slot style instead of colored cards")
+	_require(visual.find_child("OfferHandContext_p4", true, false) != null, "create-offer popup shows target hand context")
+	_require(visual.find_child("OfferHandVoucher_beans_p2", true, false) != null, "create-offer popup shows grouped non-viewing promise cards")
+	var target_hand_food := visual.find_child("OfferHandFood_dish_1_p4", true, false)
+	_require(target_hand_food != null, "create-offer popup shows grouped non-viewing dish pieces")
+	_require(str(target_hand_food.get_meta("offer_asset_kind", "")) == "dish_part", "create-offer popup marks non-viewing dish pieces as dish-part assets")
+	_require(target_hand_food.find_child("CardInsetOutline", true, false) == null, "create-offer popup renders non-viewing dish pieces without card frames")
 	_require(visual.find_child("OfferPopupClose", true, false) != null, "offer popup has a top-right close button")
 	_assert_offer_actions_below_cards(visual)
+
+	_intents.clear()
+	visual.debug_press_offer_hand_voucher("beans", "p2")
+	_require(visual.find_child("OfferGetCard_beans", true, false) != null, "clicking a target hand card makes it the requested offer asset")
+	_require(_press_button_containing(visual, "Create"), "specific hand-asset offer has a Create button")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "create_offer", "specific hand-asset offer emits create_offer")
+	_require(str(_intents[0].get("requestedAsset", {}).get("ingredientId", "")) == "beans", "specific hand-asset offer requests the clicked ingredient")
+	_require(str(_intents[0].get("requestedAsset", {}).get("ownerParticipantId", "")) == "p2", "specific hand-asset offer requests the clicked card owner")
 
 	var incoming_offer_popup := _snapshot_fixture()
 	visual.debug_apply_snapshot(incoming_offer_popup)
 	visual.debug_press_participant("p2")
-	_require(int(visual.debug_stats.get("offerPopupHeight", 0)) > 0 and int(visual.debug_stats.get("offerPopupHeight", 0)) <= 430, "accept/refuse offer popup stays compact with recipe context")
+	_require(int(visual.debug_stats.get("offerPopupHeight", 0)) > 0 and int(visual.debug_stats.get("offerPopupHeight", 0)) <= 620, "accept/refuse offer popup stays within portrait bounds with recipe and hand context")
 	_require(visual.find_child("OfferGiveCard_rice", true, false) != null, "incoming-offer popup shows what the viewer gives")
 	_require(visual.find_child("OfferGetCard_beans", true, false) != null, "incoming-offer popup shows what the viewer gets")
 	_require(visual.find_child("OfferRecipeContext_p2", true, false) != null, "incoming-offer popup shows other player's recipe context")
@@ -453,9 +536,86 @@ func _initialize() -> void:
 	_require(visual.find_child("OfferMissing_beans", true, false) == null, "incoming-offer popup omits cards the sender already has")
 	_assert_offer_actions_below_cards(visual)
 
+	var incoming_food_piece_offer := _snapshot_fixture()
+	incoming_food_piece_offer["offers"] = [
+		{
+			"id": "offer_food_piece_incoming",
+			"status": "pending",
+			"fromParticipantId": "p2",
+			"toParticipantId": "p1",
+			"offeredAssets": [{"kind": "voucher", "id": "beans_1"}],
+			"offeredVoucherIds": [],
+			"offeredVouchers": [{"id": "beans_1", "ingredientId": "beans"}],
+			"requestedAsset": {"kind": "dish_part", "quantity": 1}
+		}
+	]
+	incoming_food_piece_offer["ownFoodParts"] = [
+		{"id": "dish_a_part_1", "dishId": "dish_a", "dishName": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "makerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}}
+	]
+	visual.debug_apply_snapshot(incoming_food_piece_offer)
+	visual.debug_press_participant("p2")
+	_require(_has_text_containing(visual, "Cheese Frittata slice x1"), "incoming generic food-piece offer names the actual dish piece in the sentence")
+	_require(_has_text_containing(visual, "Frittata slice x1"), "incoming generic food-piece offer names the actual dish piece on the asset")
+	var incoming_food_asset := visual.find_child("OfferGiveCard_dish_a", true, false)
+	_require(incoming_food_asset != null, "incoming generic food-piece offer uses the actual dish-piece asset")
+	_require(str(incoming_food_asset.get_meta("offer_asset_kind", "")) == "dish_part", "incoming generic food-piece offer marks the give asset as a dish piece")
+	_require(incoming_food_asset.find_child("CardInsetOutline", true, false) == null, "incoming generic food-piece offer renders the dish piece without a card frame")
+	_require(not _has_text_containing(visual, "Food piece x1"), "incoming generic food-piece offer does not show placeholder food-piece text when a concrete piece is available")
+
 	visual.debug_apply_snapshot(_snapshot_fixture())
 	visual.debug_press_participant("p3")
 	_require(_has_text_containing(visual, "Cancel Offer"), "outgoing-offer popup uses explicit Cancel Offer button text")
+
+	var asset_offer_popup := _snapshot_fixture()
+	asset_offer_popup["offers"] = [
+		{
+			"id": "offer_asset_out",
+			"status": "pending",
+			"fromParticipantId": "p1",
+			"toParticipantId": "p3",
+			"offeredAssets": [{"kind": "voucher", "id": "rice_4"}],
+			"offeredVoucherIds": [],
+			"offeredVouchers": [{"id": "rice_4", "ingredientId": "rice"}],
+			"requestedAsset": {"kind": "voucher", "ingredientId": "cheese", "ownerParticipantId": "p3", "quantity": 1}
+		}
+	]
+	visual.debug_apply_snapshot(asset_offer_popup)
+	visual.debug_press_participant("p3")
+	_require(visual.find_child("OfferGiveCard_rice", true, false) != null, "asset-offer popup resolves the locked offered voucher ingredient")
+	_require(not _has_text_containing(visual, "Unknown"), "asset-offer popup does not render unknown offered cards")
+
+	_intents.clear()
+	var card_return_offer := _snapshot_fixture()
+	card_return_offer["offers"] = []
+	for raw_participant in card_return_offer.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("id", "")) == "p3":
+			participant["heldFoodPartCount"] = 2
+			participant["heldFoodPartGroups"] = [{
+				"dishId": "dish_clara_frittata",
+				"dishName": "Cheese Frittata",
+				"makerParticipantId": "p3",
+				"unitSingular": "slice",
+				"unitPlural": "slices",
+				"count": 2
+			}]
+	visual.debug_apply_snapshot(card_return_offer)
+	visual.debug_press_hand_ingredient("cheese")
+	visual.debug_press_participant("p3")
+	_require(visual.find_child("OfferGiveCard_cheese", true, false) != null, "card-return offer shows the target-owned card being returned")
+	var requested_food_piece := visual.find_child("OfferGetCard_dish_clara_frittata", true, false)
+	_require(requested_food_piece != null, "card-return offer asks for a named dish piece")
+	_require(_card_has_texture(requested_food_piece), "card-return dish-piece request renders a finished-dish sprite")
+	_require(str(requested_food_piece.get_meta("offer_asset_kind", "")) == "dish_part", "card-return offer marks requested food as a dish-piece asset")
+	_require(requested_food_piece.find_child("CardInsetOutline", true, false) == null, "card-return offer renders requested food without a card frame")
+	_require(_has_text_containing(visual, "Redeem Clara's card for Cheese Frittata slice"), "card-return offer explains the named dish-piece settlement")
+	_require(_has_text_containing(visual, "Frittata slice x1"), "card-return offer food asset uses the short dish name")
+	_require(_press_button_containing(visual, "Create"), "card-return offer can be created")
+	_require(_intents.size() == 1, "card-return offer emits one intent")
+	_require(str(_intents[0].get("type", "")) == "create_offer", "card-return offer emits create_offer")
+	_require(str(_intents[0].get("toParticipantId", "")) == "p3", "card-return offer targets the card owner")
+	_require(str(_intents[0].get("requestedAsset", {}).get("kind", "")) == "dish_part", "card-return offer requests a food piece")
+	_require(str(_intents[0].get("requestedAsset", {}).get("dishName", "")) == "Cheese Frittata", "card-return offer requests the named dish piece")
 
 	_intents.clear()
 	var food_swap := _snapshot_fixture()
@@ -472,15 +632,25 @@ func _initialize() -> void:
 	var eating := _snapshot_fixture()
 	eating["phase"] = "eating"
 	eating["currentTurnParticipantId"] = "p1"
+	eating["ownRecipe"] = {}
 	eating["participants"][0]["cleared"] = true
+	eating["participants"][0]["heldFoodPartCount"] = 2
+	eating["participants"][1]["heldFoodPartCount"] = 0
+	eating["dishes"] = [
+		{"id": "dish_3", "ownerParticipantId": "p1", "name": "Cheese Frittata", "partsRemaining": 2, "partsEaten": 8, "bitesRemaining": 2, "biteCounts": {"p1": 3, "p2": 5}}
+	]
 	eating["ownFoodParts"] = [
 		{"id": "dish_3_part_1", "dishId": "dish_3", "dishName": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}}
 	]
 	visual.debug_apply_snapshot(eating)
-	_require(bool(visual.debug_stats.get("takeBiteEnabled", false)), "eating phase enables Take Bite for cleared player with held food parts")
+	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Food to Eat", "eating phase labels held food as food to eat")
+	_require(_has_text_containing(visual, "2 left"), "eating phase shows held pieces still left")
+	_require(_has_text_containing(visual, "3 eaten"), "eating phase shows bites already eaten")
+	var eating_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(eating_actions.has("Share food."), "eating phase labels the eat-all action as Share food")
+	_require(bool(visual.debug_stats.get("takeBiteEnabled", false)), "eating phase enables Share food for cleared player with held food parts")
 	visual.debug_press_take_bite_action()
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "bite", "Take Bite emits bite intent")
-	_require(str(_intents[0].get("dishId", "")) == "dish_3", "Take Bite auto-selects a held finished dish piece")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "bite_all", "Share food emits bite-all intent")
 
 	_intents.clear()
 	visual.debug_apply_snapshot(snapshot)
@@ -494,11 +664,15 @@ func _initialize() -> void:
 
 	var completed := _snapshot_fixture()
 	completed["ownRecipe"] = {}
-	completed["targetDishCount"] = 4
+	completed["targetDishCount"] = 3
 	completed["participants"][0]["dishCount"] = 4
 	visual.debug_apply_snapshot(completed)
 	_require(int(visual.debug_stats.get("dishSummaryCount", 0)) == 4, "empty recipe area renders active player dish counts")
 	_require(int(visual.debug_stats.get("dishSummaryColumns", 0)) == 2, "dish summary renders as a two-column grid")
+	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Dishes Made", "dish summary title stays centered as Dishes Made")
+	_require(_has_progress_node_matching(visual, 3, 3), "completed dish summary uses filled drawn progress stars")
+	_require(_has_progress_node_matching(visual, 0, 3), "unfinished dish summary uses empty drawn progress stars")
+	_require(not _has_label_containing(visual, "3/3"), "dish summary hides numeric slash progress")
 
 	var settlement := _snapshot_fixture()
 	settlement["phase"] = "settlement"
@@ -507,13 +681,91 @@ func _initialize() -> void:
 	settlement["participants"][1]["heldFoodPartCount"] = 39
 	settlement["participants"][2]["heldFoodPartCount"] = 20
 	settlement["participants"][3]["heldFoodPartCount"] = 0
+	for participant in settlement["participants"]:
+		participant["dishCount"] = int(settlement.get("targetDishCount", 3))
+		participant["cleared"] = false
 	visual.debug_apply_snapshot(settlement)
+	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Dish Pieces Held", "settlement summary title is Dish Pieces Held")
 	_require(int(visual.debug_stats.get("pieceSummaryCount", 0)) == 4, "settlement summary renders active player held pieces")
 	_require(int(visual.debug_stats.get("pieceSummaryTotal", 0)) == 99, "settlement summary totals held pieces that can still be eaten")
+	_require(_has_label_containing(visual, "Everyone has to settle and return"), "settlement Actions panel explains common-basket debt goal")
+	_require(_has_label_containing(visual, "2 cards in the common basket"), "settlement Actions panel explains two-card basket target")
+
+	var crowded_settlement := settlement.duplicate(true)
+	crowded_settlement["ownHand"] = [
+		{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
+		{"id": "beans_1", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "hand", "participantId": "p1"}},
+		{"id": "cheese_1", "ingredientId": "cheese", "ownerParticipantId": "p3", "location": {"type": "hand", "participantId": "p1"}},
+		{"id": "flour_1", "ingredientId": "flour", "ownerParticipantId": "p4", "location": {"type": "hand", "participantId": "p1"}},
+		{"id": "herbs_1", "ingredientId": "herbs", "ownerParticipantId": "p5", "location": {"type": "hand", "participantId": "p1"}},
+		{"id": "eggs_1", "ingredientId": "eggs", "ownerParticipantId": "p6", "location": {"type": "hand", "participantId": "p1"}},
+		{"id": "spices_1", "ingredientId": "spices", "ownerParticipantId": "p7", "location": {"type": "hand", "participantId": "p1"}}
+	]
+	crowded_settlement["ownFoodParts"] = []
+	var crowded_dish_names := [
+		"Cheese Frittata",
+		"Bean Dip",
+		"Cheesy Rice Bake",
+		"Vegetable Chili",
+		"Herb Rice Bowl",
+		"Cheese Quesadilla",
+		"Breakfast Burrito",
+		"Fried Rice",
+		"Spiced Pancakes",
+		"Rice Casserole"
+	]
+	for index in range(10):
+		crowded_settlement["ownFoodParts"].append({
+			"id": "crowded_part_%s" % index,
+			"dishId": "crowded_dish_%s" % index,
+			"dishName": crowded_dish_names[index],
+			"unitSingular": "piece",
+			"unitPlural": "pieces",
+			"makerParticipantId": "p%s" % ((index % 4) + 1),
+			"location": {"type": "hand", "participantId": "p1"}
+		})
+	visual.debug_apply_snapshot(crowded_settlement)
+	await process_frame
+	_require(float(visual.debug_stats.get("combinedMinimumOverflowY", 999.0)) <= 0.1, "crowded settlement hand assets do not increase table minimum height; stats=%s" % JSON.stringify(visual.debug_stats))
+	_require(int(visual.debug_stats.get("handScrollVerticalMode", -1)) == ScrollContainer.SCROLL_MODE_AUTO, "crowded settlement uses internal hand scrolling instead of stretching the table")
 
 	var complete := _snapshot_fixture()
 	complete["phase"] = "complete"
 	complete["turn"] = 88
+	complete["gameStats"] = {
+		"activePlayerCount": 4,
+		"mutationCount": 88,
+		"playerTurnCount": 32,
+		"cycleCount": 8.0,
+		"interactionCount": 74,
+		"openingOfferingCount": 8,
+		"commonBasketSwapCount": 9,
+		"directExchangeCount": 7,
+		"redemptionCount": 24,
+		"prepareCount": 12,
+		"settlementSwapCount": 5,
+		"foodPieceSettlementSwapCount": 3,
+		"eatCount": 20,
+		"assetLossCount": 8,
+		"productivityCount": 20,
+		"profitCount": 12,
+		"profitGainPercent": 150.0,
+		"averageTurnsPerDish": 2.67,
+		"averageInteractionsPerDish": 6.17,
+		"basketVelocity": 1.75,
+		"directExchangeShare": 0.333,
+		"settlementBurden": 0.067,
+		"scarcityPressureByIngredient": {"cheese": 2, "eggs": 1},
+		"hoardingIndex": 3,
+		"hoardingIndexLabel": "Amina holds Eggs x3",
+		"liquidityDepth": 4.2,
+		"settlementTimeTurns": 6,
+		"consumptionVariance": 1.5,
+		"tradeBalanceByParticipant": {
+			"p1": {"participantId": "p1", "name": "Amina", "given": 4, "received": 5, "net": 1},
+			"p2": {"participantId": "p2", "name": "Ben", "given": 5, "received": 4, "net": -1}
+		}
+	}
 	complete["ownRecipe"] = {}
 	complete["participants"][0]["realIngredientStock"] = 10
 	complete["participants"][1]["realIngredientStock"] = 11
@@ -527,13 +779,30 @@ func _initialize() -> void:
 	_require(bool(visual.debug_stats.get("completeCelebration", false)), "complete phase renders congratulations state")
 	_require(bool(visual.debug_stats.get("completeFireworks", false)), "complete phase renders animated fireworks in Actions")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Congratulations!", "complete phase replaces recipe title")
-	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Congratulations! 88 turns", "complete phase shows turn count in title")
+	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Congratulations! 32 player turns", "complete phase shows player turn count in title")
+	_require(main_menu_overlay != null and main_menu_overlay.visible, "complete phase exposes the top Main Menu button")
+	var complete_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(complete_actions.has("Game Stats"), "complete phase exposes detailed game stats")
 	_require(visual.find_child("ActionFireworks", true, false) != null, "complete phase has a fireworks control")
 	_require(not _has_text_containing(visual, "Party fireworks"), "complete phase removes static Party fireworks text")
 	_require(_has_text_containing(visual, "Rice: 10"), "complete phase summarizes raw ingredient stock")
 	_require(_has_text_containing(visual, "Bites: 4"), "complete phase summarizes bites with label")
 	_require(int(visual.debug_stats.get("completeBiteSummaryCount", 0)) == 4, "complete phase summarizes bites for active players")
 	_require(visual.preferred_visual_size() == Vector2(700, 960), "complete phase keeps the same preferred table size")
+	visual.call("_open_game_stats_popup")
+	await process_frame
+	_require(int(visual.debug_stats.get("offerPopupWidth", 0)) > 0 and int(visual.debug_stats.get("offerPopupWidth", 0)) <= 600, "game stats popup keeps a safe responsive width")
+	_require(_has_text_containing(visual, "Assets lost: 8"), "game stats popup includes asset loss")
+	_require(_has_text_containing(visual, "Productivity: 20"), "game stats popup includes productivity")
+	_require(_has_text_containing(visual, "Profit: 12"), "game stats popup includes profit")
+	_require(_has_text_containing(visual, "Gain: 150%"), "game stats popup includes percent gain")
+	_require(_has_text_containing(visual, "Avg turns/dish: 2.7"), "game stats popup includes average turns per dish")
+	_require(_has_text_containing(visual, "Basket velocity: 1.8 swaps/cycle"), "game stats popup includes basket velocity")
+	_require(_has_text_containing(visual, "Direct exchange share: 33.3%"), "game stats popup includes direct exchange share")
+	_require(not _has_text_containing(visual, "Scarcity pressure"), "game stats popup omits low-signal scarcity pressure")
+	_require(not _has_text_containing(visual, "Hoarding index"), "game stats popup omits low-signal hoarding index")
+	_require(not _has_text_containing(visual, "Trade balance"), "game stats popup omits neutral trade balance")
+	_require(visual.find_child("Button_View Transaction History", true, false) != null or _has_button_text(visual, "View Transaction History"), "game stats popup includes transaction history button")
 
 	if _failed:
 		quit(1)
@@ -574,13 +843,46 @@ func _assert_animation_count(visual: Node, before_snapshot: Dictionary, after_sn
 
 func _assert_eat_animation_starts_at_held_food_part(visual: Node) -> void:
 	visual.debug_apply_snapshot(_eating_before())
+	await process_frame
 	visual.render(_eating_after())
 	var event := _first_animation_event_of_type(visual, "eat")
 	_require(not event.is_empty(), "eat animation event is queued")
 	_require(str(event.get("dishId", "")) == "dish_3", "eat animation records the held dish id")
+	_require(typeof(event.get("startPoint", null)) == TYPE_VECTOR2, "eat animation records the concrete held food-piece anchor")
 	var points: Dictionary = visual.debug_animation_path_points(event)
 	var held_piece_center := _node_center(visual.find_child("HandFood_dish_3", true, false))
+	var rice_card_center := _node_center(visual.find_child("HandCard_rice", true, false))
 	_require(_points_close(points.get("start", Vector2.INF), held_piece_center), "bite animation starts on the completed dish piece in the viewer hand")
+	_require(_points_differ(points.get("start", Vector2.INF), rice_card_center), "bite animation does not fall back to the first ingredient promise card")
+	var stale_event := event.duplicate(true)
+	stale_event["startPoint"] = rice_card_center
+	points = visual.debug_animation_path_points(stale_event)
+	_require(_points_close(points.get("start", Vector2.INF), held_piece_center), "bite animation prefers the visible held food-piece tile over a stale recorded point")
+	visual.debug_apply_next_animation_milestone()
+	await process_frame
+	_require(visual.find_child("HandFood_dish_3", true, false) == null, "bite milestone removes the eaten food-piece tile")
+	points = visual.debug_animation_path_points(event)
+	_require(_points_close(points.get("start", Vector2.INF), held_piece_center), "bite animation keeps the recorded food-piece anchor after the hand grid updates")
+	visual.debug_flush_animations()
+
+
+func _assert_eat_animation_reanchors_after_food_group_reflow(visual: Node) -> void:
+	visual.debug_apply_snapshot(_eating_many_before())
+	await process_frame
+	visual.render(_eating_many_after())
+	visual.debug_apply_next_animation_milestone()
+	visual.debug_apply_next_animation_milestone()
+	await process_frame
+	var bean_piece_center := _node_center(visual.find_child("HandFood_dish_4", true, false))
+	var rice_card_center := _node_center(visual.find_child("HandCard_rice", true, false))
+	var points: Dictionary = visual.debug_animation_path_points({
+		"type": "eat",
+		"dishId": "dish_4",
+		"dishName": "Bean Dip",
+		"unit": "scoop"
+	})
+	_require(_points_close(points.get("start", Vector2.INF), bean_piece_center), "next bite animation re-anchors to the current food-piece position after hand reflow")
+	_require(_points_differ(points.get("start", Vector2.INF), rice_card_center), "next bite animation still avoids ingredient-card fallback after hand reflow")
 	visual.debug_flush_animations()
 
 
@@ -886,10 +1188,32 @@ func _has_text_containing(node: Node, needle: String) -> bool:
 	return false
 
 
+func _press_button_containing(node: Node, needle: String) -> bool:
+	for raw_child in node.find_children("*", "Button", true, false):
+		var button := raw_child as Button
+		if button != null and not button.disabled and button.text.find(needle) >= 0:
+			button.pressed.emit()
+			return true
+	return false
+
+
 func _has_label_containing(node: Node, needle: String) -> bool:
 	for raw_child in node.find_children("*", "Label", true, false):
 		var label := raw_child as Label
 		if label != null and label.text.find(needle) >= 0:
+			return true
+	return false
+
+
+func _progress_node_matches(node: Node, filled: int, total: int) -> bool:
+	if node == null:
+		return false
+	return int(node.get("filled_count")) == filled and int(node.get("total_count")) == total
+
+
+func _has_progress_node_matching(node: Node, filled: int, total: int) -> bool:
+	for raw_child in node.find_children("*", "Control", true, false):
+		if str(raw_child.name).find("ProgressStars") >= 0 and _progress_node_matches(raw_child, filled, total):
 			return true
 	return false
 
@@ -957,6 +1281,11 @@ func _assert_turn_update_waits_for_animation(visual: Node) -> void:
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "turn-only handoff remains on the next cook")
 
 
+func _assert_turn_handoff_does_not_preempt_animation_actor(visual: Node) -> void:
+	_require(visual.debug_animation_actor_for_event({"type": "turn", "participantId": "p2"}) == "", "turn handoff event does not temporarily steal the turn circle")
+	_require(visual.debug_animation_actor_for_event({"type": "public_redeem", "participantId": "p2"}) == "p2", "public actions still highlight the acting cook during animation")
+
+
 func _assert_batch_redeem_updates_counts_one_by_one(visual: Node) -> void:
 	var before := _snapshot_fixture()
 	var after := _redeem_all_after()
@@ -964,6 +1293,8 @@ func _assert_batch_redeem_updates_counts_one_by_one(visual: Node) -> void:
 	after["turn"] = 15
 	visual.debug_apply_snapshot(before)
 	visual.render(after)
+	var animation_state: Dictionary = visual.pending_visual_debug_state()
+	_require(bool(animation_state.get("animationRunning", false)), "batch redeem starts the first animation immediately after confirmation")
 	_require(_visible_hand_count(visual, "rice") == 2, "batch redeem keeps initial rice count before first animation finishes")
 	_require(_visible_hand_count(visual, "cheese") == 1, "batch redeem keeps initial cheese count before first animation finishes")
 	_require(_visible_redeemed_count(visual, "rice") == 1, "batch redeem keeps initial recipe count before first animation finishes")
@@ -1098,7 +1429,7 @@ func _assert_deposits_update_basket_one_by_one(visual: Node) -> void:
 	visual.debug_apply_snapshot(before)
 	visual.render(after)
 	_require(_visible_platter_count(visual, "rice") == 0, "opening deposits keep basket empty before the first animation finishes")
-	_require(visual.debug_stats.get("lastDepositBasketSlots", []) == [5, 6, 1, 2], "opening deposits target fixed center-first basket slots")
+	_require(visual.debug_stats.get("lastDepositBasketSlots", []) == [5, 5, 6, 6, 1, 1, 2, 2], "opening deposits target fixed center-first basket slots")
 
 	var first: String = visual.debug_apply_next_animation_milestone()
 	_require(first == "deposit", "opening deposits first milestone is a deposit")
@@ -1107,18 +1438,18 @@ func _assert_deposits_update_basket_one_by_one(visual: Node) -> void:
 
 	var second: String = visual.debug_apply_next_animation_milestone()
 	_require(second == "deposit", "opening deposits second milestone is a deposit")
-	_require(_visible_platter_count(visual, "rice") == 1, "second opening deposit follows the second Deposit transaction")
+	_require(_visible_platter_count(visual, "cheese") == 2, "second opening deposit follows the second Deposit transaction")
 	_require(_visible_platter_total(visual) == 2, "second opening deposit reveals exactly two basket cards")
 
 	var third: String = visual.debug_apply_next_animation_milestone()
 	_require(third == "deposit", "opening deposits third milestone is a deposit")
-	_require(_visible_platter_count(visual, "vegetables") == 1, "third opening deposit follows the third Deposit transaction")
+	_require(_visible_platter_count(visual, "rice") == 1, "third opening deposit follows the third Deposit transaction")
 	_require(_visible_platter_total(visual) == 3, "third opening deposit reveals exactly three basket cards")
 
 	var fourth: String = visual.debug_apply_next_animation_milestone()
 	_require(fourth == "deposit", "opening deposits fourth milestone is a deposit")
-	_require(_visible_platter_count(visual, "beans") == 1, "fourth opening deposit follows the fourth Deposit transaction")
-	_require(_visible_platter_total(visual) == 4, "fourth opening deposit reveals all fixture basket cards")
+	_require(_visible_platter_count(visual, "rice") == 2, "fourth opening deposit follows the fourth Deposit transaction")
+	_require(_visible_platter_total(visual) == 4, "fourth opening deposit reveals four fixture basket cards")
 	visual.debug_flush_animations()
 
 
@@ -1134,16 +1465,16 @@ func _assert_start_snapshot_animates_offerings_from_empty_basket(visual: Node) -
 	_require(int(visual.debug_stats.get("handGroupCount", 0)) == 2, "start snapshot shows viewer promise cards")
 	_require(_visible_hand_count(visual, "rice") == 2, "start snapshot shows the viewer's offered card before it animates")
 	_require(_visible_platter_total(visual) == 0, "start snapshot begins with an empty Common Basket")
-	_require(int(visual.debug_stats.get("animationEventCount", 0)) == 4, "start snapshot queues offering animations from the setup baseline")
-	_require(visual.debug_stats.get("lastDepositBasketSlots", []) == [5, 6, 1, 2], "start snapshot offering animations target fixed center-first basket slots")
-	_require(visual.debug_stats.get("basketVisualOrder", []) == ["eggs", "vegetables", "beans", "spices", "flour", "cheese", "rice", "herbs"], "start snapshot basket order follows Deposit transactions, not participant order")
+	_require(int(visual.debug_stats.get("animationEventCount", 0)) == 8, "start snapshot queues offering animations from the setup baseline")
+	_require(visual.debug_stats.get("lastDepositBasketSlots", []) == [5, 5, 6, 6, 1, 1, 2, 2], "start snapshot offering animations target fixed center-first basket slots")
+	_require(visual.debug_stats.get("basketVisualOrder", []) == ["eggs", "vegetables", "beans", "spices", "flour", "cheese", "rice", "herbs"], "start snapshot basket order follows fixed screen slots while deposits animate in transaction order")
 	await process_frame
 	var backdrop := visual.find_child("BasketBackdrop", true, false) as Control
 	_require(backdrop != null, "start snapshot renders the fixed basket backdrop")
 	var basket_size_before := backdrop.get_global_rect().size if backdrop != null else Vector2.ZERO
 	_require(visual.get_combined_minimum_size().x <= min_width_before + 1.0, "start snapshot offering animations do not widen the visual table")
 	var anchors: Array = visual.debug_deposit_animation_anchors()
-	_require(anchors.size() == 4, "start snapshot keeps all deposit animation anchors queued or running")
+	_require(anchors.size() == 8, "start snapshot keeps all deposit animation anchors queued or running")
 	_require(_valid_unique_anchor_count(anchors, "start") >= 4, "start snapshot deposits originate from distinct cooks or hand cards")
 	_require(_valid_unique_anchor_count(anchors, "end") >= 4, "start snapshot deposits target distinct final basket cells")
 	var participant_tile := visual.find_child("Participant_p2", true, false)
@@ -1170,7 +1501,7 @@ func _assert_start_snapshot_animates_offerings_from_empty_basket(visual: Node) -
 	_require(fourth == "deposit", "start snapshot fourth animation is an offering")
 	_require(_same_size(backdrop.get_global_rect().size, basket_size_before), "fourth offering does not resize the basket backdrop: %s -> %s" % [basket_size_before, backdrop.get_global_rect().size])
 	visual.debug_flush_animations()
-	_require(_visible_platter_total(visual) == 4, "start snapshot ends with confirmed basket contents after animations")
+	_require(_visible_platter_total(visual) == 8, "start snapshot ends with confirmed basket contents after animations")
 	var action_texts: Array = visual.debug_stats.get("actionButtonTexts", [])
 	_require(not action_texts.has("Offer"), "start snapshot does not show a manual Offer action after opening animations finish")
 	_require(str(visual.debug_stats.get("phase", "")) == "playing", "start snapshot ends in normal play after opening animations finish")
@@ -1182,19 +1513,20 @@ func _assert_eight_start_snapshot_animates_offerings_from_cooks_to_fixed_basket(
 	visual.debug_apply_snapshot(before)
 	visual.render(after)
 	_require(_visible_platter_total(visual) == 0, "8-seat start keeps basket empty before offering animations")
-	_require(visual.debug_stats.get("lastDepositBasketSlots", []) == [5, 6, 1, 2, 4, 7, 3, 0], "8-seat offerings target center-out basket slots")
+	_require(visual.debug_stats.get("lastDepositBasketSlots", []) == [5, 5, 6, 6, 1, 1, 2, 2, 4, 4, 7, 7, 3, 3, 0, 0], "8-seat offerings target center-out basket slots")
 	await process_frame
 	var anchors: Array = visual.debug_deposit_animation_anchors()
-	_require(anchors.size() == 8, "8-seat start queues every opening offering")
+	_require(anchors.size() == 16, "8-seat start queues every opening offering")
 	_require(_valid_unique_anchor_count(anchors, "start") >= 8, "8-seat offerings originate from each cook or viewer hand")
 	_require(_valid_unique_anchor_count(anchors, "end") >= 8, "8-seat offerings fly to eight distinct final basket cells")
 	var expected_ingredients := ["cheese", "flour", "herbs", "vegetables", "rice", "beans", "spices", "eggs"]
 	for ingredient_id in expected_ingredients:
-		var next_type: String = visual.debug_apply_next_animation_milestone()
-		_require(next_type == "deposit", "8-seat opening milestone is a deposit for %s" % ingredient_id)
-		_require(_visible_platter_count(visual, ingredient_id) == 1, "8-seat opening reveals %s directly in its final basket cell" % ingredient_id)
+		for expected_count in range(1, 3):
+			var next_type: String = visual.debug_apply_next_animation_milestone()
+			_require(next_type == "deposit", "8-seat opening milestone is a deposit for %s" % ingredient_id)
+			_require(_visible_platter_count(visual, ingredient_id) == expected_count, "8-seat opening reveals %s directly in its final basket cell" % ingredient_id)
 	visual.debug_flush_animations()
-	_require(_visible_platter_total(visual) == 8, "8-seat opening ends with all eight offerings in the basket")
+	_require(_visible_platter_total(visual) == 16, "8-seat opening ends with all sixteen offerings in the basket")
 
 
 func _valid_unique_anchor_count(anchors: Array, key: String) -> int:
@@ -1262,12 +1594,14 @@ func _deposit_before() -> Dictionary:
 	var snapshot := _snapshot_fixture()
 	snapshot["phase"] = "deposit"
 	snapshot["participants"][0]["depositedInitial"] = false
+	snapshot["participants"][0]["openingOfferingsCount"] = 0
 	return snapshot
 
 
 func _deposit_after() -> Dictionary:
 	var snapshot := _deposit_before()
-	snapshot["participants"][0]["depositedInitial"] = true
+	snapshot["participants"][0]["depositedInitial"] = false
+	snapshot["participants"][0]["openingOfferingsCount"] = 1
 	_move_voucher(snapshot, "rice_1", "ownHand", "platter")
 	return snapshot
 
@@ -1278,6 +1612,7 @@ func _deposit_all_before() -> Dictionary:
 	snapshot["platter"] = []
 	for index in range(snapshot["participants"].size()):
 		snapshot["participants"][index]["depositedInitial"] = false
+		snapshot["participants"][index]["openingOfferingsCount"] = 0
 	return snapshot
 
 
@@ -1286,18 +1621,28 @@ func _deposit_all_after() -> Dictionary:
 	snapshot["phase"] = "playing"
 	for index in range(snapshot["participants"].size()):
 		snapshot["participants"][index]["depositedInitial"] = true
+		snapshot["participants"][index]["openingOfferingsCount"] = 2
 	_remove_voucher(snapshot, "rice_1", "ownHand")
+	_remove_voucher(snapshot, "rice_2", "ownHand")
 	snapshot["platter"] = [
 		{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "platter"}},
+		{"id": "rice_2", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "platter"}},
 		{"id": "beans_1", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "platter"}},
+		{"id": "beans_2", "ingredientId": "beans", "ownerParticipantId": "p2", "location": {"type": "platter"}},
 		{"id": "cheese_7", "ingredientId": "cheese", "ownerParticipantId": "p3", "location": {"type": "platter"}},
-		{"id": "vegetables_1", "ingredientId": "vegetables", "ownerParticipantId": "p4", "location": {"type": "platter"}}
+		{"id": "cheese_8", "ingredientId": "cheese", "ownerParticipantId": "p3", "location": {"type": "platter"}},
+		{"id": "vegetables_1", "ingredientId": "vegetables", "ownerParticipantId": "p4", "location": {"type": "platter"}},
+		{"id": "vegetables_2", "ingredientId": "vegetables", "ownerParticipantId": "p4", "location": {"type": "platter"}}
 	]
 	snapshot["transactionHistory"] = [
 		{"id": "tx_1", "turn": 14, "participantId": "p3", "name": "Clara", "action": "Deposit", "counterparty": "Platter", "itemOut": "Cheese", "itemBack": "None"},
-		{"id": "tx_2", "turn": 14, "participantId": "p1", "name": "Amina", "action": "Deposit", "counterparty": "Platter", "itemOut": "Rice", "itemBack": "None"},
-		{"id": "tx_3", "turn": 14, "participantId": "p4", "name": "Diego", "action": "Deposit", "counterparty": "Platter", "itemOut": "Veggies", "itemBack": "None"},
-		{"id": "tx_4", "turn": 14, "participantId": "p2", "name": "Ben", "action": "Deposit", "counterparty": "Platter", "itemOut": "Beans", "itemBack": "None"}
+		{"id": "tx_2", "turn": 14, "participantId": "p3", "name": "Clara", "action": "Deposit", "counterparty": "Platter", "itemOut": "Cheese", "itemBack": "None"},
+		{"id": "tx_3", "turn": 14, "participantId": "p1", "name": "Amina", "action": "Deposit", "counterparty": "Platter", "itemOut": "Rice", "itemBack": "None"},
+		{"id": "tx_4", "turn": 14, "participantId": "p1", "name": "Amina", "action": "Deposit", "counterparty": "Platter", "itemOut": "Rice", "itemBack": "None"},
+		{"id": "tx_5", "turn": 14, "participantId": "p4", "name": "Diego", "action": "Deposit", "counterparty": "Platter", "itemOut": "Veggies", "itemBack": "None"},
+		{"id": "tx_6", "turn": 14, "participantId": "p4", "name": "Diego", "action": "Deposit", "counterparty": "Platter", "itemOut": "Veggies", "itemBack": "None"},
+		{"id": "tx_7", "turn": 14, "participantId": "p2", "name": "Ben", "action": "Deposit", "counterparty": "Platter", "itemOut": "Beans", "itemBack": "None"},
+		{"id": "tx_8", "turn": 14, "participantId": "p2", "name": "Ben", "action": "Deposit", "counterparty": "Platter", "itemOut": "Beans", "itemBack": "None"}
 	]
 	return snapshot
 
@@ -1317,6 +1662,7 @@ func _lobby_before_start() -> Dictionary:
 		participant.erase("ingredientId")
 		participant.erase("realIngredientStock")
 		participant["depositedInitial"] = false
+		participant["openingOfferingsCount"] = 0
 		participant["dishCount"] = 0
 		snapshot["participants"][index] = participant
 	return snapshot
@@ -1336,6 +1682,7 @@ func _eight_lobby_before_start() -> Dictionary:
 	for index in range(snapshot["participants"].size()):
 		var participant: Dictionary = snapshot["participants"][index]
 		participant["depositedInitial"] = false
+		participant["openingOfferingsCount"] = 0
 		participant["dishCount"] = 0
 		snapshot["participants"][index] = participant
 	return snapshot
@@ -1348,18 +1695,20 @@ func _eight_start_after() -> Dictionary:
 	for index in range(snapshot["participants"].size()):
 		var participant: Dictionary = snapshot["participants"][index]
 		participant["depositedInitial"] = true
+		participant["openingOfferingsCount"] = 2
 		snapshot["participants"][index] = participant
 		var ingredient_id := str(participant.get("ingredientId", ""))
-		snapshot["transactionHistory"].append({
-			"id": "tx_open_%s" % (index + 1),
-			"turn": 1,
-			"participantId": str(participant.get("id", "")),
-			"name": str(participant.get("name", "")),
-			"action": "Deposit",
-			"counterparty": "Platter",
-			"itemOut": _display_for_test_ingredient(ingredient_id),
-			"itemBack": "None"
-		})
+		for offering_index in range(2):
+			snapshot["transactionHistory"].append({
+				"id": "tx_open_%s_%s" % [index + 1, offering_index + 1],
+				"turn": 1,
+				"participantId": str(participant.get("id", "")),
+				"name": str(participant.get("name", "")),
+				"action": "Deposit",
+				"counterparty": "Platter",
+				"itemOut": _display_for_test_ingredient(ingredient_id),
+				"itemBack": "None"
+			})
 	return snapshot
 
 
@@ -1641,6 +1990,22 @@ func _eating_after() -> Dictionary:
 	return snapshot
 
 
+func _eating_many_before() -> Dictionary:
+	var snapshot := _eating_before()
+	snapshot["ownFoodParts"] = [
+		{"id": "dish_3_part_1", "dishId": "dish_3", "dishName": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}},
+		{"id": "dish_3_part_2", "dishId": "dish_3", "dishName": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}},
+		{"id": "dish_4_part_1", "dishId": "dish_4", "dishName": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "makerParticipantId": "p2", "location": {"type": "inventory", "participantId": "p1"}}
+	]
+	return snapshot
+
+
+func _eating_many_after() -> Dictionary:
+	var snapshot := _eating_many_before()
+	snapshot["ownFoodParts"] = []
+	return snapshot
+
+
 func _complete_before() -> Dictionary:
 	var snapshot := _eating_after()
 	snapshot["phase"] = "eating"
@@ -1682,7 +2047,7 @@ func _snapshot_fixture() -> Dictionary:
 		"tableCode": "VISUAL",
 		"phase": "playing",
 		"turn": 14,
-		"targetDishCount": 4,
+		"targetDishCount": 3,
 		"turnMode": "round_robin",
 		"currentTurnParticipantId": "p1",
 		"viewerParticipantId": "p1",
@@ -1702,9 +2067,9 @@ func _snapshot_fixture() -> Dictionary:
 		],
 		"participants": [
 			{"id": "p1", "name": "Amina", "role": "active", "kind": "human", "ingredientId": "rice", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "dishCount": 0, "heldFoodPartCount": 0, "currentRecipe": {"name": "Rice Bean Bowl", "missingRequirements": [{"ingredientId": "beans", "missingQty": 1}, {"ingredientId": "vegetables", "missingQty": 1}, {"ingredientId": "spices", "missingQty": 1}, {"ingredientId": "cheese", "missingQty": 1}]}},
-			{"id": "p2", "name": "Ben", "role": "active", "kind": "human", "ingredientId": "beans", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0, "currentRecipe": {"name": "Bean Tacos", "missingRequirements": [{"ingredientId": "cheese", "missingQty": 1}, {"ingredientId": "rice", "missingQty": 1}]}},
+			{"id": "p2", "name": "Ben", "role": "active", "kind": "human", "ingredientId": "beans", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0, "heldVoucherGroups": [{"ingredientId": "beans", "ownerParticipantId": "p2", "count": 2}, {"ingredientId": "cheese", "ownerParticipantId": "p3", "count": 1}], "currentRecipe": {"name": "Bean Tacos", "missingRequirements": [{"ingredientId": "cheese", "missingQty": 1}, {"ingredientId": "rice", "missingQty": 1}]}},
 			{"id": "p3", "name": "Clara", "role": "active", "kind": "human", "ingredientId": "cheese", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0, "currentRecipe": {"name": "Cheese Frittata", "missingRequirements": [{"ingredientId": "eggs", "missingQty": 1}]}},
-			{"id": "p4", "name": "Diego", "role": "active", "kind": "human", "ingredientId": "vegetables", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 0, "currentRecipe": {"name": "Veggie Chili", "missingRequirements": [{"ingredientId": "beans", "missingQty": 1}, {"ingredientId": "spices", "missingQty": 1}]}}
+			{"id": "p4", "name": "Diego", "role": "active", "kind": "human", "ingredientId": "vegetables", "connected": true, "depositedInitial": true, "realIngredientStock": 28, "offerableOwnIngredientQty": 2, "dishCount": 0, "heldFoodPartCount": 1, "heldVoucherGroups": [{"ingredientId": "vegetables", "ownerParticipantId": "p4", "count": 2}, {"ingredientId": "beans", "ownerParticipantId": "p2", "count": 1}], "heldFoodPartGroups": [{"dishId": "dish_1", "dishName": "Vegetable Chili", "makerParticipantId": "p4", "unitSingular": "cup", "unitPlural": "cups", "count": 1}], "currentRecipe": {"name": "Veggie Chili", "missingRequirements": [{"ingredientId": "beans", "missingQty": 1}, {"ingredientId": "spices", "missingQty": 1}]}}
 		],
 		"ownHand": [
 			{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
@@ -1758,7 +2123,7 @@ func _snapshot_fixture() -> Dictionary:
 func _eight_seat_snapshot() -> Dictionary:
 	var snapshot := _snapshot_fixture()
 	var ingredients := ["cheese", "flour", "herbs", "vegetables", "rice", "beans", "spices", "eggs"]
-	var names := ["Amina", "Ben_b", "Nia_b", "Luc_b", "Yan_b", "Mia_b", "Leo_b", "Ava_b"]
+	var names := ["Amina", "Jim_b", "Nia_b", "Luc_b", "Ava_b", "Leo_b", "Mia_b", "Yan_b"]
 	var participants: Array = []
 	for index in range(ingredients.size()):
 		participants.append({
@@ -1769,6 +2134,7 @@ func _eight_seat_snapshot() -> Dictionary:
 			"ingredientId": ingredients[index],
 			"connected": true,
 			"depositedInitial": true,
+			"openingOfferingsCount": 2,
 			"realIngredientStock": 40,
 			"offerableOwnIngredientQty": 6,
 			"dishCount": 0,
@@ -1780,21 +2146,22 @@ func _eight_seat_snapshot() -> Dictionary:
 	snapshot["controlledParticipantIds"] = ["p1"]
 	snapshot["currentTurnParticipantId"] = "p1"
 	snapshot["ownHand"] = [
-		{"id": "cheese_2", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
 		{"id": "cheese_3", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
 		{"id": "cheese_4", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
 		{"id": "cheese_5", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
 		{"id": "cheese_6", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
-		{"id": "cheese_7", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}}
+		{"id": "cheese_7", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
+		{"id": "cheese_8", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}}
 	]
 	var platter: Array = []
 	for index in range(ingredients.size()):
-		platter.append({
-			"id": "%s_1" % ingredients[index],
-			"ingredientId": ingredients[index],
-			"ownerParticipantId": "p%s" % (index + 1),
-			"location": {"type": "platter"}
-		})
+		for card_index in range(1, 3):
+			platter.append({
+				"id": "%s_%s" % [ingredients[index], card_index],
+				"ingredientId": ingredients[index],
+				"ownerParticipantId": "p%s" % (index + 1),
+				"location": {"type": "platter"}
+			})
 	snapshot["platter"] = platter
 	snapshot["platterFoodParts"] = []
 	snapshot["ownRecipe"] = {
@@ -1826,9 +2193,9 @@ func _controlled_nia_view_snapshot() -> Dictionary:
 		participants[2] = nia
 		snapshot["participants"] = participants
 	snapshot["ownHand"] = [
-		{"id": "herbs_2", "ingredientId": "herbs", "ownerParticipantId": "p3", "location": {"type": "hand", "participantId": "p3"}},
 		{"id": "herbs_3", "ingredientId": "herbs", "ownerParticipantId": "p3", "location": {"type": "hand", "participantId": "p3"}},
-		{"id": "cheese_2", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p3"}}
+		{"id": "herbs_4", "ingredientId": "herbs", "ownerParticipantId": "p3", "location": {"type": "hand", "participantId": "p3"}},
+		{"id": "cheese_3", "ingredientId": "cheese", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p3"}}
 	]
 	snapshot["ownFoodParts"] = []
 	snapshot["ownRecipe"] = {
@@ -1877,6 +2244,24 @@ func _popup_panels_have_expected_dismissal(node: Node) -> bool:
 		if not _popup_panels_have_expected_dismissal(child):
 			return false
 	return true
+
+
+func _card_has_texture(node: Node) -> bool:
+	if node == null:
+		return false
+	for raw_child in node.find_children("*", "TextureRect", true, false):
+		var texture_rect := raw_child as TextureRect
+		if texture_rect != null and texture_rect.texture is Texture2D:
+			return true
+	return false
+
+
+func _has_button_text(node: Node, text: String) -> bool:
+	for raw_child in node.find_children("*", "Button", true, false):
+		var button := raw_child as Button
+		if button != null and button.text == text:
+			return true
+	return false
 
 
 func _require(condition: bool, message: String) -> void:

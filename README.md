@@ -12,6 +12,7 @@ Implemented:
 - Godot client for `Play Offline`, `Play Online`, joining online tables, taking over prefilled bot seats, pausing/resuming, starting, watching automatic opening offerings, swapping with the platter, creating/responding to offers, preparing dishes, viewing dish totals/transaction history, ending the game, and eating.
 - Online host-controlled seats with filtered per-seat views and explicit acting-seat intents.
 - Server-enforced round-robin turns. Each active cook keeps the turn until they pass or use `Redeem / Pass`.
+- End-game stats distinguish player turns, fractional cycles, successful interactions, Common Basket swaps, direct exchanges, redemptions, settlement swaps, food-piece settlement swaps, and bites eaten.
 - Offline pass-and-play rules runtime for one-device local seats and bots, using the same snapshot/intent UI path as online play.
 - Deterministic tests for the core game rules.
 
@@ -96,11 +97,22 @@ Manual smoke path:
 2. Click `Play Offline` for pass-and-play or `Play Online` to create a hosted table.
 3. The table starts with 8 seats: you plus 7 bots.
 4. Use the seat grid to edit seat names and switch available bot seats between `Player` and `Bot` before start.
-5. Click `Start Cooking`.
-6. Watch the automatic opening offerings fill the Common Basket.
-7. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem / Pass` with automatic dish preparation, dish totals, transaction history, `End Game`, and dish bites.
+5. Online tables are public by default while joinable. The host can toggle `Public Table` / `Private Table` in the lobby; public joinable tables appear in the server browser below the create/join buttons.
+6. Click `Start Cooking`.
+7. Watch the automatic opening offerings fill the Common Basket.
+8. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem / Pass` with automatic dish preparation, dish totals, transaction history, `End Game`, and dish bites.
 
-To test multiple humans locally, open another Godot client and join using the invite code.
+To test multiple humans locally on one desktop, run each Godot client with a different local profile. Each profile gets its own saved online seat, so one client can reconnect as the host while the others join as separate players:
+
+```bash
+cd /home/wor/src/recipes
+godot4 --path client -- --profile host
+godot4 --path client -- --profile p2
+godot4 --path client -- --profile p3
+godot4 --path client -- --profile p4
+```
+
+Create the table in the `host` window, then enter the same invite code in the `p2`, `p3`, and `p4` windows, or choose the public table from the online server browser if the host leaves it public. If you run multiple clients without separate profiles, they intentionally share the same saved `user://` session and may show `Reconnect Seat` instead of `Join Table`.
 
 ## Tests
 
@@ -131,11 +143,11 @@ Run an 8-seat game through the real HTTP/WebSocket API:
 
 ```bash
 cd /home/wor/src/recipes
-npm run simulate:game -- --players=8 --dish-goal=4 --profile=local --turn-mode=round_robin
-npm run simulate:game -- --players=8 --dish-goal=4 --profile=disconnect
-npm run simulate:game -- --players=8 --dish-goal=4 --profile=jitter
-npm run simulate:game -- --players=8 --dish-goal=4 --profile=bad
-npm run simulate:game -- --games=3 --player-min=8 --player-max=8 --concurrency=2 --dish-goal=4 --profile=local --suite-max-duration-ms=300000
+npm run simulate:game -- --players=8 --dish-goal=3 --profile=local --turn-mode=round_robin
+npm run simulate:game -- --players=8 --dish-goal=3 --profile=disconnect
+npm run simulate:game -- --players=8 --dish-goal=3 --profile=jitter
+npm run simulate:game -- --players=8 --dish-goal=3 --profile=bad
+npm run simulate:game -- --games=3 --player-min=8 --player-max=8 --concurrency=2 --dish-goal=3 --profile=local --suite-max-duration-ms=300000
 ```
 
 Profiles:
@@ -157,7 +169,7 @@ Use `--suite-max-duration-ms` to bound the entire multi-game run; per-game `--ma
 
 ## Recipe Catalog
 
-The recipe catalog generator creates one committed 8-player recipe set using the generalized ingredients Cheese, Flour, Herbs, Vegetables, Rice, Beans, Spices, and Eggs. It creates four short, unique, real-dish-inspired recipes per ingredient: one initial recipe and three followups, for 32 recipes total.
+The recipe catalog generator creates one committed 8-player recipe set using the generalized ingredients Cheese, Flour, Herbs, Vegetables, Rice, Beans, Spices, and Eggs. It creates three short, unique, real-dish-inspired recipes per ingredient: one initial recipe and two followups, for 24 recipes total.
 
 The live server uses the same committed ingredient set when it assigns ingredients during a game. Runtime tables do not randomly choose ingredients. In `docs/recipes-catalog.ods`, the `Player Count Ingredient Sets` sheet shows the committed set, and the recipe, requirement, and validation sheets show the playable catalog.
 

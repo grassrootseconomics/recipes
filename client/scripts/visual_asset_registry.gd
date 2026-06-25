@@ -58,8 +58,8 @@ const UNITS := {
 	"cups": {"mark": "CP", "color": Color(0.65, 0.82, 0.95), "ink": Color(0.05, 0.12, 0.18)},
 	"scoop": {"mark": "SC", "color": Color(0.90, 0.66, 0.42), "ink": Color(0.16, 0.09, 0.04)},
 	"scoops": {"mark": "SC", "color": Color(0.90, 0.66, 0.42), "ink": Color(0.16, 0.09, 0.04)},
-	"piece": {"mark": "PC", "color": Color(0.80, 0.72, 0.58), "ink": Color(0.13, 0.10, 0.06)},
-	"pieces": {"mark": "PC", "color": Color(0.80, 0.72, 0.58), "ink": Color(0.13, 0.10, 0.06)},
+	"piece": {"mark": "PC", "color": Color(0.80, 0.72, 0.58), "ink": Color(0.13, 0.10, 0.06), "texture_path": "res://art/dishes/cheese_frittata_64.png"},
+	"pieces": {"mark": "PC", "color": Color(0.80, 0.72, 0.58), "ink": Color(0.13, 0.10, 0.06), "texture_path": "res://art/dishes/cheese_frittata_64.png"},
 	"portion": {"mark": "PT", "color": Color(0.72, 0.80, 0.66), "ink": Color(0.08, 0.13, 0.06)},
 	"portions": {"mark": "PT", "color": Color(0.72, 0.80, 0.66), "ink": Color(0.08, 0.13, 0.06)},
 	"serving": {"mark": "SV", "color": Color(0.76, 0.70, 0.90), "ink": Color(0.10, 0.07, 0.16)},
@@ -131,8 +131,15 @@ static func dish_meta(dish_name: String, unit_name: String) -> Dictionary:
 	var meta := unit_meta(unit_name)
 	var slug := _slugify(dish_name)
 	if slug != "":
-		meta["texture_path"] = "res://art/dishes/%s_64.png" % slug
+		var texture_path := "res://art/dishes/%s_64.png" % slug
+		if ResourceLoader.exists(texture_path):
+			meta["texture_path"] = texture_path
 	return _with_texture(meta)
+
+
+static func avatar_texture(index: int) -> Texture2D:
+	var normalized := posmod(index, 8) + 1
+	return _texture_for_path("res://art/avatars/cook_%s_32.png" % normalized)
 
 
 static func short_dish_name(dish_name: String) -> String:
@@ -178,10 +185,15 @@ static func _with_texture(raw_meta: Dictionary) -> Dictionary:
 static func _texture_for_path(texture_path: String) -> Texture2D:
 	if _texture_cache.has(texture_path):
 		return _texture_cache[texture_path]
-	var resource := ResourceLoader.load(texture_path)
-	if not resource is Texture2D:
-		return null
-	var texture := resource as Texture2D
+	var texture: Texture2D = null
+	if ResourceLoader.exists(texture_path):
+		var resource := ResourceLoader.load(texture_path)
+		texture = resource as Texture2D
+	if texture == null:
+		var image := Image.new()
+		if image.load(texture_path) != OK:
+			return null
+		texture = ImageTexture.create_from_image(image)
 	_texture_cache[texture_path] = texture
 	return texture
 

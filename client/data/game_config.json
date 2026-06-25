@@ -2,14 +2,15 @@
   "schemaVersion": 1,
   "minActiveParticipants": 8,
   "maxActiveParticipants": 8,
-  "vouchersPerIngredient": 7,
+  "vouchersPerIngredient": 8,
+  "openingOfferingsPerPlayer": 2,
   "realUnitsPerIngredient": 40,
   "minStockPerIngredient": 1,
   "maxStockPerIngredient": 999,
   "dishPartsPerDish": 10,
   "minTargetDishCount": 1,
-  "maxTargetDishCount": 4,
-  "defaultTargetDishCount": 4,
+  "maxTargetDishCount": 3,
+  "defaultTargetDishCount": 3,
   "defaultTurnMode": "round_robin",
   "turnModes": [
     "round_robin"
@@ -55,6 +56,7 @@
     "redeem_from_hand",
     "redeem_all_and_pass_turn",
     "prepare",
-    "bite"
+    "bite",
+    "bite_all"
   ]
 }

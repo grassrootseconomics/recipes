@@ -5,7 +5,7 @@ const VisualAssets := preload("res://scripts/visual_asset_registry.gd")
 const TRANSACTION_VISIBLE_ROWS := 20
 const TRANSACTION_ROW_HEIGHT := 30
 const TRANSACTION_ROW_GAP := 6
-const TRANSACTION_POPUP_MAX_ROWS := 8
+const TRANSACTION_POPUP_MAX_ROWS := 6
 const REQUIRED_ACTIVE_SEATS := 8
 const APP_VERSION := "0.0.1"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
@@ -18,6 +18,9 @@ const LOBBY_SEAT_SETUP_STORE_PATH := "user://lobby-seat-setup.json"
 const LOBBY_SEAT_SETUP_STORE_TMP_PATH := "user://lobby-seat-setup.tmp"
 const DESKTOP_ANDROID_PREVIEW_SIZE := Vector2i(1080, 1920)
 const DESKTOP_ANDROID_PREVIEW_MARGIN := 48
+const TABLE_VISUAL_BOTTOM_SAFE_MARGIN := 18.0
+const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 1.25
+const PUBLIC_TABLES_POLL_SECONDS := 2.0
 
 var _status_label: Label
 var _server_input: LineEdit
@@ -31,6 +34,7 @@ var _stock_input: LineEdit
 var _create_table_button: Button
 var _offline_table_button: Button
 var _join_table_button: Button
+var _reconnect_seat_button: Button
 var _leave_table_button: Button
 var _server_connect_button: Button
 var _generate_code_button: Button
@@ -82,6 +86,12 @@ var _csv_file_dialog: FileDialog
 var _csv_export_status_label: Label
 var _server_check_request: HTTPRequest
 var _code_check_request: HTTPRequest
+var _public_tables_request: HTTPRequest
+var _public_tables_panel: VBoxContainer
+var _public_tables_list: VBoxContainer
+var _public_tables_status_label: Label
+var _public_tables_refresh_button: Button
+var _lobby_name_publish_timer: Timer
 var _select_popup: PopupPanel
 var _select_popup_scroller: ScrollContainer
 var _select_popup_list: VBoxContainer
@@ -105,6 +115,11 @@ var _invite_code_unique := false
 var _invite_code_joinable := false
 var _invite_code_exists := false
 var _ignored_online_session_keys := {}
+var _dev_client_profile := ""
+var _online_session_store_path := ONLINE_SESSION_STORE_PATH
+var _online_session_store_tmp_path := ONLINE_SESSION_STORE_TMP_PATH
+var _lobby_seat_setup_store_path := LOBBY_SEAT_SETUP_STORE_PATH
+var _lobby_seat_setup_store_tmp_path := LOBBY_SEAT_SETUP_STORE_TMP_PATH
 
 var _selected_hand_voucher_id := ""
 var _selected_platter_voucher_id := ""
@@ -131,9 +146,12 @@ var _lobby_seat_name_inputs := {}
 var _lobby_seat_kind_inputs := {}
 var _lobby_pending_seat_names := {}
 var _saved_lobby_seat_setup := {}
+var _public_tables_poll_elapsed := 0.0
+var _public_tables_request_quiet := false
 
 
 func _ready() -> void:
+	_configure_dev_client_profile()
 	_configure_desktop_debug_window()
 	_csv_http_request = HTTPRequest.new()
 	_csv_http_request.timeout = 20.0
@@ -144,6 +162,15 @@ func _ready() -> void:
 	_code_check_request.timeout = 5.0
 	add_child(_code_check_request)
 	_code_check_request.request_completed.connect(_on_code_check_completed)
+	_public_tables_request = HTTPRequest.new()
+	_public_tables_request.timeout = 8.0
+	add_child(_public_tables_request)
+	_public_tables_request.request_completed.connect(_on_public_tables_completed)
+	_lobby_name_publish_timer = Timer.new()
+	_lobby_name_publish_timer.one_shot = true
+	_lobby_name_publish_timer.wait_time = LOBBY_NAME_PUBLISH_DELAY_SECONDS
+	add_child(_lobby_name_publish_timer)
+	_lobby_name_publish_timer.timeout.connect(_flush_pending_lobby_name_edits)
 	_build_ui()
 	set_process(true)
 	RecipesClient.snapshot_received.connect(_on_snapshot_received)
@@ -170,8 +197,57 @@ func _configure_desktop_debug_window() -> void:
 		DisplayServer.window_set_position(usable_rect.position + (usable_rect.size - preview_size) / 2)
 
 
+func _configure_dev_client_profile() -> void:
+	var args := _dev_client_profile_args()
+	var profile := ""
+	for index in range(args.size()):
+		var arg := str(args[index])
+		if arg == "--client-profile" or arg == "--profile":
+			if index + 1 < args.size():
+				profile = str(args[index + 1])
+				break
+		elif arg.begins_with("--client-profile="):
+			profile = arg.trim_prefix("--client-profile=")
+			break
+		elif arg.begins_with("--profile="):
+			profile = arg.trim_prefix("--profile=")
+			break
+	profile = _sanitize_dev_client_profile(profile)
+	if profile == "":
+		return
+	_dev_client_profile = profile
+	_online_session_store_path = "user://online-sessions-%s.json" % profile
+	_online_session_store_tmp_path = "user://online-sessions-%s.tmp" % profile
+	_lobby_seat_setup_store_path = "user://lobby-seat-setup-%s.json" % profile
+	_lobby_seat_setup_store_tmp_path = "user://lobby-seat-setup-%s.tmp" % profile
+
+
+func _dev_client_profile_args() -> Array:
+	var args: Array = []
+	for raw_arg in OS.get_cmdline_user_args():
+		args.append(str(raw_arg))
+	var raw_args := OS.get_cmdline_args()
+	for raw_arg in raw_args:
+		var arg := str(raw_arg)
+		if not args.has(arg):
+			args.append(arg)
+	return args
+
+
+func _sanitize_dev_client_profile(value: String) -> String:
+	var result := ""
+	for index in range(value.length()):
+		var character := value.substr(index, 1)
+		var code := character.unicode_at(0)
+		var allowed := (code >= 48 and code <= 57) or (code >= 65 and code <= 90) or (code >= 97 and code <= 122) or character == "_" or character == "-"
+		if allowed:
+			result += character
+	return result.left(32)
+
+
 func _process(delta: float) -> void:
 	_update_home_sprites(delta)
+	_poll_public_tables_if_visible(delta)
 
 
 func _notification(what: int) -> void:
@@ -246,10 +322,13 @@ func _build_ui() -> void:
 	_online_setup_panel.add_child(connect_row)
 	_create_table_button = _button("Create Table", _on_create_pressed)
 	_join_table_button = _button("Join Table", _on_join_pressed)
+	_reconnect_seat_button = _button("Reconnect Seat", _on_reconnect_seat_pressed)
 	_leave_table_button = _button("Leave Table", _confirm_leave_table)
 	connect_row.add_child(_create_table_button)
 	connect_row.add_child(_join_table_button)
+	connect_row.add_child(_reconnect_seat_button)
 	connect_row.add_child(_leave_table_button)
+	_build_public_tables_browser(_online_setup_panel)
 	_refresh_connection_buttons({})
 
 	_summary_label = _wrapped_label("")
@@ -540,6 +619,137 @@ func _build_online_setup_controls(root: VBoxContainer) -> void:
 	_refresh_online_setup_ready_state()
 
 
+func _build_public_tables_browser(root: VBoxContainer) -> void:
+	_public_tables_panel = VBoxContainer.new()
+	_public_tables_panel.add_theme_constant_override("separation", 6)
+	_public_tables_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_public_tables_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_public_tables_panel.visible = false
+	root.add_child(_public_tables_panel)
+
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_public_tables_panel.add_child(header)
+
+	var title := _wrapped_label("Public Tables")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+
+	_public_tables_refresh_button = _button("Refresh", _request_public_tables)
+	_public_tables_refresh_button.custom_minimum_size = Vector2(108, 32)
+	_public_tables_refresh_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+	header.add_child(_public_tables_refresh_button)
+
+	_public_tables_status_label = _wrapped_label("Connect to a server to see public tables.")
+	_public_tables_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_public_tables_panel.add_child(_public_tables_status_label)
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 160)
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_public_tables_panel.add_child(scroll)
+
+	_public_tables_list = VBoxContainer.new()
+	_public_tables_list.add_theme_constant_override("separation", 6)
+	_public_tables_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_public_tables_list)
+
+
+func _request_public_tables(quiet := false) -> void:
+	if not _server_is_ready():
+		if not quiet:
+			_render_public_tables([])
+			if is_instance_valid(_public_tables_status_label):
+				_public_tables_status_label.text = "Connect to a server to see public tables."
+		return
+	if not is_instance_valid(_public_tables_request):
+		return
+	if _public_tables_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		if quiet:
+			return
+		_public_tables_request.cancel_request()
+	_public_tables_request_quiet = quiet
+	if not quiet and is_instance_valid(_public_tables_status_label):
+		_public_tables_status_label.text = "Looking for public tables..."
+	var err := _public_tables_request.request("%s/tables" % _connected_server_url.trim_suffix("/"))
+	if err != OK:
+		_public_tables_request_quiet = false
+		if not quiet and is_instance_valid(_public_tables_status_label):
+			_public_tables_status_label.text = "Could not load public tables."
+
+
+func _on_public_tables_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	var quiet := _public_tables_request_quiet
+	_public_tables_request_quiet = false
+	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		if not quiet:
+			_render_public_tables([])
+		if not quiet and is_instance_valid(_public_tables_status_label):
+			_public_tables_status_label.text = "Could not load public tables."
+		return
+	var parsed = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(parsed) != TYPE_DICTIONARY or not bool(parsed.get("ok", false)):
+		if not quiet:
+			_render_public_tables([])
+		if not quiet and is_instance_valid(_public_tables_status_label):
+			_public_tables_status_label.text = "Could not load public tables."
+		return
+	var result_body: Dictionary = parsed.get("result", {})
+	var tables: Array = result_body.get("tables", [])
+	_render_public_tables(tables)
+
+
+func _poll_public_tables_if_visible(delta: float) -> void:
+	if not is_instance_valid(_public_tables_panel) or not _public_tables_panel.visible or not _server_is_ready():
+		_public_tables_poll_elapsed = 0.0
+		return
+	_public_tables_poll_elapsed += delta
+	if _public_tables_poll_elapsed < PUBLIC_TABLES_POLL_SECONDS:
+		return
+	_public_tables_poll_elapsed = 0.0
+	_request_public_tables(true)
+
+
+func _render_public_tables(tables: Array) -> void:
+	if not is_instance_valid(_public_tables_list):
+		return
+	_clear(_public_tables_list)
+	if tables.is_empty():
+		if is_instance_valid(_public_tables_status_label):
+			_public_tables_status_label.text = "No public tables are waiting."
+		return
+	if is_instance_valid(_public_tables_status_label):
+		_public_tables_status_label.text = "Tap a table to fill its invite code."
+	for raw_table in tables:
+		if typeof(raw_table) != TYPE_DICTIONARY:
+			continue
+		var table: Dictionary = raw_table
+		var code := str(table.get("code", "")).to_upper()
+		if code == "":
+			continue
+		var host_name := str(table.get("hostName", "Host"))
+		var open_seats := int(table.get("openSeats", 0))
+		var human_seats := int(table.get("humanSeats", 0))
+		var row := _button("%s  Host: %s  %s human, %s open" % [code, host_name, human_seats, open_seats], func(table_code := code) -> void:
+			_select_public_table(table_code)
+		)
+		row.custom_minimum_size = Vector2(0, 38)
+		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		_public_tables_list.add_child(row)
+
+
+func _select_public_table(code: String) -> void:
+	if not is_instance_valid(_code_input):
+		return
+	_suppress_invite_code_check = true
+	_code_input.text = code.strip_edges().to_upper()
+	_suppress_invite_code_check = false
+	_request_invite_code_status(_normalized_invite_code(), false)
+
+
 func _load_server_options() -> Array:
 	var fallback: Array = [{"name": "Local Test Server", "url": "http://127.0.0.1:3000"}]
 	if not FileAccess.file_exists(SERVER_LIST_PATH):
@@ -601,9 +811,9 @@ func _online_session_ignore_key(server_url: String, code: String, seat_token: St
 
 
 func _load_online_sessions() -> Dictionary:
-	if not FileAccess.file_exists(ONLINE_SESSION_STORE_PATH):
+	if not FileAccess.file_exists(_online_session_store_path):
 		return {"sessions": {}}
-	var file := FileAccess.open(ONLINE_SESSION_STORE_PATH, FileAccess.READ)
+	var file := FileAccess.open(_online_session_store_path, FileAccess.READ)
 	if file == null:
 		return {"sessions": {}}
 	var text := file.get_as_text()
@@ -623,17 +833,17 @@ func _load_online_sessions() -> Dictionary:
 
 
 func _save_online_sessions(store: Dictionary) -> void:
-	var file := FileAccess.open(ONLINE_SESSION_STORE_TMP_PATH, FileAccess.WRITE)
+	var file := FileAccess.open(_online_session_store_tmp_path, FileAccess.WRITE)
 	if file == null:
 		return
 	file.store_string(JSON.stringify(store, "\t"))
 	file.close()
-	var target_path := ProjectSettings.globalize_path(ONLINE_SESSION_STORE_PATH)
-	var tmp_path := ProjectSettings.globalize_path(ONLINE_SESSION_STORE_TMP_PATH)
-	if FileAccess.file_exists(ONLINE_SESSION_STORE_PATH):
+	var target_path := ProjectSettings.globalize_path(_online_session_store_path)
+	var tmp_path := ProjectSettings.globalize_path(_online_session_store_tmp_path)
+	if FileAccess.file_exists(_online_session_store_path):
 		DirAccess.remove_absolute(target_path)
 	if DirAccess.rename_absolute(tmp_path, target_path) != OK:
-		var fallback := FileAccess.open(ONLINE_SESSION_STORE_PATH, FileAccess.WRITE)
+		var fallback := FileAccess.open(_online_session_store_path, FileAccess.WRITE)
 		if fallback == null:
 			return
 		fallback.store_string(JSON.stringify(store, "\t"))
@@ -641,9 +851,9 @@ func _save_online_sessions(store: Dictionary) -> void:
 
 
 func _load_lobby_seat_setup() -> Dictionary:
-	if not FileAccess.file_exists(LOBBY_SEAT_SETUP_STORE_PATH):
+	if not FileAccess.file_exists(_lobby_seat_setup_store_path):
 		return {"seats": []}
-	var file := FileAccess.open(LOBBY_SEAT_SETUP_STORE_PATH, FileAccess.READ)
+	var file := FileAccess.open(_lobby_seat_setup_store_path, FileAccess.READ)
 	if file == null:
 		return {"seats": []}
 	var text := file.get_as_text()
@@ -663,17 +873,17 @@ func _load_lobby_seat_setup() -> Dictionary:
 
 
 func _save_lobby_seat_setup(store: Dictionary) -> void:
-	var file := FileAccess.open(LOBBY_SEAT_SETUP_STORE_TMP_PATH, FileAccess.WRITE)
+	var file := FileAccess.open(_lobby_seat_setup_store_tmp_path, FileAccess.WRITE)
 	if file == null:
 		return
 	file.store_string(JSON.stringify(store, "\t"))
 	file.close()
-	var target_path := ProjectSettings.globalize_path(LOBBY_SEAT_SETUP_STORE_PATH)
-	var tmp_path := ProjectSettings.globalize_path(LOBBY_SEAT_SETUP_STORE_TMP_PATH)
-	if FileAccess.file_exists(LOBBY_SEAT_SETUP_STORE_PATH):
+	var target_path := ProjectSettings.globalize_path(_lobby_seat_setup_store_path)
+	var tmp_path := ProjectSettings.globalize_path(_lobby_seat_setup_store_tmp_path)
+	if FileAccess.file_exists(_lobby_seat_setup_store_path):
 		DirAccess.remove_absolute(target_path)
 	if DirAccess.rename_absolute(tmp_path, target_path) != OK:
-		var fallback := FileAccess.open(LOBBY_SEAT_SETUP_STORE_PATH, FileAccess.WRITE)
+		var fallback := FileAccess.open(_lobby_seat_setup_store_path, FileAccess.WRITE)
 		if fallback == null:
 			return
 		fallback.store_string(JSON.stringify(store, "\t"))
@@ -836,15 +1046,21 @@ func _mark_server_unconnected() -> void:
 	_server_check_in_progress = false
 	_server_check_target_url = ""
 	_cancel_code_check_request()
+	if is_instance_valid(_public_tables_request) and _public_tables_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		_public_tables_request.cancel_request()
+	_public_tables_request_quiet = false
+	_public_tables_poll_elapsed = 0.0
 	_server_connected = false
 	_connected_server_url = ""
 	_reset_invite_code_state()
+	_render_public_tables([])
 	_refresh_online_setup_ready_state()
 
 
 func _refresh_online_setup_ready_state() -> void:
 	var ready := _server_is_ready()
 	var saved_session_available := ready and _has_saved_online_session_for_current_code()
+	var has_table := _table_exists(RecipesClient.latest_snapshot)
 	if is_instance_valid(_code_input):
 		_code_input.editable = ready
 		if not ready and _code_input.text.strip_edges().to_upper() == "OFFLINE":
@@ -852,15 +1068,24 @@ func _refresh_online_setup_ready_state() -> void:
 	if is_instance_valid(_generate_code_button):
 		_generate_code_button.disabled = not ready
 	if is_instance_valid(_create_table_button):
-		_create_table_button.disabled = _home_choice == "online" and not _table_exists(RecipesClient.latest_snapshot) and (not ready or not _invite_code_unique or _code_check_in_progress)
+		_create_table_button.disabled = _home_choice == "online" and not has_table and (not ready or not _invite_code_unique or _code_check_in_progress)
 	if is_instance_valid(_join_table_button):
-		_join_table_button.text = "Reconnect Seat" if saved_session_available else "Join Table"
-		_join_table_button.disabled = _home_choice == "online" and not _table_exists(RecipesClient.latest_snapshot) and (not ready or _code_check_in_progress or (not _invite_code_joinable and not saved_session_available))
+		_join_table_button.text = "Join Table"
+		_join_table_button.disabled = _home_choice == "online" and not has_table and (not ready or _code_check_in_progress or (not _invite_code_joinable and not saved_session_available))
 		_style_join_table_button((_invite_code_joinable or saved_session_available) and ready and not _code_check_in_progress)
+	if is_instance_valid(_reconnect_seat_button):
+		_reconnect_seat_button.visible = false
+		_reconnect_seat_button.disabled = true
 	if is_instance_valid(_server_connect_button):
 		_server_connect_button.text = "Checking..." if _server_check_in_progress else ("Connected" if ready else "Connect")
 		_server_connect_button.disabled = false
 		_style_server_connect_button(ready)
+	if is_instance_valid(_public_tables_panel):
+		_public_tables_panel.visible = _home_choice == "online" and not has_table
+	if is_instance_valid(_public_tables_refresh_button):
+		_public_tables_refresh_button.disabled = not ready
+	if is_instance_valid(_public_tables_status_label) and not ready:
+		_public_tables_status_label.text = "Connect to a server to see public tables."
 
 
 func _connect_to_selected_server() -> void:
@@ -914,6 +1139,7 @@ func _on_server_check_completed(result: int, response_code: int, _headers: Packe
 	_status_label.text = "Server connected. Finding an available invite code..."
 	_status_label.visible = true
 	_refresh_online_setup_ready_state()
+	_request_public_tables()
 	_begin_unique_code_generation()
 
 
@@ -1003,12 +1229,15 @@ func _on_code_check_completed(result: int, response_code: int, _headers: PackedS
 	_invite_code_exists = exists
 	_invite_code_joinable = exists and joinable
 	_invite_code_unique = valid and not exists
+	var has_saved_session := exists and not _saved_online_session_for_code(code).is_empty()
 	if not valid:
 		_status_label.text = "Invite code must be 4-24 letters, numbers, or hyphens."
-	elif exists and not _saved_online_session_for_code(code).is_empty():
-		_status_label.text = "You have a saved seat for this table. Reconnect to it."
+	elif _invite_code_joinable and has_saved_session:
+		_status_label.text = "This client profile already has a saved seat for this table. Join Table will reconnect it."
 	elif _invite_code_joinable:
 		_status_label.text = "Table found. You can join."
+	elif has_saved_session:
+		_status_label.text = "You have a saved seat for this table. Reconnect to it."
 	elif exists:
 		_status_label.text = "This Table is full or has already started cooking."
 	else:
@@ -1949,7 +2178,8 @@ func _on_join_pressed() -> void:
 		_status_label.text = "Enter an invite code to join a table."
 		_status_label.visible = true
 		return
-	if _home_choice == "online" and _invite_code_exists and _resume_saved_online_session(code):
+	if _home_choice == "online" and _has_saved_online_session_for_current_code():
+		_resume_saved_online_session(code)
 		return
 	if RecipesClient.has_table_session(code):
 		RecipesClient.connect_socket()
@@ -1960,6 +2190,23 @@ func _on_join_pressed() -> void:
 		return
 	_clear_lobby_edit_state()
 	RecipesClient.join_table(code, "", bool(_left_table_codes.get(code, false)))
+
+
+func _on_reconnect_seat_pressed() -> void:
+	RecipesClient.server_url = _selected_server_url()
+	if _home_choice == "online" and not _server_is_ready():
+		_status_label.text = "Connect to a server before reconnecting."
+		_status_label.visible = true
+		return
+	var code := _normalized_invite_code()
+	if code == "":
+		_status_label.text = "Enter an invite code to reconnect your saved seat."
+		_status_label.visible = true
+		return
+	if not _resume_saved_online_session(code):
+		_status_label.text = "No saved seat was found for this table on this client profile."
+		_status_label.visible = true
+		_refresh_online_setup_ready_state()
 
 
 func _start_offline_table() -> void:
@@ -2202,6 +2449,7 @@ func _csv_field(value: Variant) -> String:
 
 func _on_snapshot_received(snapshot: Dictionary) -> void:
 	_save_current_online_session(snapshot)
+	_sync_lobby_pending_names_with_snapshot(snapshot)
 	_render_snapshot(snapshot)
 	_maybe_advance_acting_as_after_deposit(snapshot)
 	_maybe_follow_controlled_turn(snapshot)
@@ -2347,6 +2595,9 @@ func _refresh_connection_buttons(snapshot: Dictionary) -> void:
 	_offline_table_button.visible = not has_table
 	_create_table_button.visible = not has_table or is_host
 	_join_table_button.visible = not has_table or is_host
+	if is_instance_valid(_reconnect_seat_button):
+		_reconnect_seat_button.visible = false
+		_reconnect_seat_button.disabled = true
 	_leave_table_button.visible = has_table and not is_host
 
 	if is_host:
@@ -2394,6 +2645,8 @@ func _set_lobby_ui_visible(visible: bool) -> void:
 	_summary_label.visible = false
 	_participants_area.visible = false
 	_table_section.visible = visible and not game_started
+	_table_section.size_flags_vertical = Control.SIZE_EXPAND_FILL if visible and not game_started else Control.SIZE_SHRINK_BEGIN
+	_phase_controls.size_flags_vertical = Control.SIZE_EXPAND_FILL if visible and not game_started else Control.SIZE_SHRINK_BEGIN
 	_set_section_header_visible(_table_section, false)
 	if visible and not game_started:
 		_set_section_collapsed(_table_section, false)
@@ -2447,6 +2700,7 @@ func _fit_table_visual_to_window() -> void:
 		var available_height := get_viewport_rect().size.y
 		if is_instance_valid(_root_margin):
 			available_height -= float(_root_margin.get_theme_constant("margin_top") + _root_margin.get_theme_constant("margin_bottom"))
+		available_height -= TABLE_VISUAL_BOTTOM_SAFE_MARGIN
 		available_height = maxf(1.0, available_height)
 		scale_value = minf(scale_value, available_height / design_size.y)
 	scale_value = maxf(0.45, scale_value)
@@ -2504,6 +2758,8 @@ func _on_table_visual_menu_requested(action: String) -> void:
 	match action:
 		"View History":
 			_open_history_popup()
+		"Main Menu":
+			_return_to_main_menu()
 		"End Game":
 			if bool(RecipesClient.latest_snapshot.get("offline", false)) or RecipesClient.offline_mode:
 				_confirm_offline_end_game()
@@ -2515,11 +2771,11 @@ func _open_history_popup() -> void:
 	if not is_instance_valid(_history_popup) or not is_instance_valid(_history_popup_controls):
 		return
 	var viewport_size := get_viewport_rect().size
-	var max_popup_width := maxi(1, int(viewport_size.x) - 24)
-	var max_popup_height := maxi(1, int(viewport_size.y) - 24)
+	var max_popup_width := maxi(1, int(viewport_size.x) - 36)
+	var max_popup_height := maxi(1, int(viewport_size.y) - 84)
 	var popup_size := Vector2i(
-		mini(mini(680, int(viewport_size.x * 0.92)), max_popup_width),
-		mini(mini(620, int(viewport_size.y * 0.68)), max_popup_height)
+		mini(mini(660, int(viewport_size.x * 0.90)), max_popup_width),
+		mini(mini(520, int(viewport_size.y * 0.58)), max_popup_height)
 	)
 	_history_popup_visible_rows = _history_popup_row_count_for_size(popup_size)
 	_refresh_history_popup(RecipesClient.latest_snapshot)
@@ -2527,7 +2783,7 @@ func _open_history_popup() -> void:
 
 
 func _history_popup_row_count_for_size(popup_size: Vector2i) -> int:
-	var fixed_height := 220
+	var fixed_height := 260
 	var available_rows_height := maxi(0, popup_size.y - fixed_height)
 	var row_stride := TRANSACTION_ROW_HEIGHT + TRANSACTION_ROW_GAP
 	var rows := int(floor(float(available_rows_height) / float(row_stride)))
@@ -2680,8 +2936,11 @@ func _add_lobby_controls(snapshot: Dictionary) -> void:
 
 	var host_controls := bool(snapshot.get("viewerCanUseHostControls", false))
 	if not host_controls:
+		if _is_online_snapshot(snapshot):
+			_phase_controls.add_child(_lobby_waiting_on_host_label())
 		_add_seat_setup_grid(snapshot, false)
 		if _is_online_snapshot(snapshot):
+			_add_lobby_footer_spacer()
 			_add_back_to_online_setup_button()
 		return
 
@@ -2734,11 +2993,49 @@ func _add_online_lobby_invite_controls(snapshot: Dictionary) -> void:
 	invite_button.custom_minimum_size = Vector2(112, 30 if _is_compact_lobby() else 44)
 	box.add_child(invite_button)
 
+	if bool(snapshot.get("viewerCanUseHostControls", false)) and str(snapshot.get("phase", "")) == "lobby":
+		var is_public := bool(snapshot.get("isPublic", true))
+		var visibility_button := _button("Public Table" if is_public else "Private Table", func(public_now := is_public) -> void:
+			RecipesClient.send_host_intent({"type": "set_table_visibility", "isPublic": not public_now})
+		)
+		visibility_button.custom_minimum_size = Vector2(112, 30 if _is_compact_lobby() else 44)
+		if is_public:
+			visibility_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.74, 0.91, 0.58), Color(0.34, 0.48, 0.20), 1))
+			visibility_button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.82, 0.98, 0.64), Color(0.40, 0.56, 0.24), 2))
+		else:
+			visibility_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.78, 0.70, 0.56), Color(0.47, 0.36, 0.22), 1))
+			visibility_button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.86, 0.78, 0.62), Color(0.58, 0.42, 0.21), 2))
+		box.add_child(visibility_button)
+
 
 func _add_back_to_online_setup_button() -> void:
 	var back_button := _button("Back to Create/Join Table", _back_to_online_setup)
 	back_button.custom_minimum_size = Vector2(112, 34 if _is_compact_lobby() else 44)
 	_phase_controls.add_child(back_button)
+
+
+func _add_lobby_footer_spacer() -> void:
+	var spacer := Control.new()
+	spacer.name = "LobbyFooterSpacer"
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	spacer.custom_minimum_size = Vector2(0, 8)
+	_phase_controls.add_child(spacer)
+
+
+func _lobby_waiting_on_host_label() -> Label:
+	var compact := _is_compact_lobby()
+	var label := Label.new()
+	label.text = "Waiting on Host to Start the Game."
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.custom_minimum_size = Vector2(0, 42 if compact else 64)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.add_theme_font_size_override("font_size", 24 if compact else 32)
+	label.add_theme_color_override("font_color", Color(0.26, 0.14, 0.06))
+	label.add_theme_color_override("font_outline_color", Color(1.0, 0.91, 0.68, 0.90))
+	label.add_theme_constant_override("outline_size", 2)
+	return label
 
 
 func _back_to_online_setup() -> void:
@@ -2840,32 +3137,40 @@ func _style_server_connect_button(connected: bool) -> void:
 
 
 func _style_join_table_button(join_ready: bool) -> void:
-	if not is_instance_valid(_join_table_button):
+	_style_join_like_button(_join_table_button, join_ready)
+
+
+func _style_reconnect_seat_button(reconnect_ready: bool) -> void:
+	_style_join_like_button(_reconnect_seat_button, reconnect_ready)
+
+
+func _style_join_like_button(button: Button, join_ready: bool) -> void:
+	if not is_instance_valid(button):
 		return
 	if join_ready:
-		_join_table_button.add_theme_color_override("font_color", Color(0.08, 0.20, 0.08))
-		_join_table_button.add_theme_color_override("font_hover_color", Color(0.08, 0.20, 0.08))
-		_join_table_button.add_theme_color_override("font_pressed_color", Color(0.05, 0.16, 0.05))
-		_join_table_button.add_theme_color_override("font_focus_color", Color(0.08, 0.20, 0.08))
-		_join_table_button.add_theme_color_override("font_hover_pressed_color", Color(0.05, 0.16, 0.05))
-		_join_table_button.add_theme_color_override("font_disabled_color", Color(0.20, 0.28, 0.16, 0.75))
-		_join_table_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.64, 0.91, 0.43), Color(1.0, 0.98, 0.62), 3))
-		_join_table_button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.72, 0.98, 0.50), Color(1.0, 1.0, 0.76), 4))
-		_join_table_button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.52, 0.78, 0.33), Color(0.84, 0.78, 0.36), 3))
-		_join_table_button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.74, 0.82, 0.61), Color(0.50, 0.55, 0.36), 1))
-		_join_table_button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.72, 0.98, 0.50), Color(1.0, 1.0, 0.90), 4))
+		button.add_theme_color_override("font_color", Color(0.08, 0.20, 0.08))
+		button.add_theme_color_override("font_hover_color", Color(0.08, 0.20, 0.08))
+		button.add_theme_color_override("font_pressed_color", Color(0.05, 0.16, 0.05))
+		button.add_theme_color_override("font_focus_color", Color(0.08, 0.20, 0.08))
+		button.add_theme_color_override("font_hover_pressed_color", Color(0.05, 0.16, 0.05))
+		button.add_theme_color_override("font_disabled_color", Color(0.20, 0.28, 0.16, 0.75))
+		button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.64, 0.91, 0.43), Color(1.0, 0.98, 0.62), 3))
+		button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.72, 0.98, 0.50), Color(1.0, 1.0, 0.76), 4))
+		button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.52, 0.78, 0.33), Color(0.84, 0.78, 0.36), 3))
+		button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.74, 0.82, 0.61), Color(0.50, 0.55, 0.36), 1))
+		button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.72, 0.98, 0.50), Color(1.0, 1.0, 0.90), 4))
 	else:
-		_join_table_button.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
-		_join_table_button.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
-		_join_table_button.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
-		_join_table_button.add_theme_color_override("font_focus_color", Color(0.17, 0.12, 0.07))
-		_join_table_button.add_theme_color_override("font_hover_pressed_color", Color(0.10, 0.07, 0.04))
-		_join_table_button.add_theme_color_override("font_disabled_color", Color(0.42, 0.37, 0.29, 0.70))
-		_join_table_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.88, 0.80, 0.62), Color(0.47, 0.36, 0.22), 1))
-		_join_table_button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.96, 0.88, 0.67), Color(0.58, 0.42, 0.21), 2))
-		_join_table_button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.78, 0.68, 0.48), Color(0.34, 0.26, 0.17), 1))
-		_join_table_button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.70, 0.66, 0.55), Color(0.54, 0.48, 0.36), 1))
-		_join_table_button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.96, 0.88, 0.67), Color(1.0, 0.98, 0.84), 3))
+		button.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+		button.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
+		button.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
+		button.add_theme_color_override("font_focus_color", Color(0.17, 0.12, 0.07))
+		button.add_theme_color_override("font_hover_pressed_color", Color(0.10, 0.07, 0.04))
+		button.add_theme_color_override("font_disabled_color", Color(0.42, 0.37, 0.29, 0.70))
+		button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.88, 0.80, 0.62), Color(0.47, 0.36, 0.22), 1))
+		button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.96, 0.88, 0.67), Color(0.58, 0.42, 0.21), 2))
+		button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.78, 0.68, 0.48), Color(0.34, 0.26, 0.17), 1))
+		button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.70, 0.66, 0.55), Color(0.54, 0.48, 0.36), 1))
+		button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.96, 0.88, 0.67), Color(1.0, 0.98, 0.84), 3))
 
 
 func _add_seat_setup_grid(snapshot: Dictionary, host_editable: bool) -> void:
@@ -2969,6 +3274,7 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 	name_input.text_changed.connect(func(text: String, target_id := participant_id) -> void:
 		_remember_lobby_seat_name_edit(target_id, text)
 		_save_lobby_seat_setup_from_inputs()
+		_schedule_lobby_name_publish()
 	)
 	name_input.text_submitted.connect(func(_submitted: String, target_id := participant_id, input := name_input) -> void:
 		_rename_lobby_seat(target_id, input)
@@ -2977,6 +3283,7 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 	name_input.focus_exited.connect(func(target_id := participant_id, input := name_input) -> void:
 		_remember_lobby_seat_name_edit(target_id, input.text)
 		_save_lobby_seat_setup_from_inputs()
+		_flush_pending_lobby_name_edits()
 	)
 	kind_toggle.item_selected.connect(func(index: int, target_id := participant_id, input := name_input) -> void:
 		_save_lobby_seat_setup_from_inputs()
@@ -3036,6 +3343,54 @@ func _remember_lobby_seat_name_edit(participant_id: String, name: String) -> voi
 		_lobby_pending_seat_names.erase(participant_id)
 	else:
 		_lobby_pending_seat_names[participant_id] = name
+
+
+func _publish_lobby_seat_name_edit(participant_id: String, name: String) -> void:
+	if participant_id == "":
+		return
+	var trimmed := name.strip_edges()
+	if trimmed == "":
+		return
+	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
+	if not participant.is_empty() and trimmed == str(participant.get("name", "")).strip_edges():
+		_lobby_pending_seat_names.erase(participant_id)
+		return
+	if _send_lobby_edit_intent({"type": "rename_participant", "participantId": participant_id, "name": trimmed}):
+		_lobby_pending_seat_names.erase(participant_id)
+
+
+func _schedule_lobby_name_publish() -> void:
+	if is_instance_valid(_lobby_name_publish_timer):
+		_lobby_name_publish_timer.start(LOBBY_NAME_PUBLISH_DELAY_SECONDS)
+
+
+func _flush_pending_lobby_name_edits() -> void:
+	if is_instance_valid(_lobby_name_publish_timer):
+		_lobby_name_publish_timer.stop()
+	var participant_ids := _lobby_pending_seat_names.keys()
+	for raw_participant_id in participant_ids:
+		var participant_id := str(raw_participant_id)
+		if not _lobby_pending_seat_names.has(participant_id):
+			continue
+		var name := str(_lobby_pending_seat_names.get(participant_id, ""))
+		_publish_lobby_seat_name_edit(participant_id, name)
+
+
+func _sync_lobby_pending_names_with_snapshot(snapshot: Dictionary) -> void:
+	for raw_participant_id in _lobby_pending_seat_names.keys():
+		var participant_id := str(raw_participant_id)
+		var participant := _participant_by_id(snapshot, participant_id)
+		if participant.is_empty():
+			_lobby_pending_seat_names.erase(participant_id)
+			continue
+		var pending := str(_lobby_pending_seat_names.get(participant_id, "")).strip_edges()
+		var current := str(participant.get("name", "")).strip_edges()
+		if pending == current:
+			_lobby_pending_seat_names.erase(participant_id)
+			continue
+		var input := _lobby_seat_name_inputs.get(participant_id, null) as LineEdit
+		if input == null or not is_instance_valid(input) or not input.has_focus():
+			_lobby_pending_seat_names.erase(participant_id)
 
 
 func _active_lobby_participants(snapshot: Dictionary) -> Array:
@@ -3098,6 +3453,7 @@ func _save_lobby_seat_setup_from_edits(edits: Array) -> void:
 
 
 func _commit_lobby_seat_setup_edits() -> void:
+	_flush_pending_lobby_name_edits()
 	var edits := _capture_lobby_seat_setup_edits()
 	if edits.is_empty():
 		return
@@ -3172,6 +3528,8 @@ func _apply_saved_lobby_setup_to_active_table() -> void:
 
 
 func _clear_lobby_edit_state() -> void:
+	if is_instance_valid(_lobby_name_publish_timer):
+		_lobby_name_publish_timer.stop()
 	_lobby_seat_name_inputs.clear()
 	_lobby_seat_kind_inputs.clear()
 	_lobby_pending_seat_names.clear()
@@ -3201,7 +3559,7 @@ func _add_deposit_controls(snapshot: Dictionary) -> void:
 	if str(viewer.get("role", "")) != "active":
 		_hand_controls.add_child(_wrapped_label("Witnessing the table offering."))
 		return
-	if bool(viewer.get("depositedInitial", false)):
+	if _opening_offering_count(viewer) >= 2:
 		_hand_controls.add_child(_wrapped_label("Offering given. Waiting for the table."))
 		return
 	if hand.is_empty():
@@ -3229,7 +3587,7 @@ func _maybe_advance_acting_as_after_deposit(snapshot: Dictionary) -> void:
 	if pending_actor.is_empty():
 		_pending_controlled_deposit_actor_id = ""
 		return
-	if not bool(pending_actor.get("depositedInitial", false)):
+	if _opening_offering_count(pending_actor) < 2:
 		return
 
 	var next_actor_id := _next_controlled_undeposited_actor_id(snapshot, _pending_controlled_deposit_actor_id)
@@ -3348,7 +3706,7 @@ func _next_controlled_undeposited_actor_id(snapshot: Dictionary, after_participa
 			continue
 		if str(candidate.get("role", "")) != "active":
 			continue
-		if bool(candidate.get("depositedInitial", false)):
+		if _opening_offering_count(candidate) >= 2:
 			continue
 		return candidate_id
 	return ""
@@ -3797,8 +4155,8 @@ func _set_timer() -> void:
 
 func _set_target_dish_count() -> void:
 	var count := int(_target_dish_count_input.text)
-	if count < 1 or count > 4:
-		_on_error_received({"description": "Dish goal must be between 1 and 4."})
+	if count < 1 or count > 3:
+		_on_error_received({"description": "Dish goal must be between 1 and 3."})
 		return
 	RecipesClient.send_host_intent({"type": "set_target_dish_count", "count": count})
 
@@ -3816,6 +4174,12 @@ func _participant_by_id(snapshot: Dictionary, participant_id: String) -> Diction
 		if str(participant.get("id", "")) == participant_id:
 			return participant
 	return {}
+
+
+func _opening_offering_count(participant: Dictionary) -> int:
+	if participant.has("openingOfferingsCount"):
+		return int(participant.get("openingOfferingsCount", 0))
+	return 2 if bool(participant.get("depositedInitial", false)) else 0
 
 
 func _participant_name(snapshot: Dictionary, participant_id: String) -> String:

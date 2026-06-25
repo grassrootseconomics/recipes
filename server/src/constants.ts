@@ -4,14 +4,15 @@ export const MIN_ACTIVE_PARTICIPANTS = 8;
 export const MAX_ACTIVE_PARTICIPANTS = 8;
 export const MIN_CATALOG_PLAYER_COUNT = 8;
 export const MAX_CATALOG_PLAYER_COUNT = 8;
-export const VOUCHERS_PER_INGREDIENT = 7;
+export const VOUCHERS_PER_INGREDIENT = 8;
+export const OPENING_OFFERINGS_PER_PLAYER = 2;
 export const REAL_UNITS_PER_INGREDIENT = 40;
 export const MIN_STOCK_PER_INGREDIENT = 1;
 export const MAX_STOCK_PER_INGREDIENT = 999;
 export const DISH_PARTS_PER_DISH = 10;
 export const MIN_TARGET_DISH_COUNT = 1;
-export const MAX_TARGET_DISH_COUNT = 4;
-export const DEFAULT_TARGET_DISH_COUNT = 4;
+export const MAX_TARGET_DISH_COUNT = 3;
+export const DEFAULT_TARGET_DISH_COUNT = 3;
 
 export const INGREDIENTS: Ingredient[] = [
   {

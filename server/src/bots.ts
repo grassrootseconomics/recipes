@@ -1,7 +1,7 @@
 import { applyIntent, getUsefulRequirementIds, handVoucherIds, platterVoucherIds } from "./game.js";
 import { hashString } from "./rng.js";
 import { buildSnapshot } from "./snapshots.js";
-import type { Intent, PlatterAssetRef, PublicParticipant, Snapshot, Table, Voucher } from "./types.js";
+import type { DishPart, Intent, PlatterAssetRef, PublicParticipant, Snapshot, Table, Voucher } from "./types.js";
 
 const DEFAULT_BOT_RUN_BUDGET = 300;
 
@@ -18,7 +18,7 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
   if (table.paused) {
     return undefined;
   }
-  if (table.phase !== "deposit" && table.currentTurnParticipantId !== botParticipantId) {
+  if (table.phase !== "deposit" && table.phase !== "eating" && table.currentTurnParticipantId !== botParticipantId) {
     return undefined;
   }
   const snapshot = buildSnapshot(table, botParticipantId);
@@ -35,11 +35,15 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
   }
 
   if (snapshot.phase === "settlement") {
+    const acceptDecision = decideAcceptOffer(snapshot);
+    if (acceptDecision) {
+      return acceptDecision;
+    }
     return decideSettlementSwap(table, botParticipantId, snapshot) ?? roundRobinPass();
   }
 
   if (snapshot.phase === "eating") {
-    return decideBite(table, botParticipantId, snapshot) ?? roundRobinPass();
+    return decideBite(table, botParticipantId, snapshot);
   }
 
   if (snapshot.phase !== "playing") {
@@ -104,7 +108,7 @@ export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET, onStep?
   for (let passCount = 0; passCount < table.participantOrder.length; passCount += 1) {
     const current = table.currentTurnParticipantId ? table.participants[table.currentTurnParticipantId] : undefined;
     if (
-      (table.phase !== "playing" && table.phase !== "settlement" && table.phase !== "eating") ||
+      (table.phase !== "playing" && table.phase !== "settlement") ||
       current?.kind !== "bot" ||
       current.role !== "active"
     ) {
@@ -143,21 +147,33 @@ function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: 
     }
   }
 
+  const shortfallSwap = decideSettlementShortfallSwap(bot, botParticipantId, snapshot, true);
+  if (shortfallSwap) {
+    return shortfallSwap;
+  }
+
+  const directSettlementOffer = decideSettlementDirectOffer(botParticipantId, snapshot);
+  if (directSettlementOffer) {
+    return directSettlementOffer;
+  }
+
   if (bot.foreignCardsInHand > 0 && snapshot.platterFoodParts.length > 0) {
     const returnCandidate = snapshot.ownHand
       .filter((voucher) => voucher.ownerParticipantId !== botParticipantId && voucherHasStock(snapshot, voucher))
       .map((voucher) => {
         const owner = snapshot.participants.find((participant) => participant.id === voucher.ownerParticipantId);
-        const matchingPart = snapshot.platterFoodParts.find((part) => part.makerParticipantId === voucher.ownerParticipantId);
-        return { voucher, owner, matchingPart };
+        const takePart = settlementFoodPartForForeignCard(table, botParticipantId, voucher.ownerParticipantId, snapshot.platterFoodParts);
+        return { voucher, owner, takePart };
       })
-      .find(({ owner, matchingPart }) => (owner?.platterShortfall ?? 0) > 0 && matchingPart);
-    if (returnCandidate?.matchingPart) {
+      .filter(({ owner }) => (owner?.platterShortfall ?? 0) > 0)
+      .sort((left, right) => settlementForeignCardRank(left.owner) - settlementForeignCardRank(right.owner))
+      .find(({ takePart }) => Boolean(takePart));
+    if (returnCandidate?.takePart) {
       return {
         intent: {
           type: "platter_asset_swap",
           give: { kind: "voucher", id: returnCandidate.voucher.id },
-          take: { kind: "dish_part", id: returnCandidate.matchingPart.id }
+          take: { kind: "dish_part", id: returnCandidate.takePart.id }
         },
         reason: "return a foreign promise card during settlement"
       };
@@ -183,20 +199,9 @@ function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: 
   }
 
   if (bot.platterShortfall > 0) {
-    if (bot.ownCardsInOtherHands > 0 && snapshot.platterFoodParts.length > 0) {
-      return undefined;
-    }
-    const ownVoucher = snapshot.ownHand.find((voucher) => voucher.ownerParticipantId === botParticipantId && voucherHasStock(snapshot, voucher));
-    const take = preferredSettlementTake(snapshot, botParticipantId);
-    if (ownVoucher && take) {
-      return {
-        intent: {
-          type: "platter_asset_swap",
-          give: { kind: "voucher", id: ownVoucher.id },
-          take
-        },
-        reason: "settle platter shortfall"
-      };
+    const fallbackShortfallSwap = decideSettlementShortfallSwap(bot, botParticipantId, snapshot, false);
+    if (fallbackShortfallSwap) {
+      return fallbackShortfallSwap;
     }
   }
 
@@ -218,9 +223,119 @@ function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: 
   return undefined;
 }
 
+function decideSettlementShortfallSwap(
+  bot: PublicParticipant,
+  botParticipantId: string,
+  snapshot: Snapshot,
+  requireExtraOwnCard: boolean
+): BotDecision | undefined {
+  if (bot.platterShortfall <= 0) {
+    return undefined;
+  }
+  if (requireExtraOwnCard && bot.ownCardsInHand <= bot.expectedOwnCardsInHand) {
+    return undefined;
+  }
+  if (!requireExtraOwnCard && bot.ownCardsInOtherHands > 0) {
+    return undefined;
+  }
+  const ownVoucher = snapshot.ownHand.find((voucher) => voucher.ownerParticipantId === botParticipantId && voucherHasStock(snapshot, voucher));
+  const take = preferredSettlementTake(snapshot, botParticipantId);
+  if (!ownVoucher || !take) {
+    return undefined;
+  }
+  return {
+    intent: {
+      type: "platter_asset_swap",
+      give: { kind: "voucher", id: ownVoucher.id },
+      take
+    },
+    reason: requireExtraOwnCard ? "settle platter shortfall with extra own promise card" : "settle platter shortfall"
+  };
+}
+
 function botJustMadeSettlementSwap(table: Table, botParticipantId: string): boolean {
   const last = table.transactionHistory.at(-1);
   return last?.participantId === botParticipantId && last.action === "Settlement Swap";
+}
+
+function settlementForeignCardRank(owner?: PublicParticipant): number {
+  if (!owner) {
+    return 3;
+  }
+  if (owner.platterShortfall > 0) {
+    return 0;
+  }
+  if (owner.ownCardsInOtherHands > 0) {
+    return 1;
+  }
+  return 2;
+}
+
+function settlementFoodPartForForeignCard(
+  table: Table,
+  botParticipantId: string,
+  ownerParticipantId: string,
+  platterFoodParts: DishPart[]
+): DishPart | undefined {
+  const ownerPart = platterFoodParts.find((part) => part.makerParticipantId === ownerParticipantId);
+  if (ownerPart) {
+    return ownerPart;
+  }
+  const nonSelfPartIds = platterFoodParts.filter((part) => part.makerParticipantId !== botParticipantId).map((part) => part.id);
+  const nonSelfPart = deterministicFoodPartRef(table, botParticipantId, nonSelfPartIds);
+  if (nonSelfPart) {
+    return platterFoodParts.find((part) => part.id === nonSelfPart.id);
+  }
+  const anyPart = deterministicFoodPartRef(table, botParticipantId, platterFoodParts.map((part) => part.id));
+  return anyPart ? platterFoodParts.find((part) => part.id === anyPart.id) : undefined;
+}
+
+function decideSettlementDirectOffer(botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
+  if (snapshot.offers.some((offer) => offer.status === "pending" && offer.fromParticipantId === botParticipantId)) {
+    return undefined;
+  }
+  const bot = snapshot.participants.find((participant) => participant.id === botParticipantId);
+  const ownFoodPart = snapshot.ownFoodParts[0];
+  if (bot?.ingredientId && (bot.ownCardsInOtherHands ?? 0) > 0 && ownFoodPart) {
+    const holder = snapshot.participants.find(
+      (participant) =>
+        participant.id !== botParticipantId &&
+        participant.heldVoucherGroups.some(
+          (group) => group.ingredientId === bot.ingredientId && group.ownerParticipantId === botParticipantId && group.count > 0
+        )
+    );
+    if (holder) {
+      return {
+        intent: {
+          type: "create_offer",
+          toParticipantId: holder.id,
+          offeredAssets: [{ kind: "dish_part", id: ownFoodPart.id }],
+          requestedAsset: { kind: "voucher", ingredientId: bot.ingredientId, ownerParticipantId: botParticipantId, quantity: 1 }
+        },
+        reason: "offer food piece directly for own stranded promise card"
+      };
+    }
+  }
+  const returnCandidate = snapshot.ownHand
+    .filter((voucher) => voucher.ownerParticipantId !== botParticipantId && voucherHasStock(snapshot, voucher))
+    .map((voucher) => {
+      const owner = snapshot.participants.find((participant) => participant.id === voucher.ownerParticipantId);
+      return { voucher, owner };
+    })
+    .filter(({ owner }) => Boolean(owner && (owner.heldFoodPartCount ?? 0) > 0))
+    .sort((left, right) => settlementForeignCardRank(left.owner) - settlementForeignCardRank(right.owner))[0];
+  if (!returnCandidate?.owner) {
+    return undefined;
+  }
+  return {
+    intent: {
+      type: "create_offer",
+      toParticipantId: returnCandidate.owner.id,
+      offeredVoucherIds: [returnCandidate.voucher.id],
+      requestedAsset: { kind: "dish_part", quantity: 1 }
+    },
+    reason: "offer foreign promise card directly for any food piece during settlement"
+  };
 }
 
 function preferredSettlementGive(snapshot: Snapshot, botParticipantId: string, allowOwnVoucher: boolean): PlatterAssetRef | undefined {
@@ -238,6 +353,10 @@ function preferredSettlementGive(snapshot: Snapshot, botParticipantId: string, a
   if (usefulForeignVoucher) {
     return { kind: "voucher", id: usefulForeignVoucher.id };
   }
+  const foreignVoucher = snapshot.ownHand.find((candidate) => candidate.ownerParticipantId !== botParticipantId && voucherHasStock(snapshot, candidate));
+  if (foreignVoucher) {
+    return { kind: "voucher", id: foreignVoucher.id };
+  }
   const voucher = snapshot.ownHand.find((candidate) => (allowOwnVoucher || candidate.ownerParticipantId !== botParticipantId) && voucherHasStock(snapshot, candidate));
   return voucher ? { kind: "voucher", id: voucher.id } : undefined;
 }
@@ -247,15 +366,10 @@ function preferredSettlementTake(snapshot: Snapshot, botParticipantId: string): 
   if (foodPart) {
     return { kind: "dish_part", id: foodPart.id };
   }
-  const voucher = snapshot.platter.find((candidate) => candidate.ownerParticipantId !== botParticipantId && voucherHasStock(snapshot, candidate));
-  return voucher ? { kind: "voucher", id: voucher.id } : undefined;
+  return undefined;
 }
 
 function preferredFoodPartSeedTake(snapshot: Snapshot, botParticipantId: string): PlatterAssetRef | undefined {
-  const ownVoucher = snapshot.platter.find((voucher) => voucher.ownerParticipantId === botParticipantId && voucherHasStock(snapshot, voucher));
-  if (ownVoucher) {
-    return { kind: "voucher", id: ownVoucher.id };
-  }
   const otherFoodPart = snapshot.platterFoodParts.find((part) => part.makerParticipantId !== botParticipantId);
   if (otherFoodPart) {
     return { kind: "dish_part", id: otherFoodPart.id };
@@ -264,12 +378,7 @@ function preferredFoodPartSeedTake(snapshot: Snapshot, botParticipantId: string)
   if (foodPart) {
     return { kind: "dish_part", id: foodPart.id };
   }
-  const foreignVoucher = snapshot.platter.find((voucher) => voucher.ownerParticipantId !== botParticipantId && voucherHasStock(snapshot, voucher));
-  if (foreignVoucher) {
-    return { kind: "voucher", id: foreignVoucher.id };
-  }
-  const voucher = snapshot.platter.find((candidate) => voucherHasStock(snapshot, candidate));
-  return voucher ? { kind: "voucher", id: voucher.id } : undefined;
+  return undefined;
 }
 
 function deterministicFoodPartRef(table: Table, botParticipantId: string, partIds: string[]): PlatterAssetRef | undefined {
@@ -281,22 +390,15 @@ function deterministicFoodPartRef(table: Table, botParticipantId: string, partId
   return id ? { kind: "dish_part", id } : undefined;
 }
 
-function decideBite(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
+function decideBite(_table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
   const bot = snapshot.participants.find((participant) => participant.id === botParticipantId);
   if (!bot?.cleared) {
     return undefined;
   }
-  const heldDishIds = new Set(snapshot.ownFoodParts.map((part) => part.dishId));
-  const legalDishes = snapshot.dishes.filter((dish) => heldDishIds.has(dish.id));
-  if (legalDishes.length === 0) {
+  if (snapshot.ownFoodParts.length === 0) {
     return undefined;
   }
-  const [dish] = legalDishes.sort(
-    (left, right) =>
-      hashString(`${table.seed}:bite:${table.turn}:${botParticipantId}:${left.id}`) -
-      hashString(`${table.seed}:bite:${table.turn}:${botParticipantId}:${right.id}`)
-  );
-  return { intent: { type: "bite", dishId: dish.id }, reason: "take a legal dish bite" };
+  return { intent: { type: "bite_all" }, reason: "eat all held food parts" };
 }
 
 function decideAcceptOffer(snapshot: Snapshot): BotDecision | undefined {
@@ -329,7 +431,7 @@ function decideAcceptOffer(snapshot: Snapshot): BotDecision | undefined {
     }
 
     const matchingParts = snapshot.ownFoodParts
-      .filter((part) => part.dishId === requested.dishId)
+      .filter((part) => !requested.dishId || part.dishId === requested.dishId)
       .filter((part) => !requested.makerParticipantId || part.makerParticipantId === requested.makerParticipantId)
       .slice(0, requested.quantity);
     if (matchingParts.length === requested.quantity) {
@@ -380,15 +482,56 @@ function decidePoolSwap(table: Table, botParticipantId: string, snapshot: Snapsh
       continue;
     }
     const give = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand, take.ingredientId);
-    if (!give) {
-      continue;
+    if (give) {
+      return {
+        intent: { type: "platter_swap", giveVoucherId: give.id, takeVoucherId: take.id },
+        reason: "platter has useful voucher"
+      };
     }
-    return {
-      intent: { type: "platter_swap", giveVoucherId: give.id, takeVoucherId: take.id },
-      reason: "platter has useful voucher"
-    };
+    const foodPart = firstSpendableFoodPart(snapshot);
+    if (foodPart) {
+      return {
+        intent: {
+          type: "platter_asset_swap",
+          give: { kind: "dish_part", id: foodPart.id },
+          take: { kind: "voucher", id: take.id }
+        },
+        reason: "spend dish piece for useful platter voucher"
+      };
+    }
   }
   return undefined;
+}
+
+function firstSpendableFoodPart(snapshot: Snapshot): DishPart | undefined {
+  return [...snapshot.ownFoodParts].sort((left, right) => left.id.localeCompare(right.id))[0];
+}
+
+function offerGiveAsset(table: Table, botParticipantId: string, snapshot: Snapshot, neededIngredientId: string): PlatterAssetRef | undefined {
+  const giveVoucher = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand, neededIngredientId);
+  if (giveVoucher) {
+    return { kind: "voucher", id: giveVoucher.id };
+  }
+  const foodPart = firstSpendableFoodPart(snapshot);
+  return foodPart ? { kind: "dish_part", id: foodPart.id } : undefined;
+}
+
+function offerIntentForAsset(give: PlatterAssetRef, target: PublicParticipant, neededIngredientId: string): Intent {
+  const base = {
+    type: "create_offer" as const,
+    toParticipantId: target.id,
+    requestedAsset: { kind: "voucher" as const, ingredientId: neededIngredientId, ownerParticipantId: target.id, quantity: 1 }
+  };
+  if (give.kind === "voucher") {
+    return {
+      ...base,
+      offeredVoucherIds: [give.id]
+    };
+  }
+  return {
+    ...base,
+    offeredAssets: [give]
+  };
 }
 
 function decideCreateOffer(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
@@ -396,23 +539,13 @@ function decideCreateOffer(table: Table, botParticipantId: string, snapshot: Sna
     return undefined;
   }
   const neededIngredients = neededIngredientCountsAfterHand(snapshot);
-  const needed = [...neededIngredients.entries()].find(([, count]) => count > 0);
+  const needed = offerableNeededIngredients(botParticipantId, snapshot, neededIngredients)[0];
   if (!needed) {
     return undefined;
   }
-  const [neededIngredientId] = needed;
-  const give = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand, neededIngredientId);
+  const { ingredientId: neededIngredientId, target } = needed;
+  const give = offerGiveAsset(table, botParticipantId, snapshot, neededIngredientId);
   if (!give) {
-    return undefined;
-  }
-  const target = snapshot.participants.find(
-    (participant) =>
-      participant.id !== botParticipantId &&
-      participant.role === "active" &&
-      participant.ingredientId === neededIngredientId &&
-      participant.offerableOwnIngredientQty > 0
-  );
-  if (!target) {
     return undefined;
   }
   const existingPending = snapshot.offers.some((offer) => offer.status === "pending" && offer.fromParticipantId === botParticipantId);
@@ -420,14 +553,29 @@ function decideCreateOffer(table: Table, botParticipantId: string, snapshot: Sna
     return undefined;
   }
   return {
-    intent: {
-      type: "create_offer",
-      toParticipantId: target.id,
-      offeredVoucherIds: [give.id],
-      requested: { ingredientId: neededIngredientId, quantity: 1 }
-    },
+    intent: offerIntentForAsset(give, target, neededIngredientId),
     reason: "request needed ingredient by structured offer"
   };
+}
+
+function offerableNeededIngredients(
+  botParticipantId: string,
+  snapshot: Snapshot,
+  neededIngredients: Map<string, number>
+): Array<{ ingredientId: string; missingCount: number; target: PublicParticipant }> {
+  return [...neededIngredients.entries()]
+    .filter(([, missingCount]) => missingCount > 0)
+    .flatMap(([ingredientId, missingCount]) => {
+      const target = snapshot.participants.find(
+        (participant) =>
+          participant.id !== botParticipantId &&
+          participant.role === "active" &&
+          participant.ingredientId === ingredientId &&
+          participant.offerableOwnIngredientQty > 0
+      );
+      return target ? [{ ingredientId, missingCount, target }] : [];
+    })
+    .sort((left, right) => left.missingCount - right.missingCount || left.ingredientId.localeCompare(right.ingredientId));
 }
 
 function neededIngredientCountsAfterHand(snapshot: Snapshot): Map<string, number> {

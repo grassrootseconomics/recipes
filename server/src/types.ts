@@ -77,6 +77,7 @@ export interface Participant {
   realIngredientStock?: number;
   dishCount: number;
   depositedInitial: boolean;
+  openingOfferingsCount: number;
   connected: boolean;
 }
 
@@ -87,7 +88,7 @@ export interface OfferRequest {
 
 export type OfferAssetRequest =
   | { kind: "voucher"; ingredientId: string; ownerParticipantId?: string; quantity: number }
-  | { kind: "dish_part"; dishId: string; makerParticipantId?: string; quantity: number };
+  | { kind: "dish_part"; dishId?: string; makerParticipantId?: string; quantity: number };
 
 export interface Offer {
   id: string;
@@ -182,6 +183,40 @@ export interface TransactionRecord {
   itemBack: string;
 }
 
+export interface GameStats {
+  activePlayerCount: number;
+  mutationCount: number;
+  playerTurnCount: number;
+  cycleCount: number;
+  interactionCount: number;
+  openingOfferingCount: number;
+  commonBasketSwapCount: number;
+  directExchangeCount: number;
+  redemptionCount: number;
+  prepareCount: number;
+  settlementSwapCount: number;
+  foodPieceSettlementSwapCount: number;
+  eatCount: number;
+  assetLossCount: number;
+  productivityCount: number;
+  profitCount: number;
+  profitGainPercent: number;
+  averageTurnsPerDish: number;
+  averageInteractionsPerDish: number;
+  basketVelocity: number;
+  directExchangeShare: number;
+  settlementBurden: number;
+  scarcityPressureByIngredient: Record<string, number>;
+  hoardingIndex: number;
+  hoardingIndexLabel: string;
+  liquidityDepth: number;
+  settlementTimeTurns: number;
+  consumptionVariance: number;
+  tradeBalanceByParticipant: Record<string, TradeBalanceStats>;
+}
+
+export type TradeBalanceStats = [given: number, received: number, net: number];
+
 export interface TableTimer {
   seconds: number;
   startedAtTurn?: number;
@@ -194,6 +229,7 @@ export interface TableTimer {
 export interface Table {
   code: string;
   seed: string;
+  isPublic: boolean;
   version: number;
   phase: TablePhase;
   paused: boolean;
@@ -206,6 +242,7 @@ export interface Table {
   dishes: Record<string, Dish>;
   dishParts: Record<string, DishPart>;
   transactionHistory: TransactionRecord[];
+  scarcityPressureByIngredient: Record<string, number>;
   winnerParticipantIds: string[];
   targetDishCount: number;
   stockPerIngredient: number;
@@ -237,7 +274,10 @@ export interface PublicParticipant {
   cleared: boolean;
   dishCount: number;
   heldFoodPartCount: number;
+  heldVoucherGroups: VoucherGroup[];
+  heldFoodPartGroups: DishPartGroup[];
   depositedInitial: boolean;
+  openingOfferingsCount: number;
   connected: boolean;
   currentRecipe?: PublicRecipeSummary;
 }
@@ -245,6 +285,7 @@ export interface PublicParticipant {
 export interface Snapshot {
   tableCode: string;
   seed: string;
+  isPublic: boolean;
   version: number;
   phase: TablePhase;
   paused: boolean;
@@ -272,6 +313,7 @@ export interface Snapshot {
   transactionCursor: number;
   transactionHistoryComplete?: boolean;
   transactionHistoryTotal?: number;
+  gameStats: GameStats;
   dishCounts: Record<string, number>;
   winners: string[];
   targetDishCount: number;
@@ -315,6 +357,7 @@ export type Intent =
   | { type: "leave_table" }
   | { type: "close_table" }
   | { type: "reset_table" }
+  | { type: "set_table_visibility"; isPublic: boolean }
   | { type: "set_role"; participantId: string; role: ParticipantRole }
   | { type: "rename_participant"; participantId: string; name: string }
   | { type: "add_bot"; name?: string; botType: BotType }
@@ -348,7 +391,8 @@ export type Intent =
   | { type: "redeem_voucher"; voucherId: string }
   | { type: "redeem_from_hand"; voucherId: string; requirementId: string }
   | { type: "prepare" }
-  | { type: "bite"; dishId: string };
+  | { type: "bite"; dishId: string }
+  | { type: "bite_all" };
 
 export interface CreateTableResult {
   table: Table;
@@ -362,4 +406,12 @@ export interface JoinTableResult {
   participant: Participant;
   seatToken: string;
   snapshot: Snapshot;
+}
+
+export interface PublicTableSummary {
+  code: string;
+  hostName: string;
+  activeSeats: number;
+  humanSeats: number;
+  openSeats: number;
 }

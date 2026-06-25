@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://but44j7a306lm"
-path="res://.godot/imported/shamba-logo-ge.png-87672e48fca69df06a0890db9a10df26.ctex"
+uid="uid://cuy6btwf50m63"
+path="res://.godot/imported/cook_4_32.png-5594d928386d2b618115de86641a0e3e.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://loading/shamba-logo-ge.png"
-dest_files=["res://.godot/imported/shamba-logo-ge.png-87672e48fca69df06a0890db9a10df26.ctex"]
+source_file="res://art/avatars/cook_4_32.png"
+dest_files=["res://.godot/imported/cook_4_32.png-5594d928386d2b618115de86641a0e3e.ctex"]
 
 [params]
 

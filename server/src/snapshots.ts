@@ -8,11 +8,13 @@ import {
   platterDishPartIds,
   platterVoucherIds
 } from "./game.js";
+import { computeGameStats } from "./gameStats.js";
 import type {
   Dish,
   DishPartGroup,
   DishPart,
   FoodPartLocationSummary,
+  GameStats,
   Offer,
   OfferSnapshot,
   Participant,
@@ -43,7 +45,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
   const participants = table.participantOrder
     .map((participantId) => table.participants[participantId])
     .filter((participant): participant is Participant => Boolean(participant))
-    .map((participant) => publicParticipant(table, participant));
+    .map((participant) => publicParticipant(table, participant, !isWitness));
 
   const ownHand = isKnownViewer ? handVoucherIds(table, viewerParticipantId as string).map((id) => cloneVoucher(table.vouchers[id])) : [];
   const ownFoodParts = isKnownViewer
@@ -54,6 +56,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
   const transactionHistory = table.transactionHistory ?? [];
   const visibleTransactionHistory = transactionHistory.slice(-(isWitness ? WITNESS_TRANSACTION_HISTORY_LIMIT : TRANSACTION_HISTORY_LIMIT));
   const ownRecipe = isKnownViewer ? cloneRecipe(table.recipes[viewerParticipantId as string]) : undefined;
+  const gameStats = computeGameStats(table);
   const offers = Object.values(table.offers)
     .filter((offer) => offer.status === "pending")
     .filter((offer) => isWitness || offer.fromParticipantId === viewerParticipantId || offer.toParticipantId === viewerParticipantId)
@@ -62,6 +65,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
   const snapshot: Snapshot = {
     tableCode: table.code,
     seed: table.seed,
+    isPublic: table.isPublic,
     version: table.version,
     phase: table.phase,
     paused: table.paused,
@@ -88,6 +92,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
     transactionCursor: transactionHistory.length,
     transactionHistoryComplete: visibleTransactionHistory.length === transactionHistory.length,
     transactionHistoryTotal: transactionHistory.length,
+    gameStats: isWitness ? compactWitnessGameStats(gameStats) : gameStats,
     dishCounts: Object.fromEntries(activeParticipants(table).map((participant) => [participant.id, participant.dishCount])),
     winners: [...table.winnerParticipantIds],
     targetDishCount: table.targetDishCount,
@@ -110,8 +115,38 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
   return snapshot;
 }
 
-function publicParticipant(table: Table, participant: Participant): PublicParticipant {
+function compactWitnessGameStats(stats: GameStats): GameStats {
+  return {
+    activePlayerCount: stats.activePlayerCount,
+    mutationCount: stats.mutationCount,
+    playerTurnCount: stats.playerTurnCount,
+    cycleCount: stats.cycleCount,
+    interactionCount: stats.interactionCount,
+    openingOfferingCount: stats.openingOfferingCount,
+    commonBasketSwapCount: stats.commonBasketSwapCount,
+    directExchangeCount: stats.directExchangeCount,
+    redemptionCount: stats.redemptionCount,
+    prepareCount: stats.prepareCount,
+    settlementSwapCount: stats.settlementSwapCount,
+    foodPieceSettlementSwapCount: stats.foodPieceSettlementSwapCount,
+    eatCount: stats.eatCount,
+    assetLossCount: stats.assetLossCount,
+    productivityCount: stats.productivityCount,
+    profitCount: stats.profitCount,
+    profitGainPercent: stats.profitGainPercent
+  } as GameStats;
+}
+
+function publicParticipant(table: Table, participant: Participant, includeGroupedHandAssets: boolean): PublicParticipant {
   const account = platterAccountForParticipant(table, participant.id);
+  const heldVouchers = includeGroupedHandAssets
+    ? handVoucherIds(table, participant.id)
+        .map((id) => table.vouchers[id])
+        .filter((voucher): voucher is Voucher => Boolean(voucher))
+    : [];
+  const heldFoodParts = inventoryDishPartIds(table, participant.id)
+    .map((id) => table.dishParts[id])
+    .filter((part): part is DishPart => Boolean(part));
   return {
     id: participant.id,
     name: participant.name,
@@ -132,8 +167,11 @@ function publicParticipant(table: Table, participant: Participant): PublicPartic
     platterShortfall: account.platterShortfall,
     cleared: account.cleared,
     dishCount: participant.dishCount,
-    heldFoodPartCount: inventoryDishPartIds(table, participant.id).length,
+    heldFoodPartCount: heldFoodParts.length,
+    heldVoucherGroups: groupVouchers(heldVouchers),
+    heldFoodPartGroups: includeGroupedHandAssets ? groupDishParts(heldFoodParts) : [],
     depositedInitial: participant.depositedInitial,
+    openingOfferingsCount: participant.openingOfferingsCount,
     connected: participant.controllerParticipantId
       ? Boolean(table.participants[participant.controllerParticipantId]?.connected)
       : participant.connected,
@@ -195,11 +233,19 @@ function cloneRecipe(recipe?: Recipe): Recipe | undefined {
 }
 
 function cloneOffer(table: Table, offer: Offer): OfferSnapshot {
+  const offeredVoucherIds = uniqueStrings([
+    ...offer.offeredVoucherIds,
+    ...offer.offeredAssets.filter((asset) => asset.kind === "voucher").map((asset) => asset.id)
+  ]);
+  const acceptedVoucherIds = uniqueStrings([
+    ...offer.acceptedVoucherIds,
+    ...offer.acceptedAssets.filter((asset) => asset.kind === "voucher").map((asset) => asset.id)
+  ]);
   return {
     ...offer,
     offeredAssets: offer.offeredAssets.map((asset) => ({ ...asset })),
     offeredVoucherIds: [...offer.offeredVoucherIds],
-    offeredVouchers: offer.offeredVoucherIds
+    offeredVouchers: offeredVoucherIds
       .map((voucherId) => table.vouchers[voucherId])
       .filter((voucher): voucher is Voucher => Boolean(voucher))
       .map(cloneVoucher),
@@ -212,7 +258,7 @@ function cloneOffer(table: Table, offer: Offer): OfferSnapshot {
     requested: offer.requested ? { ...offer.requested } : undefined,
     acceptedAssets: offer.acceptedAssets.map((asset) => ({ ...asset })),
     acceptedVoucherIds: [...offer.acceptedVoucherIds],
-    acceptedVouchers: offer.acceptedVoucherIds
+    acceptedVouchers: acceptedVoucherIds
       .map((voucherId) => table.vouchers[voucherId])
       .filter((voucher): voucher is Voucher => Boolean(voucher))
       .map(cloneVoucher),
@@ -222,6 +268,10 @@ function cloneOffer(table: Table, offer: Offer): OfferSnapshot {
       .filter((part): part is DishPart => Boolean(part))
       .map(cloneDishPart)
   };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function cloneDish(dish: Dish): Dish {

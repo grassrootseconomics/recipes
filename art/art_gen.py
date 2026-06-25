@@ -1,8 +1,11 @@
 from PIL import Image, ImageDraw
 import os, zipfile, math
 
-out_dir = "/mnt/data/ingredient_pixel_art_final"
+repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+out_dir = os.path.dirname(os.path.abspath(__file__))
+client_ingredient_dir = os.path.join(repo_root, "client", "art", "ingredients")
 os.makedirs(out_dir, exist_ok=True)
+os.makedirs(client_ingredient_dir, exist_ok=True)
 
 # Draw at 64x64 directly, no antialiasing, transparent canvas.
 SIZE = 64
@@ -13,6 +16,9 @@ def canvas():
 def save(img, name):
     path = os.path.join(out_dir, name)
     img.save(path)
+    client_path = os.path.join(client_ingredient_dir, name)
+    if os.path.isdir(client_ingredient_dir):
+        img.save(client_path)
     return path
 
 def dither_shadow(draw, cx=32, cy=52, rx=21, ry=6):
@@ -219,18 +225,21 @@ draw.ellipse((14,39,51,56), fill=(155, 95, 54, 255), outline=outline)
 draw.arc((12,38,53,57), start=0, end=180, fill=(231, 168, 87, 255), width=3)
 for pts in [[(16,46),(28,41),(40,48),(51,43)], [(14,50),(26,45),(42,52)], [(20,55),(34,48),(50,54)]]:
     draw.line(pts, fill=(103,65,38,255), width=2)
-# eggs
-draw.ellipse((16,19,34,47), fill=(244, 226, 195, 255), outline=outline)
-draw.ellipse((30,14,49,44), fill=(229, 207, 175, 255), outline=outline)
-draw.ellipse((26,24,45,52), fill=(248, 233, 202, 255), outline=outline)
-# shading
-draw.polygon([(28,22),(34,29),(32,45),(24,47),(22,34)], fill=(234, 211, 181, 255))
-draw.polygon([(42,17),(49,28),(47,41),(40,44),(41,29)], fill=(210, 185, 153, 255))
-draw.polygon([(38,28),(45,39),(43,50),(35,51),(36,37)], fill=(234, 211, 181, 255))
-# highlights
-draw.rectangle((21,25,25,29), fill=(255, 246, 221, 255))
-draw.rectangle((35,20,39,25), fill=(246, 232, 203, 255))
-draw.rectangle((31,30,35,34), fill=(255, 248, 224, 255))
+# back eggs first, then the front egg. Each egg keeps a full outline at card size.
+egg_outline = (92, 55, 36, 255)
+egg_shadow = (202, 171, 134, 255)
+egg_mid = (233, 213, 183, 255)
+egg_light = (255, 244, 217, 255)
+draw.ellipse((13,20,32,50), fill=(245, 227, 196, 255), outline=egg_outline)
+draw.polygon([(24,23),(31,31),(30,47),(23,50),(22,35)], fill=(225, 199, 165, 255))
+draw.rectangle((18,26,22,31), fill=egg_light)
+draw.ellipse((33,15,53,47), fill=(234, 213, 181, 255), outline=egg_outline)
+draw.polygon([(46,18),(53,30),(50,44),(43,47),(44,31)], fill=egg_shadow)
+draw.rectangle((38,22,42,27), fill=(249, 235, 206, 255))
+draw.ellipse((23,23,44,54), fill=(252, 237, 207, 255), outline=egg_outline)
+draw.polygon([(37,27),(44,39),(42,52),(34,54),(35,38)], fill=egg_mid)
+draw.line([(25,48),(30,53),(40,54),(44,48)], fill=(113, 68, 43, 255), width=1)
+draw.rectangle((29,30,34,35), fill=(255, 250, 226, 255))
 save(img, "eggs_64.png")
 
 # Create a preview sheet with a warm checker background behind each transparent asset
