@@ -30,6 +30,13 @@ jobs:
           version: 4.5.1
           use-dotnet: false
 
+      - name: Download web export templates
+        run: |
+          mkdir -p ~/.local/share/godot/export_templates/4.5.1.stable
+          curl -sL https://github.com/godotengine/godot/releases/download/4.5.1-stable/Godot_v4.5.1-stable_export_templates.tpz -o /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          cp /tmp/templates/templates/web_* ~/.local/share/godot/export_templates/4.5.1.stable/
+
       - name: Build Godot web export
         run: |
           mkdir -p web
