@@ -20,6 +20,12 @@ const OPENING_OFFERINGS_PER_PLAYER := 2
 const BASKET_CENTER_OUT_SLOTS := [5, 6, 1, 2, 4, 7, 3, 0]
 const TABLE_CONTENT_WIDTH := 680
 const TABLE_CONTENT_HEIGHT := 940
+const TABLE_PORTRAIT_SIZE := Vector2(TABLE_CONTENT_WIDTH + 20.0, TABLE_CONTENT_HEIGHT)
+const TABLE_LANDSCAPE_WIDTH := TABLE_CONTENT_WIDTH * 2 + 32
+const TABLE_LANDSCAPE_HEIGHT := 620
+const TABLE_LANDSCAPE_SIZE := Vector2(TABLE_LANDSCAPE_WIDTH, TABLE_LANDSCAPE_HEIGHT)
+const LANDSCAPE_MIN_AVAILABLE_WIDTH := 1060.0
+const LANDSCAPE_MIN_ASPECT := 1.25
 const BASKET_BACKDROP_SIZE := Vector2(668, 230)
 const CARD_TILE_SIZE := Vector2(96, 90)
 const BASKET_SLOT_SIZE := CARD_TILE_SIZE
@@ -367,6 +373,15 @@ var _basket_swap_in_flight_snapshot_key := ""
 var _basket_swap_in_flight_started_msec := 0
 
 var _root: VBoxContainer
+var _margin_container: MarginContainer
+var _basket_table_area: Control
+var _middle_row: HBoxContainer
+var _bottom_tray: VBoxContainer
+var _hand_panel: Control
+var _landscape_row: HBoxContainer
+var _landscape_left: VBoxContainer
+var _landscape_right: VBoxContainer
+var _layout_mode := "portrait"
 var _participant_row: Control
 var _inventory_title_label: Label
 var _basket_grid: GridContainer
@@ -767,7 +782,22 @@ func debug_visible_snapshot() -> Dictionary:
 
 
 func preferred_visual_size() -> Vector2:
-	return Vector2(TABLE_CONTENT_WIDTH + 20.0, TABLE_CONTENT_HEIGHT)
+	return TABLE_PORTRAIT_SIZE
+
+
+func preferred_visual_size_for_area(area: Vector2) -> Vector2:
+	if _should_use_landscape_layout(area):
+		return TABLE_LANDSCAPE_SIZE
+	return TABLE_PORTRAIT_SIZE
+
+
+func set_visual_layout_area(area: Vector2) -> void:
+	var next_mode := "landscape" if _should_use_landscape_layout(area) else "portrait"
+	_apply_visual_layout_mode(next_mode)
+
+
+func debug_layout_mode() -> String:
+	return _layout_mode
 
 
 func debug_deposit_animation_anchors() -> Array:
@@ -833,22 +863,22 @@ func _build() -> void:
 	add_theme_stylebox_override("panel", _panel_style(TABLE_BG, PANEL_BORDER, 2, 8))
 	clip_contents = true
 	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH + 20, TABLE_CONTENT_HEIGHT)
+	custom_minimum_size = TABLE_PORTRAIT_SIZE
 
-	var margin := MarginContainer.new()
-	margin.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
-	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	margin.add_theme_constant_override("margin_left", 6)
-	margin.add_theme_constant_override("margin_top", 4)
-	margin.add_theme_constant_override("margin_right", 6)
-	margin.add_theme_constant_override("margin_bottom", 4)
-	add_child(margin)
+	_margin_container = MarginContainer.new()
+	_margin_container.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	_margin_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_margin_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_margin_container.add_theme_constant_override("margin_left", 6)
+	_margin_container.add_theme_constant_override("margin_top", 4)
+	_margin_container.add_theme_constant_override("margin_right", 6)
+	_margin_container.add_theme_constant_override("margin_bottom", 4)
+	add_child(_margin_container)
 
 	_root = VBoxContainer.new()
 	_root.add_theme_constant_override("separation", 4)
 	_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	margin.add_child(_root)
+	_margin_container.add_child(_root)
 
 	_overlay_layer = Control.new()
 	_overlay_layer.name = "TableOverlayLayer"
@@ -874,13 +904,13 @@ func _build() -> void:
 	_menu_canvas.add_child(_main_menu_overlay_button)
 	_position_menu_button()
 
-	var basket_table_area := Control.new()
-	basket_table_area.name = "BasketTableArea"
-	basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
-	basket_table_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	basket_table_area.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	basket_table_area.clip_contents = false
-	_root.add_child(basket_table_area)
+	_basket_table_area = Control.new()
+	_basket_table_area.name = "BasketTableArea"
+	_basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
+	_basket_table_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_basket_table_area.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_basket_table_area.clip_contents = false
+	_root.add_child(_basket_table_area)
 
 	var basket_backdrop := BasketBackdrop.new()
 	basket_backdrop.name = "BasketBackdrop"
@@ -913,21 +943,21 @@ func _build() -> void:
 	basket_center.add_child(_basket_grid)
 	basket_margin.add_child(basket_center)
 	basket_backdrop.add_child(basket_margin)
-	basket_table_area.add_child(basket_backdrop)
+	_basket_table_area.add_child(basket_backdrop)
 
 	_participant_row = Control.new()
 	_participant_row.name = "CookRing"
 	_participant_row.custom_minimum_size = BASKET_TABLE_AREA_SIZE
 	_participant_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_participant_row.set_anchors_preset(Control.PRESET_FULL_RECT)
-	basket_table_area.add_child(_participant_row)
+	_basket_table_area.add_child(_participant_row)
 
-	var middle := HBoxContainer.new()
-	middle.name = "MiddleRow"
-	middle.add_theme_constant_override("separation", 10)
-	middle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	middle.alignment = BoxContainer.ALIGNMENT_CENTER
-	_root.add_child(middle)
+	_middle_row = HBoxContainer.new()
+	_middle_row.name = "MiddleRow"
+	_middle_row.add_theme_constant_override("separation", 10)
+	_middle_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_middle_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_root.add_child(_middle_row)
 
 	_redeem_box = VBoxContainer.new()
 	_redeem_box.custom_minimum_size = Vector2(0, 0)
@@ -937,14 +967,14 @@ func _build() -> void:
 	action_panel.name = "ActionPanel"
 	action_panel.custom_minimum_size = Vector2(226, 0)
 	action_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	middle.add_child(action_panel)
+	_middle_row.add_child(action_panel)
 
 	var recipe_panel := VBoxContainer.new()
 	recipe_panel.name = "RecipePanel"
 	recipe_panel.add_theme_constant_override("separation", 4)
 	recipe_panel.custom_minimum_size = Vector2(RECIPE_GRID_SIZE.x, 0)
 	recipe_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	middle.add_child(recipe_panel)
+	_middle_row.add_child(recipe_panel)
 	var recipe_title_center := CenterContainer.new()
 	recipe_title_center.custom_minimum_size = Vector2(RECIPE_GRID_SIZE.x, 22)
 	recipe_title_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -990,11 +1020,11 @@ func _build() -> void:
 	_recipe_grid.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	recipe_panel.add_child(_recipe_grid)
 
-	var bottom := VBoxContainer.new()
-	bottom.name = "BottomTray"
-	bottom.add_theme_constant_override("separation", 4)
-	bottom.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_root.add_child(bottom)
+	_bottom_tray = VBoxContainer.new()
+	_bottom_tray.name = "BottomTray"
+	_bottom_tray.add_theme_constant_override("separation", 4)
+	_bottom_tray.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_root.add_child(_bottom_tray)
 
 	var inventory_panel := _titled_panel("Inventory")
 	inventory_panel.name = "InventoryPanel"
@@ -1008,10 +1038,10 @@ func _build() -> void:
 	_inventory_row.add_theme_constant_override("separation", 6)
 	inventory_panel.add_child(_scroll_wrap(_inventory_row, 104))
 
-	var hand_panel := _titled_panel("Promise Cards")
-	hand_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
-	hand_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bottom.add_child(hand_panel)
+	_hand_panel = _titled_panel("Promise Cards")
+	_hand_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	_hand_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_bottom_tray.add_child(_hand_panel)
 	_hand_row = GridContainer.new()
 	_hand_row.name = "HandRow"
 	_hand_row.columns = 6
@@ -1021,7 +1051,7 @@ func _build() -> void:
 	_hand_scroll.name = "HandScroll"
 	_hand_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_hand_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	hand_panel.add_child(_hand_scroll)
+	_hand_panel.add_child(_hand_scroll)
 
 	_offer_popup = PopupPanel.new()
 	_offer_popup.name = "OfferPopup"
@@ -1048,6 +1078,89 @@ func _build() -> void:
 	_menu_popup_list.custom_minimum_size = Vector2(196, 0)
 	_menu_popup.add_child(_menu_popup_list)
 	add_child(_menu_popup)
+
+
+func _should_use_landscape_layout(area: Vector2) -> bool:
+	if area.x < LANDSCAPE_MIN_AVAILABLE_WIDTH:
+		return false
+	if area.y <= 1.0:
+		return true
+	return area.x / area.y >= LANDSCAPE_MIN_ASPECT
+
+
+func _apply_visual_layout_mode(mode: String) -> void:
+	if not is_instance_valid(_root) or not is_instance_valid(_basket_table_area) or not is_instance_valid(_middle_row) or not is_instance_valid(_bottom_tray):
+		_layout_mode = mode
+		return
+	var normalized := "landscape" if mode == "landscape" else "portrait"
+	if normalized == "landscape":
+		_ensure_landscape_containers()
+		custom_minimum_size = TABLE_LANDSCAPE_SIZE
+		if is_instance_valid(_margin_container):
+			_margin_container.custom_minimum_size = Vector2(TABLE_LANDSCAPE_WIDTH - 12.0, 0)
+		_root.add_theme_constant_override("separation", 0)
+		_move_control_to_parent(_landscape_row, _root)
+		_move_control_to_parent(_basket_table_area, _landscape_left)
+		_move_control_to_parent(_middle_row, _landscape_right)
+		_move_control_to_parent(_bottom_tray, _landscape_right)
+		_basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
+		_middle_row.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+		_bottom_tray.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+		if is_instance_valid(_hand_panel):
+			_hand_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	else:
+		custom_minimum_size = TABLE_PORTRAIT_SIZE
+		if is_instance_valid(_margin_container):
+			_margin_container.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+		_root.add_theme_constant_override("separation", 4)
+		_move_control_to_parent(_basket_table_area, _root)
+		_move_control_to_parent(_middle_row, _root)
+		_move_control_to_parent(_bottom_tray, _root)
+		if is_instance_valid(_landscape_row) and _landscape_row.get_parent() == _root:
+			_root.remove_child(_landscape_row)
+		_basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
+		_middle_row.custom_minimum_size = Vector2(0, 0)
+		_bottom_tray.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+		if is_instance_valid(_hand_panel):
+			_hand_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	_layout_mode = normalized
+	debug_stats["layoutMode"] = _layout_mode
+
+
+func _ensure_landscape_containers() -> void:
+	if is_instance_valid(_landscape_row):
+		return
+	_landscape_row = HBoxContainer.new()
+	_landscape_row.name = "LandscapeRow"
+	_landscape_row.add_theme_constant_override("separation", 14)
+	_landscape_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_landscape_row.custom_minimum_size = Vector2(TABLE_LANDSCAPE_WIDTH - 18.0, 0)
+	_landscape_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_landscape_row.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_landscape_left = VBoxContainer.new()
+	_landscape_left.name = "LandscapeBasketColumn"
+	_landscape_left.custom_minimum_size = BASKET_TABLE_AREA_SIZE
+	_landscape_left.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_landscape_left.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_landscape_right = VBoxContainer.new()
+	_landscape_right.name = "LandscapePlayColumn"
+	_landscape_right.add_theme_constant_override("separation", 6)
+	_landscape_right.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	_landscape_right.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_landscape_right.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_landscape_row.add_child(_landscape_left)
+	_landscape_row.add_child(_landscape_right)
+
+
+func _move_control_to_parent(control: Control, new_parent: Node) -> void:
+	if not is_instance_valid(control) or not is_instance_valid(new_parent):
+		return
+	if control.get_parent() == new_parent:
+		return
+	var old_parent := control.get_parent()
+	if old_parent != null:
+		old_parent.remove_child(control)
+	new_parent.add_child(control)
 
 
 func _render_menu() -> void:
@@ -2439,7 +2552,9 @@ func _render_hand() -> void:
 func _record_layout_debug() -> void:
 	var preferred := preferred_visual_size()
 	var combined := get_combined_minimum_size()
+	debug_stats["layoutMode"] = _layout_mode
 	debug_stats["preferredVisualSize"] = preferred
+	debug_stats["preferredLandscapeSize"] = TABLE_LANDSCAPE_SIZE
 	debug_stats["combinedMinimumSize"] = combined
 	debug_stats["combinedMinimumOverflowY"] = maxf(0.0, combined.y - preferred.y)
 	var direct_child_minimums: Array = []

@@ -58,6 +58,16 @@ func _initialize() -> void:
 	var basket_area := visual.find_child("BasketTableArea", true, false) as Control
 	_require(visual.find_child("Title_Cooks", true, false) == null, "main scene table omits the separate Cooks title")
 	_require(basket_area != null and basket_area.get_global_rect().position.y - visual_rect.position.y < 80.0, "table content is top-aligned without a large blank band")
+	var original_window_size := root.size
+	root.size = Vector2i(1600, 900)
+	await process_frame
+	main.call("_fit_table_visual_to_window")
+	await process_frame
+	_require(str(visual.call("debug_layout_mode")) == "landscape", "main scene switches to horizontal table layout immediately on a wide window")
+	root.size = original_window_size
+	await process_frame
+	main.call("_fit_table_visual_to_window")
+	await process_frame
 
 	visual.call("debug_flush_animations")
 	await process_frame

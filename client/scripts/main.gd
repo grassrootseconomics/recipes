@@ -2471,12 +2471,12 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 	_refresh_connection_buttons(snapshot)
 	_set_lobby_ui_visible(table_exists)
 	_set_gameplay_ui_visible(game_started)
-	if is_instance_valid(_table_visual):
-		_table_visual.render(snapshot)
 	if is_instance_valid(_table_visual_holder):
 		_table_visual_holder.visible = game_started
 	if is_instance_valid(_table_visual):
 		_table_visual.visible = true
+		_fit_table_visual_to_window()
+		_table_visual.render(snapshot)
 		_fit_table_visual_to_window()
 		call_deferred("_fit_table_visual_after_layout")
 		if game_started:
@@ -2683,39 +2683,53 @@ func _scroll_to_visual_table() -> void:
 func _fit_table_visual_to_window() -> void:
 	if not is_instance_valid(_table_visual_holder) or not is_instance_valid(_table_visual):
 		return
+	var game_started := _game_started(RecipesClient.latest_snapshot)
+	var viewport_available_width := get_viewport_rect().size.x
+	if is_instance_valid(_root_margin):
+		viewport_available_width -= float(_root_margin.get_theme_constant("margin_left") + _root_margin.get_theme_constant("margin_right"))
+	viewport_available_width = maxf(1.0, viewport_available_width)
+	var available_width := viewport_available_width if game_started else _table_visual_holder.size.x
+	if available_width <= 1.0:
+		available_width = viewport_available_width
+	available_width = maxf(1.0, available_width)
+	var available_height := get_viewport_rect().size.y
+	if is_instance_valid(_root_margin):
+		available_height -= float(_root_margin.get_theme_constant("margin_top") + _root_margin.get_theme_constant("margin_bottom"))
+	available_height -= TABLE_VISUAL_BOTTOM_SAFE_MARGIN
+	available_height = maxf(1.0, available_height)
+	var available_area := Vector2(available_width, available_height)
+	if _table_visual.has_method("set_visual_layout_area"):
+		_table_visual.call("set_visual_layout_area", available_area)
 	var design_size := _table_visual.get_combined_minimum_size()
-	if _table_visual.has_method("preferred_visual_size"):
+	if _table_visual.has_method("preferred_visual_size_for_area"):
+		var preferred_for_area = _table_visual.call("preferred_visual_size_for_area", available_area)
+		if preferred_for_area is Vector2:
+			design_size = preferred_for_area
+	elif _table_visual.has_method("preferred_visual_size"):
 		var preferred = _table_visual.call("preferred_visual_size")
 		if preferred is Vector2:
 			design_size = preferred
 	if design_size.x <= 1.0 or design_size.y <= 1.0:
 		design_size = Vector2(616, 808)
-	var available_width := _table_visual_holder.size.x
-	if available_width <= 1.0:
-		available_width = get_viewport_rect().size.x
-		if is_instance_valid(_root_margin):
-			available_width -= float(_root_margin.get_theme_constant("margin_left") + _root_margin.get_theme_constant("margin_right"))
-	available_width = maxf(1.0, available_width)
 	var scale_value := minf(1.0, available_width / design_size.x)
-	if _game_started(RecipesClient.latest_snapshot):
-		var available_height := get_viewport_rect().size.y
-		if is_instance_valid(_root_margin):
-			available_height -= float(_root_margin.get_theme_constant("margin_top") + _root_margin.get_theme_constant("margin_bottom"))
-		available_height -= TABLE_VISUAL_BOTTOM_SAFE_MARGIN
-		available_height = maxf(1.0, available_height)
+	if game_started:
 		scale_value = minf(scale_value, available_height / design_size.y)
 	scale_value = maxf(0.45, scale_value)
 	var scaled_size := design_size * scale_value
 	_table_visual.size = design_size
 	_table_visual.scale = Vector2(scale_value, scale_value)
 	_table_visual.position = Vector2(maxf(0.0, (available_width - scaled_size.x) * 0.5), 0.0)
-	_table_visual_holder.custom_minimum_size = Vector2(0, ceil(scaled_size.y))
-	_table_visual_holder.size.y = ceil(scaled_size.y)
+	_table_visual_holder.custom_minimum_size = Vector2(ceil(available_width) if game_started else 0.0, ceil(scaled_size.y))
+	_table_visual_holder.size = Vector2(available_width, ceil(scaled_size.y))
 
 
 func _fit_table_visual_after_layout() -> void:
 	if not is_inside_tree():
 		return
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	_fit_table_visual_to_window()
 	await get_tree().process_frame
 	if not is_inside_tree():
 		return

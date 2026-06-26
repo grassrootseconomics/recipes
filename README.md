@@ -232,6 +232,13 @@ cd /home/wor/src/recipes
 npm run export:web
 ```
 
+Build and serve locally in one command:
+
+```bash
+cd /home/wor/src/recipes
+./start-web.sh
+```
+
 The Web client export writes to `client/web/`, copies `CNAME`, and is intended to be served at:
 
 ```text

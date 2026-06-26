@@ -202,6 +202,21 @@ func _initialize() -> void:
 	_require(food_popup != null and food_popup.visible, "food-piece info popup stays open across table refreshes")
 	food_popup.hide()
 	_require(visual.preferred_visual_size() == Vector2(700, 940), "visual table reports a stable preferred size")
+	_require(visual.preferred_visual_size_for_area(Vector2(1500, 720)) == Vector2(1392, 620), "visual table reports a stable landscape preferred size for wide screens")
+	visual.set_visual_layout_area(Vector2(1500, 720))
+	await process_frame
+	_require(visual.debug_layout_mode() == "landscape", "visual table switches to horizontal layout when the window is wide")
+	var landscape_row := visual.find_child("LandscapeRow", true, false) as Control
+	var basket_area := visual.find_child("BasketTableArea", true, false) as Control
+	var middle_row := visual.find_child("MiddleRow", true, false) as Control
+	var bottom_tray := visual.find_child("BottomTray", true, false) as Control
+	_require(landscape_row != null and landscape_row.get_parent() != null, "landscape layout creates a split row")
+	_require(basket_area != null and basket_area.get_parent() != null and basket_area.get_parent().name == "LandscapeBasketColumn", "landscape layout places cooks and basket in the left column")
+	_require(middle_row != null and middle_row.get_parent() != null and middle_row.get_parent().name == "LandscapePlayColumn", "landscape layout places actions and recipe in the right column")
+	_require(bottom_tray != null and bottom_tray.get_parent() != null and bottom_tray.get_parent().name == "LandscapePlayColumn", "landscape layout places Promise Cards under the right column")
+	visual.set_visual_layout_area(Vector2(720, 1100))
+	await process_frame
+	_require(visual.debug_layout_mode() == "portrait", "visual table returns to portrait layout when the window is narrow")
 	var full_tray := snapshot.duplicate(true)
 	full_tray["ownHand"] = [
 		{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
