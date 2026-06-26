@@ -5189,14 +5189,21 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 	var current_viewer := _participant_from_snapshot(current_snapshot, viewer_id)
 	if not previous_viewer.is_empty() and not current_viewer.is_empty() \
 			and int(current_viewer.get("dishCount", 0)) > int(previous_viewer.get("dishCount", 0)):
-		var dish_name := _recipe_name(previous_snapshot.get("ownRecipe", {}))
+		var participant_name := str(current_viewer.get("name", "")).strip_edges()
+		if participant_name == "":
+			participant_name = _participant_name(viewer_id)
+		var dish_name := _recipe_name(previous_snapshot.get("ownRecipe", {})).strip_edges()
 		var food_info := _new_food_part_info(previous_snapshot.get("ownFoodParts", []), current_snapshot.get("ownFoodParts", []))
 		if dish_name == "":
-			dish_name = str(food_info.get("dishName", "Dish"))
+			dish_name = str(food_info.get("dishName", "")).strip_edges()
+		if dish_name == "":
+			dish_name = _dish_name_from_prepare_transaction(_prepare_transaction_for_participant(previous_snapshot, current_snapshot, viewer_id)).strip_edges()
+		if dish_name == "":
+			dish_name = "Dish"
 		events.append({
 			"type": "prepare",
 			"participantId": viewer_id,
-			"participantName": str(current_viewer.get("name", "Someone")),
+			"participantName": participant_name,
 			"dishName": dish_name,
 			"unit": str(food_info.get("unitSingular", "piece"))
 		})
@@ -5211,10 +5218,13 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 		if int(current_participant.get("dishCount", 0)) <= int(previous_participant.get("dishCount", 0)):
 			continue
 		var prepare_info := _public_prepare_info(previous_snapshot, current_snapshot, participant_id)
+		var participant_name := str(current_participant.get("name", "")).strip_edges()
+		if participant_name == "":
+			participant_name = _participant_name(participant_id)
 		events.append({
 			"type": "public_prepare",
 			"participantId": participant_id,
-			"participantName": str(current_participant.get("name", "Someone")),
+			"participantName": participant_name,
 			"dishName": str(prepare_info.get("dishName", "Dish")),
 			"unit": str(prepare_info.get("unit", "piece"))
 		})
@@ -6444,7 +6454,7 @@ func _prepare_participant_name(event: Dictionary) -> String:
 	return _participant_name(participant_id)
 
 
-func _animate_prepare_announcement(participant_name: String, dish_name: String, global_anchor: Vector2, delay := 0.0) -> void:
+func _animate_prepare_announcement(participant_name: String, dish_name: String, _global_anchor: Vector2, delay := 0.0) -> void:
 	if not is_instance_valid(_animation_layer):
 		return
 	var clean_name := participant_name.strip_edges()
@@ -6459,14 +6469,19 @@ func _animate_prepare_announcement(participant_name: String, dish_name: String, 
 	var table_rect := get_global_rect()
 	if table_rect.size.x <= 0.0 or table_rect.size.y <= 0.0:
 		return
-	var width := minf(560.0, maxf(300.0, table_rect.size.x - 70.0))
-	var height := 86.0
-	var anchor := global_anchor
-	if anchor == Vector2.INF:
-		anchor = table_rect.get_center()
-	var target := anchor + Vector2(0, -104)
+	var max_width := maxf(220.0, minf(640.0, table_rect.size.x - 32.0))
+	var min_width := minf(300.0, max_width)
+	var width := clampf(float(text.length()) * 14.5 + 54.0, min_width, max_width)
+	var chars_per_line := maxi(12, int(floor((width - 50.0) / 14.5)))
+	var line_count := maxi(1, int(ceil(float(text.length()) / float(chars_per_line))))
+	var height := clampf(58.0 + float(line_count) * 28.0, 86.0, 142.0)
+	var target := table_rect.get_center()
 	target.x = clampf(target.x, table_rect.position.x + width * 0.5 + 16.0, table_rect.end.x - width * 0.5 - 16.0)
-	target.y = clampf(target.y, table_rect.position.y + height * 0.5 + 44.0, table_rect.end.y - height * 0.5 - 44.0)
+	target.y = clampf(target.y, table_rect.position.y + height * 0.5 + 16.0, table_rect.end.y - height * 0.5 - 16.0)
+	debug_stats["lastPrepareAnnouncementGlobalCenter"] = target
+	debug_stats["lastPrepareAnnouncementTableCenter"] = table_rect.get_center()
+	debug_stats["lastPrepareAnnouncementSize"] = Vector2(width, height)
+	debug_stats["lastPrepareAnnouncementCharacterCount"] = text.length()
 
 	var card := PanelContainer.new()
 	card.name = "PrepareAnnouncement"

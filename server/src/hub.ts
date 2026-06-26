@@ -103,7 +103,7 @@ function buildDelta(table: Table, connection: HubConnection, snapshot: Snapshot)
   const changedDishes = changedDishRows(connection.lastSnapshot, snapshot);
   const changedParticipants = changedParticipantRows(connection.lastSnapshot, snapshot);
   const patch = diffSnapshot(connection.lastSnapshot, snapshot);
-  compactDeltaPatch(patch, snapshot);
+  compactDeltaPatch(patch, connection.lastSnapshot, snapshot);
 
   return {
     type: "delta",
@@ -120,14 +120,22 @@ function buildDelta(table: Table, connection: HubConnection, snapshot: Snapshot)
   };
 }
 
-function compactDeltaPatch(patch: Partial<Snapshot>, snapshot: Snapshot): void {
+function compactDeltaPatch(patch: Partial<Snapshot>, previous: Snapshot | undefined, snapshot: Snapshot): void {
   delete patch.participants;
   delete patch.dishes;
   delete patch.dishParts;
-  if (snapshot.phase !== "settlement") {
-    delete patch.ownFoodParts;
-    delete patch.platterFoodParts;
+  if (snapshot.phase !== "playing" && snapshot.phase !== "settlement") {
+    if (!foodPartCountIncreased(previous?.ownFoodParts, snapshot.ownFoodParts)) {
+      delete patch.ownFoodParts;
+    }
+    if (!foodPartCountIncreased(previous?.platterFoodParts, snapshot.platterFoodParts)) {
+      delete patch.platterFoodParts;
+    }
   }
+}
+
+function foodPartCountIncreased(previous: unknown[] | undefined, next: unknown[]): boolean {
+  return next.length > (previous?.length ?? 0);
 }
 
 function changedDishRows(previous: Snapshot | undefined, next: Snapshot): Dish[] {

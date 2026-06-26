@@ -2366,6 +2366,43 @@ describe("platter, offers, and visibility", () => {
     expect(participantDelta?.append?.participants).toContainEqual(expect.objectContaining({ id: host.id, role: "witness" }));
   });
 
+  it("includes prepared food parts in playing deltas", () => {
+    const { table } = startAndDeposit(8, "playing-food-part-delta");
+    const participant = activeParticipants(table)[0] as Participant;
+    const hub = new ConnectionHub();
+    const messages: Array<{
+      type: string;
+      snapshot?: ReturnType<typeof buildSnapshot>;
+      patch?: Partial<ReturnType<typeof buildSnapshot>>;
+      append?: { dishes?: unknown[]; transactionHistory?: unknown[] };
+    }> = [];
+    hub.register({
+      tableCode: table.code,
+      participantId: participant.id,
+      send: (payload) => messages.push(JSON.parse(payload))
+    });
+
+    hub.broadcastTable(table);
+    messages.length = 0;
+
+    completeRecipeBySetup(table, participant.id);
+    applyAsTurn(table, participant.id, { type: "prepare" });
+    expect(table.phase).toBe("playing");
+
+    hub.broadcastTable(table);
+
+    const delta = messages.at(-1);
+    expect(delta?.type).toBe("delta");
+    expect(delta?.patch?.ownFoodParts).toHaveLength(DISH_PARTS_PER_DISH);
+    expect(delta?.patch?.ownFoodPartGroups).toContainEqual(
+      expect.objectContaining({
+        makerParticipantId: participant.id,
+        count: DISH_PARTS_PER_DISH
+      })
+    );
+    expect(delta?.append?.dishes).toContainEqual(expect.objectContaining({ ownerParticipantId: participant.id }));
+  });
+
   it("sends a full snapshot to a reconnected socket", () => {
     const { table } = makeHarness(8, "delta-reconnect");
     const host = table.participants[table.hostParticipantId];
