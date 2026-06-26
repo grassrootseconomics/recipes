@@ -151,7 +151,7 @@ class ProgressStars:
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		custom_minimum_size = Vector2(42, 16)
+		custom_minimum_size = Vector2(54, 22)
 
 	func set_progress(filled: int, total: int, should_glow := false) -> void:
 		total_count = maxi(1, total)
@@ -166,19 +166,23 @@ class ProgressStars:
 	func _draw() -> void:
 		var total := maxi(1, total_count)
 		var width_per_star := size.x / float(total)
-		var outer := minf(width_per_star * 0.36, size.y * 0.43)
+		var outer := minf(width_per_star * 0.42, size.y * 0.45)
 		var inner := outer * 0.48
 		var y := size.y * 0.52
 		for index in range(total):
 			var center := Vector2(width_per_star * (float(index) + 0.5), y)
 			var filled := index < filled_count
 			if glowing and filled:
-				draw_circle(center, outer * 1.35, Color(1.0, 0.68, 0.12, 0.24))
+				draw_circle(center, outer * 1.45, Color(1.0, 0.62, 0.06, 0.26))
 			var points := _star_points(center, outer, inner)
-			draw_colored_polygon(points, Color(1.0, 0.69, 0.16) if filled else Color(0.88, 0.84, 0.72))
+			var shadow := PackedVector2Array()
+			for point in points:
+				shadow.append(point + Vector2(1.0, 1.0))
+			draw_colored_polygon(shadow, Color(0.25, 0.16, 0.06, 0.24))
+			draw_colored_polygon(points, Color(1.0, 0.70, 0.12) if filled else Color(1.0, 0.96, 0.78, 0.72))
 			var closed := points.duplicate()
 			closed.append(points[0])
-			draw_polyline(closed, Color(0.42, 0.25, 0.06) if filled else Color(0.56, 0.52, 0.43), 1.1, true)
+			draw_polyline(closed, Color(0.38, 0.21, 0.04) if filled else Color(0.48, 0.38, 0.22), 1.8, true)
 
 	func _star_points(center: Vector2, outer_radius: float, inner_radius: float) -> PackedVector2Array:
 		var points := PackedVector2Array()

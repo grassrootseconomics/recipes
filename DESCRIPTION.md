@@ -119,6 +119,8 @@ Online clients send intents only. The server validates every action and sends fi
 
 The server exposes a public-table browser endpoint for joinable public lobby tables only. The endpoint returns compact lobby summaries such as invite code, host name, human seats, and open bot seats, not hidden hands or recipes.
 
+The public Web client is intended to be served from `https://recipes.grassecon.org`. The authoritative online server should be served separately over HTTPS/WSS, currently represented in the client server list as `https://recipes-server.grassecon.org` until the final server DNS/IP is chosen. Production Web hosting must provide the Godot Web cross-origin isolation headers, and the Node server should run behind a reverse proxy with WebSocket upgrade support.
+
 The design should draw from:
 
 - `/home/wor/src/mycofig` for visual and social-table inspiration.

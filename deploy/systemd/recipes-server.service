@@ -1,0 +1,19 @@
+[Unit]
+Description=Recipes authoritative game server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/recipes
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+ExecStart=/usr/bin/node /opt/recipes/server/dist/index.js
+Restart=always
+RestartSec=5
+User=recipes
+Group=recipes
+
+[Install]
+WantedBy=multi-user.target

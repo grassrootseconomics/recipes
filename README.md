@@ -62,6 +62,29 @@ npm run build
 HOST=127.0.0.1 PORT=3000 node server/dist/index.js
 ```
 
+Public remote server, usually behind nginx and HTTPS:
+
+```bash
+cd /opt/recipes
+npm ci
+HOST=127.0.0.1 PORT=3000 ./start-server.sh
+```
+
+For production, run the Node process on localhost through a reverse proxy instead of exposing port `3000` directly. Example files are provided at:
+
+```text
+deploy/systemd/recipes-server.service
+deploy/nginx/recipes-server.example.conf
+```
+
+The production server hostname currently expected by the client server list is:
+
+```text
+https://recipes-server.grassecon.org
+```
+
+Point that DNS name to the remote server once its IP is known, or update `client/data/servers.json` before exporting a release build if the final hostname changes.
+
 Health check:
 
 ```bash
@@ -206,9 +229,157 @@ Web export:
 
 ```bash
 cd /home/wor/src/recipes
-mkdir -p client/build/web
-godot4 --headless --path client --export-debug Web build/web/index.html
+npm run export:web
 ```
+
+The Web client export writes to `client/web/`, copies `CNAME`, and is intended to be served at:
+
+```text
+https://recipes.grassecon.org
+```
+
+Local Web-client smoke server:
+
+```bash
+cd /home/wor/src/recipes
+npm run serve:web -- --host 127.0.0.1 --port 8081
+```
+
+Remote static Web hosting:
+
+```bash
+cd /opt/recipes
+npm ci
+npm run export:web
+sudo rsync -a --delete client/web/ /var/www/recipes/
+```
+
+Serve `/var/www/recipes` with HTTPS and the Godot Web headers shown in:
+
+```text
+deploy/nginx/recipes-web.example.conf
+```
+
+The root `CNAME` and generated `client/web/CNAME` both use `recipes.grassecon.org`. The Web build must be served over HTTPS for normal browser security rules; localhost testing can use `scripts/serve-web.py`.
+
+## Remote Deployment Checklist
+
+The production deployment has two independent services:
+
+- Static Godot Web client: `https://recipes.grassecon.org`
+- Authoritative game server: `https://recipes-server.grassecon.org`
+
+Before deployment, decide whether those hostnames are final. If the server hostname changes, update `client/data/servers.json` before running `npm run export:web`; the exported Web client embeds that server list in `client/web/index.pck`.
+
+Remote machine prerequisites:
+
+```bash
+sudo apt update
+sudo apt install -y git nginx certbot python3-certbot-nginx
+```
+
+Install Node.js `>=24` and npm on the remote host. Use your preferred Node package source or version manager, then verify:
+
+```bash
+node --version
+npm --version
+```
+
+Install Godot `4.5.1` as `godot4` only if the remote host will build the Web client. If CI or a developer machine exports `client/web/`, the remote host only needs nginx plus the built files.
+
+Clone and build:
+
+```bash
+sudo mkdir -p /opt/recipes
+sudo chown "$USER":"$USER" /opt/recipes
+git clone https://github.com/grassrootseconomics/recipes.git /opt/recipes
+cd /opt/recipes
+npm ci
+npm run build
+```
+
+Create a system user for the server process:
+
+```bash
+sudo useradd --system --home /opt/recipes --shell /usr/sbin/nologin recipes || true
+sudo chown -R recipes:recipes /opt/recipes
+```
+
+Install the server service:
+
+```bash
+sudo cp deploy/systemd/recipes-server.service /etc/systemd/system/recipes-server.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now recipes-server
+sudo systemctl status recipes-server
+```
+
+The service runs Node on `127.0.0.1:3000`. Do not expose port `3000` publicly in production; nginx should terminate HTTPS and proxy HTTP/WebSocket traffic to localhost.
+
+Configure DNS:
+
+```text
+recipes.grassecon.org        A/AAAA -> remote server IP
+recipes-server.grassecon.org A/AAAA -> remote server IP
+```
+
+Install nginx configs and certificates:
+
+```bash
+sudo cp deploy/nginx/recipes-server.example.conf /etc/nginx/sites-available/recipes-server
+sudo cp deploy/nginx/recipes-web.example.conf /etc/nginx/sites-available/recipes-web
+sudo ln -sf /etc/nginx/sites-available/recipes-server /etc/nginx/sites-enabled/recipes-server
+sudo ln -sf /etc/nginx/sites-available/recipes-web /etc/nginx/sites-enabled/recipes-web
+sudo nginx -t
+sudo certbot --nginx -d recipes-server.grassecon.org
+sudo certbot --nginx -d recipes.grassecon.org
+sudo systemctl reload nginx
+```
+
+The web nginx config must keep these headers for Godot Web:
+
+```text
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Build and publish the Web client:
+
+```bash
+cd /opt/recipes
+sudo chown -R "$USER":"$USER" /opt/recipes
+npm run export:web
+sudo mkdir -p /var/www/recipes
+sudo rsync -a --delete client/web/ /var/www/recipes/
+sudo chown -R www-data:www-data /var/www/recipes
+sudo systemctl reload nginx
+```
+
+If `client/data/servers.json`, Godot scripts, art, or recipes change, rebuild the Web export and copy `client/web/` again. Browser clients may also need a hard refresh or service-worker reset after an update because the Godot Web export includes PWA caching.
+
+Remote smoke checks:
+
+```bash
+curl -s https://recipes-server.grassecon.org/health
+curl -I https://recipes.grassecon.org/
+sudo journalctl -u recipes-server -n 100 --no-pager
+```
+
+Manual online smoke:
+
+1. Open `https://recipes.grassecon.org`.
+2. Select `Grassroots Recipes Server`.
+3. Create a public table.
+4. Open another browser/device and verify the public table appears.
+5. Join, rename the joined seat, start cooking, and verify both clients receive live updates.
+
+Common deployment adjustments:
+
+- Change production domains in `CNAME`, `client/web/CNAME`, `deploy/nginx/*.conf`, and `client/data/servers.json` if `recipes.grassecon.org` / `recipes-server.grassecon.org` are not final.
+- Change `WorkingDirectory`, `ExecStart`, `User`, and `Group` in `deploy/systemd/recipes-server.service` if the repo is not deployed at `/opt/recipes`.
+- Change `/var/www/recipes` in `deploy/nginx/recipes-web.example.conf` if static files are served from a different directory.
+- Keep WebSocket upgrade headers in `deploy/nginx/recipes-server.example.conf`; online gameplay depends on them.
+- Open firewall ports `80` and `443`; keep `3000` private to localhost.
 
 Android test APK:
 

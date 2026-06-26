@@ -1,6 +1,10 @@
 {
   "servers": [
     {
+      "name": "Grassroots Recipes Server",
+      "url": "https://recipes-server.grassecon.org"
+    },
+    {
       "name": "Local Test Server",
       "url": "http://127.0.0.1:3000"
     }

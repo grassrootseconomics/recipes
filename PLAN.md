@@ -76,6 +76,7 @@
   - Load active tables on server boot, expire old completed tables, and reject incompatible schema versions cleanly.
   - Add tests for restart after offer creation, after `Redeem / Pass`, during settlement, and during eating.
 - [ ] Add server deployment configuration.
+  - [x] Add initial Web CNAME, Web export/serve scripts, and nginx/systemd examples for `recipes.grassecon.org` plus the Recipes API server hostname.
   - Provide production environment variables for host, port, public URL, persistence data path, CORS/origin policy, logging level, and table expiration.
   - Decide table-list freshness and expiration policy for public hosted tables once persistence is added.
   - Put the server behind HTTPS/WSS before any public Play Store online mode.

@@ -14,7 +14,10 @@ client/.godot/
 client/android/build/
 client/android/.gradle/
 client/build/
-client/web/
+client/web/*
+!client/web/
+!client/web/CNAME
+!client/web/.nojekyll
 client/web/*.wasm
 client/web/*.pck
 client/web/*.js

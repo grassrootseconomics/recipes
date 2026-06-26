@@ -9,9 +9,11 @@
   "scripts": {
     "dev": "npm --workspace server run dev",
     "build": "npm --workspace server run build",
+    "export:web": "bash scripts/export-web.sh",
     "generate:recipes": "npm --workspace server run generate:recipes",
     "generate:art": "python3 art/dish_art_gen.py",
     "simulate:game": "npm --workspace server run simulate:game --",
+    "serve:web": "python3 scripts/serve-web.py --root client/web",
     "test": "npm --workspace server run test",
     "test:all": "npm run typecheck && npm run test:run && npm run test:offline && npm run test:visual && godot4 --headless --log-file /tmp/recipes-godot-headless.log --path client --quit-after 5",
     "test:offline": "godot4 --headless --log-file /tmp/recipes-offline-smoke.log --path client --script res://scripts/offline_smoke.gd && godot4 --headless --log-file /tmp/recipes-offline-regression.log --path client --script res://scripts/offline_regression.gd",
