@@ -6,8 +6,10 @@ const TRANSACTION_VISIBLE_ROWS := 20
 const TRANSACTION_ROW_HEIGHT := 30
 const TRANSACTION_ROW_GAP := 6
 const TRANSACTION_POPUP_MAX_ROWS := 6
+const PHONE_POPUP_MAX_WIDTH := 560
+const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.2"
+const APP_VERSION := "0.0.3"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -19,6 +21,9 @@ const LOBBY_SEAT_SETUP_STORE_TMP_PATH := "user://lobby-seat-setup.tmp"
 const DESKTOP_ANDROID_PREVIEW_SIZE := Vector2i(1080, 1920)
 const DESKTOP_ANDROID_PREVIEW_MARGIN := 48
 const TABLE_VISUAL_BOTTOM_SAFE_MARGIN := 18.0
+const TABLE_VISUAL_MAX_UPSCALE_PORTRAIT := 1.16
+const TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE := 1.12
+const TABLE_VISUAL_MIN_SCALE := 0.45
 const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 1.25
 const PUBLIC_TABLES_POLL_SECONDS := 2.0
 const MAX_LOBBY_SEAT_NAME_LENGTH := 12
@@ -1948,10 +1953,13 @@ func _build_debug_sync_popup() -> PopupPanel:
 	_debug_sync_text.editable = false
 	_debug_sync_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_debug_sync_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_debug_sync_text.custom_minimum_size = Vector2(520, 300)
+	_debug_sync_text.custom_minimum_size = Vector2(0, 180)
 	_debug_sync_text.add_theme_font_size_override("font_size", 14)
 	_debug_sync_text.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	_debug_sync_text.add_theme_color_override("font_readonly_color", Color(0.17, 0.12, 0.07))
+	_debug_sync_text.add_theme_color_override("font_placeholder_color", Color(0.45, 0.35, 0.23))
 	_debug_sync_text.add_theme_stylebox_override("normal", _warm_button_style(Color(0.98, 0.93, 0.78), Color(0.47, 0.36, 0.22), 1))
+	_debug_sync_text.add_theme_stylebox_override("read_only", _warm_button_style(Color(0.98, 0.93, 0.78), Color(0.47, 0.36, 0.22), 1))
 	box.add_child(_debug_sync_text)
 
 	var row := HBoxContainer.new()
@@ -2126,29 +2134,29 @@ func _colored_label(text: String, background: Color, foreground := Color(1, 1, 1
 
 func _transaction_header_row() -> HBoxContainer:
 	var row := _transaction_row_container()
-	row.add_child(_transaction_cell("Turn", 48, true))
-	row.add_child(_transaction_cell("Name", 80, true))
-	row.add_child(_transaction_cell("Action", 76, true))
-	row.add_child(_transaction_cell("Counterparty", 88, true))
-	row.add_child(_transaction_cell("Item out", 88, true))
-	row.add_child(_transaction_cell("Item back", 88, true))
+	row.add_child(_transaction_cell("Turn", 42, true))
+	row.add_child(_transaction_cell("Name", 68, true))
+	row.add_child(_transaction_cell("Action", 68, true))
+	row.add_child(_transaction_cell("With", 70, true))
+	row.add_child(_transaction_cell("Out", 74, true))
+	row.add_child(_transaction_cell("Back", 74, true))
 	return row
 
 
 func _transaction_row(transaction: Dictionary) -> HBoxContainer:
 	var row := _transaction_row_container()
-	row.add_child(_transaction_cell(str(transaction.get("turn", "?")), 48))
-	row.add_child(_transaction_cell(str(transaction.get("name", "?")), 80))
+	row.add_child(_transaction_cell(str(transaction.get("turn", "?")), 42))
+	row.add_child(_transaction_cell(str(transaction.get("name", "?")), 68))
 	row.add_child(_action_badge(str(transaction.get("action", "?"))))
-	row.add_child(_transaction_cell(str(transaction.get("counterparty", "?")), 88))
-	row.add_child(_transaction_cell(str(transaction.get("itemOut", "-")), 88))
-	row.add_child(_transaction_cell(str(transaction.get("itemBack", "-")), 88))
+	row.add_child(_transaction_cell(str(transaction.get("counterparty", "?")), 70))
+	row.add_child(_transaction_cell(str(transaction.get("itemOut", "-")), 74))
+	row.add_child(_transaction_cell(str(transaction.get("itemBack", "-")), 74))
 	return row
 
 
 func _transaction_row_container() -> HBoxContainer:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
+	row.add_theme_constant_override("separation", 4)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return row
 
@@ -2158,16 +2166,17 @@ func _transaction_cell(text: String, min_width: int, bold := false) -> Label:
 	label.custom_minimum_size = Vector2(min_width, 30)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.add_theme_font_size_override("font_size", 14)
 	label.add_theme_color_override("font_color", Color(0.18, 0.12, 0.07))
 	if bold:
-		label.add_theme_font_size_override("font_size", 15)
+		label.add_theme_font_size_override("font_size", 14)
 		label.add_theme_color_override("font_color", Color(0.12, 0.08, 0.04))
 	return label
 
 
 func _action_badge(action: String) -> PanelContainer:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(76, 30)
+	panel.custom_minimum_size = Vector2(68, 30)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var style := StyleBoxFlat.new()
 	style.bg_color = _action_color(action)
@@ -2186,6 +2195,7 @@ func _action_badge(action: String) -> PanelContainer:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.add_theme_font_size_override("font_size", 14)
 	label.add_theme_color_override("font_color", _action_text_color(action))
 	panel.add_child(label)
 	return panel
@@ -2787,16 +2797,26 @@ func _fit_table_visual_to_window() -> void:
 			design_size = preferred
 	if design_size.x <= 1.0 or design_size.y <= 1.0:
 		design_size = Vector2(616, 808)
-	var scale_value := minf(1.0, available_width / design_size.x)
+	var max_scale: float = 1.0
+	if game_started:
+		max_scale = TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE if design_size.x > design_size.y else TABLE_VISUAL_MAX_UPSCALE_PORTRAIT
+	var scale_value: float = minf(max_scale, available_width / design_size.x)
 	if game_started:
 		scale_value = minf(scale_value, available_height / design_size.y)
-	scale_value = maxf(0.45, scale_value)
-	var scaled_size := design_size * scale_value
+	scale_value = maxf(TABLE_VISUAL_MIN_SCALE, scale_value)
+	var scaled_size: Vector2 = design_size * scale_value
+	var holder_height: float = ceil(scaled_size.y)
+	if game_started:
+		holder_height = maxf(holder_height, ceil(available_height))
 	_table_visual.size = design_size
 	_table_visual.scale = Vector2(scale_value, scale_value)
-	_table_visual.position = Vector2(maxf(0.0, (available_width - scaled_size.x) * 0.5), 0.0)
-	_table_visual_holder.custom_minimum_size = Vector2(ceil(available_width) if game_started else 0.0, ceil(scaled_size.y))
-	_table_visual_holder.size = Vector2(available_width, ceil(scaled_size.y))
+	_table_visual.position = Vector2(
+		maxf(0.0, (available_width - scaled_size.x) * 0.5),
+		maxf(0.0, (holder_height - scaled_size.y) * 0.5)
+	)
+	_table_visual_holder.size_flags_vertical = Control.SIZE_EXPAND_FILL if game_started else Control.SIZE_SHRINK_BEGIN
+	_table_visual_holder.custom_minimum_size = Vector2(ceil(available_width) if game_started else 0.0, holder_height)
+	_table_visual_holder.size = Vector2(available_width, holder_height)
 
 
 func _fit_table_visual_after_layout() -> void:
@@ -2865,10 +2885,18 @@ func _open_debug_sync_popup() -> void:
 		return
 	_debug_sync_text.text = _debug_sync_report()
 	var viewport_size := get_viewport_rect().size
+	var phone_portrait := _is_phone_portrait_size(viewport_size)
+	var width_ratio := 0.82 if phone_portrait else 0.86
+	var height_ratio := 0.46 if phone_portrait else 0.68
+	var max_width := PHONE_POPUP_MAX_WIDTH if phone_portrait else 760
+	var max_height := PHONE_POPUP_MAX_HEIGHT if phone_portrait else 560
+	var viewport_width := maxi(1, int(viewport_size.x) - 28)
+	var viewport_height := maxi(1, int(viewport_size.y) - 92)
 	var popup_size := Vector2i(
-		mini(760, maxi(320, int(viewport_size.x * 0.86))),
-		mini(560, maxi(300, int(viewport_size.y * 0.68)))
+		mini(mini(max_width, viewport_width), maxi(320, int(viewport_size.x * width_ratio))),
+		mini(mini(max_height, viewport_height), maxi(300, int(viewport_size.y * height_ratio)))
 	)
+	_debug_sync_text.custom_minimum_size = Vector2(0, maxf(160.0, float(popup_size.y - 160)))
 	_debug_sync_popup.popup_centered(popup_size)
 
 
@@ -3001,15 +3029,24 @@ func _open_history_popup() -> void:
 	if not is_instance_valid(_history_popup) or not is_instance_valid(_history_popup_controls):
 		return
 	var viewport_size := get_viewport_rect().size
-	var max_popup_width := maxi(1, int(viewport_size.x) - 36)
-	var max_popup_height := maxi(1, int(viewport_size.y) - 84)
+	var phone_portrait := _is_phone_portrait_size(viewport_size)
+	var width_ratio := 0.84 if phone_portrait else 0.90
+	var height_ratio := 0.44 if phone_portrait else 0.58
+	var popup_max_width := PHONE_POPUP_MAX_WIDTH if phone_portrait else 660
+	var popup_max_height := PHONE_POPUP_MAX_HEIGHT if phone_portrait else 520
+	var max_popup_width := maxi(1, int(viewport_size.x) - 28)
+	var max_popup_height := maxi(1, int(viewport_size.y) - 92)
 	var popup_size := Vector2i(
-		mini(mini(660, int(viewport_size.x * 0.90)), max_popup_width),
-		mini(mini(520, int(viewport_size.y * 0.58)), max_popup_height)
+		mini(mini(popup_max_width, int(viewport_size.x * width_ratio)), max_popup_width),
+		mini(mini(popup_max_height, int(viewport_size.y * height_ratio)), max_popup_height)
 	)
 	_history_popup_visible_rows = _history_popup_row_count_for_size(popup_size)
 	_refresh_history_popup(RecipesClient.latest_snapshot)
 	_history_popup.popup_centered(popup_size)
+
+
+func _is_phone_portrait_size(size: Vector2) -> bool:
+	return size.y > size.x and size.x <= 820.0
 
 
 func _history_popup_row_count_for_size(popup_size: Vector2i) -> int:

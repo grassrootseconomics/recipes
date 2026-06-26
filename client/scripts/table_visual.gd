@@ -22,7 +22,7 @@ const TABLE_CONTENT_WIDTH := 680
 const TABLE_CONTENT_HEIGHT := 940
 const TABLE_PORTRAIT_SIZE := Vector2(TABLE_CONTENT_WIDTH + 20.0, TABLE_CONTENT_HEIGHT)
 const TABLE_LANDSCAPE_WIDTH := TABLE_CONTENT_WIDTH * 2 + 32
-const TABLE_LANDSCAPE_HEIGHT := 620
+const TABLE_LANDSCAPE_HEIGHT := 560
 const TABLE_LANDSCAPE_SIZE := Vector2(TABLE_LANDSCAPE_WIDTH, TABLE_LANDSCAPE_HEIGHT)
 const LANDSCAPE_MIN_AVAILABLE_WIDTH := 1060.0
 const LANDSCAPE_MIN_ASPECT := 1.25
@@ -1718,9 +1718,9 @@ func _render_settlement_action_controls() -> void:
 	var give_label := _asset_label_from_key(_selected_inventory_asset_key)
 	var take_label := _asset_label_from_key(_selected_platter_asset_key)
 	if give_label == "" and take_label == "":
-		_redeem_box.add_child(_action_label("Tap a promise card or dish piece to select it."))
+		_redeem_box.add_child(_action_label("Choose a card or dish piece to settle."))
 	else:
-		_redeem_box.add_child(_action_label("Choose an item in the basket."))
+		_redeem_box.add_child(_action_label("Choose an item in the basket to settle."))
 
 
 func _render_eating_action_controls() -> void:
@@ -2844,13 +2844,16 @@ func _on_participant_pressed(participant_id: String) -> void:
 		_open_offer_popup(participant_id)
 		return
 	var phase := str(_snapshot.get("phase", ""))
-	if _selected_inventory_asset_key != "" \
-			and participant_id != _viewer_id() \
+	if participant_id != _viewer_id() \
 			and _offer_phase_allows_creation(phase) \
 			and _can_act_now(phase) \
 			and _participant_can_receive_offer(_participant_by_id(participant_id)):
-		_open_create_offer_popup(participant_id)
-		return
+		if _selected_inventory_asset_key == "":
+			var target_ingredient_id := str(_participant_by_id(participant_id).get("ingredientId", ""))
+			_auto_select_give_asset(target_ingredient_id, phase)
+		if _selected_inventory_asset_key != "":
+			_open_create_offer_popup(participant_id)
+			return
 	_open_cook_info_popup(participant_id)
 
 
