@@ -32,7 +32,7 @@ func _initialize() -> void:
 	await process_frame
 	visual.debug_play_animation_event({"type": "deposit", "ingredientId": "rice", "participantId": "p2"})
 	await process_frame
-	_require(visual.debug_stats.get("lastAnimatedCardSize", Vector2.ZERO) == Vector2(118, 82), "animated promise cards use the same size as basket cards")
+	_require(visual.debug_stats.get("lastAnimatedCardSize", Vector2.ZERO) == Vector2(96, 90), "animated promise cards use the same size as hand and basket cards")
 	visual.debug_flush_animations()
 	await process_frame
 	_require(_popup_panels_have_expected_dismissal(visual), "visual table popups use expected dismissal behavior")

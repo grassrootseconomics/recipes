@@ -21,7 +21,8 @@ const BASKET_CENTER_OUT_SLOTS := [5, 6, 1, 2, 4, 7, 3, 0]
 const TABLE_CONTENT_WIDTH := 680
 const TABLE_CONTENT_HEIGHT := 940
 const BASKET_BACKDROP_SIZE := Vector2(668, 230)
-const BASKET_SLOT_SIZE := Vector2(118, 82)
+const CARD_TILE_SIZE := Vector2(96, 90)
+const BASKET_SLOT_SIZE := CARD_TILE_SIZE
 const BASKET_COMPACT_SLOT_SIZE := Vector2(92, 52)
 const BASKET_GRID_GAP := 7
 const BASKET_COMPACT_GRID_GAP := 5
@@ -42,7 +43,7 @@ const COOK_RING_POSITIONS := [
 	Vector2(182, 356),
 	Vector2(4, 326)
 ]
-const HAND_CARD_SIZE := Vector2(96, 90)
+const HAND_CARD_SIZE := CARD_TILE_SIZE
 const HAND_FOOD_SIZE := Vector2(96, 92)
 const HAND_SCROLL_HEIGHT := 202
 const CARD_TILE_FADE_IN_SECONDS := 0.03
@@ -2924,7 +2925,7 @@ func _offer_asset_card(title_text: String, summary: Dictionary, node_prefix: Str
 	var title := _offer_popup_text(title_text)
 	title.add_theme_font_size_override("font_size", 12)
 	box.add_child(title)
-	box.add_child(_offer_asset_visual(summary, node_prefix, Vector2(86, 74), Callable()))
+	box.add_child(_offer_asset_visual(summary, node_prefix, HAND_CARD_SIZE, Callable()))
 	return box
 
 
@@ -2956,7 +2957,7 @@ func _offer_asset_summary_for_ingredient(ingredient_id: String, quantity: int) -
 		"label": "%s x%s" % [_ingredient_display(ingredient_id), qty],
 		"sentenceLabel": "%s x%s" % [_ingredient_display(ingredient_id), qty],
 		"tooltip": "%s x%s" % [_ingredient_display(ingredient_id), qty],
-		"meta": VisualAssets.ingredient_meta(ingredient_id),
+		"meta": _card_meta_with_stack(VisualAssets.ingredient_meta(ingredient_id), qty),
 		"quantity": qty
 	}
 
@@ -3199,7 +3200,7 @@ func _offer_hand_food_part_card(participant_id: String, group: Dictionary) -> Bu
 
 
 func _offer_hand_asset_card(node_name: String, summary: Dictionary, participant_id: String, requested_asset: Dictionary) -> Button:
-	var card := _offer_asset_visual(summary, "OfferHandAsset", Vector2(68, 62), func(id := participant_id, request := requested_asset.duplicate(true)) -> void:
+	var card := _offer_asset_visual(summary, "OfferHandAsset", HAND_CARD_SIZE, func(id := participant_id, request := requested_asset.duplicate(true)) -> void:
 		_open_create_offer_popup_for_requested_asset(id, request)
 	)
 	card.name = node_name
@@ -7177,7 +7178,7 @@ func _card_meta_with_stack(meta: Dictionary, count: int) -> Dictionary:
 func _add_card_stack_layers(button: Button, meta: Dictionary) -> void:
 	if not bool(meta.get("stacked_card", false)):
 		return
-	var stack_count := clampi(int(meta.get("stack_count", 0)), 1, 4)
+	var stack_count := clampi(int(meta.get("stack_count", 0)), 1, 3)
 	var layers := stack_count - 1
 	if layers <= 0:
 		return
@@ -7188,12 +7189,12 @@ func _add_card_stack_layers(button: Button, meta: Dictionary) -> void:
 		layer.name = "CardStackLayer_%s" % layer_index
 		layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		layer.set_anchors_preset(Control.PRESET_FULL_RECT)
-		var offset := layer_index * 4
+		var offset := layer_index * 3
 		layer.offset_left = offset
 		layer.offset_top = 0
 		layer.offset_right = 0
 		layer.offset_bottom = -offset
-		var style := _panel_style(Color(base_color.r, base_color.g, base_color.b, 0.10), border_color, 2, 8)
+		var style := _panel_style(Color(base_color.r, base_color.g, base_color.b, 0.08), border_color, 1, 8)
 		style.content_margin_left = 0
 		style.content_margin_top = 0
 		style.content_margin_right = 0
@@ -7350,6 +7351,7 @@ func _add_visual_content(button: Button, top_text: String, bottom_text: String, 
 	var pad := 4 if framed else 2
 	var top_band := 20 if top_text != "" else 0
 	var bottom_band := 42 if bottom_text.find("\n") >= 0 else 31
+	var stack_gap := 5 if bool(meta.get("stacked_card", false)) else 0
 
 	if top_text != "":
 		var top := _visual_text_label(top_text, ink)
@@ -7362,18 +7364,18 @@ func _add_visual_content(button: Button, top_text: String, bottom_text: String, 
 		var icon := TextureRect.new()
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.texture = texture
-		_place_overlay(icon, pad, pad + top_band, -pad, -(bottom_band + pad))
+		_place_overlay(icon, pad, pad + top_band, -pad, -(bottom_band + pad + stack_gap))
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		button.add_child(icon)
 	else:
 		var mark := _visual_text_label(str(meta.get("mark", "??")), ink)
 		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_place_overlay(mark, pad, pad + top_band, -pad, -(bottom_band + pad))
+		_place_overlay(mark, pad, pad + top_band, -pad, -(bottom_band + pad + stack_gap))
 		button.add_child(mark)
 
 	var bottom := _visual_text_label(bottom_text, ink)
 	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_place_overlay(bottom, pad, -bottom_band, -pad, -pad)
+	_place_overlay(bottom, pad, -(bottom_band + stack_gap), -pad, -(pad + stack_gap))
 	button.add_child(bottom)
 
 
