@@ -382,7 +382,8 @@ func _initialize() -> void:
 	visual.debug_play_animation_event({"type": "redeem", "ingredientId": "rice", "slotIndex": 0})
 	visual.debug_play_animation_event({"type": "public_redeem", "participantId": "p2", "ownerParticipantId": "p1", "ingredientId": "rice"})
 	visual.debug_play_animation_event({"type": "prepare", "dishName": "Cheese Frittata", "unit": "slice"})
-	visual.debug_play_animation_event({"type": "public_prepare", "participantId": "p2", "dishName": "Bean Tacos", "unit": "taco"})
+	visual.debug_play_animation_event({"type": "public_prepare", "participantId": "p2", "participantName": "Ben", "dishName": "Bean Tacos", "unit": "taco"})
+	_require(str(visual.debug_stats.get("lastPrepareAnnouncement", "")) == "Ben prepared Bean Tacos!", "public prepare animation announces cook and dish name")
 	visual.debug_play_animation_event({"type": "offer", "participantId": "p2", "indicator": "!"})
 	visual.debug_play_animation_event({"type": "settlement_swap", "giveKind": "dish_part", "giveDishName": "Bean Dip", "giveUnit": "scoop", "takeKind": "voucher", "takeIngredientId": "beans"})
 	visual.debug_play_animation_event({"type": "eat", "dishName": "Cheese Frittata", "unit": "slice"})
@@ -557,8 +558,21 @@ func _initialize() -> void:
 	_require(target_hand_food.find_child("CardInsetOutline", true, false) == null, "create-offer popup renders non-viewing dish pieces without card frames")
 	_require(visual.find_child("OfferPopupClose", true, false) != null, "offer popup has a top-right close button")
 	_assert_offer_actions_below_cards(visual)
+	_require(_has_text_containing(visual, "2:2"), "create-offer popup offers a 2:2 toggle when both sides have enough assets")
+	_require(_press_button_containing(visual, "2:2"), "2:2 toggle can be selected")
+	_require(_has_text_containing(visual, "1:1"), "doubled offer can switch back to 1:1")
+	_require(_has_text_containing(visual, "Rice x2"), "doubled offer shows two offered cards")
+	_require(_has_text_containing(visual, "Veggies x2") or _has_text_containing(visual, "Vegetables x2"), "doubled offer shows two requested cards")
+	_intents.clear()
+	_require(_press_button_containing(visual, "Create"), "doubled offer can be created")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "create_offer", "doubled offer emits create_offer")
+	_require(_intents[0].get("offeredAssets", []).size() == 2, "doubled offer locks two offered assets")
+	_require(int(_intents[0].get("requestedAsset", {}).get("quantity", 0)) == 2, "doubled offer requests quantity two")
 
 	_intents.clear()
+	visual.debug_apply_snapshot(offer_shortcut)
+	visual.debug_press_hand_ingredient("rice")
+	visual.debug_press_participant("p4")
 	visual.debug_press_offer_hand_voucher("beans", "p2")
 	_require(visual.find_child("OfferGetCard_beans", true, false) != null, "clicking a target hand card makes it the requested offer asset")
 	_require(_press_button_containing(visual, "Create"), "specific hand-asset offer has a Create button")
@@ -713,6 +727,7 @@ func _initialize() -> void:
 	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Dishes Made", "dish summary title stays centered as Dishes Made")
 	_require(_has_progress_node_matching(visual, 3, 3), "completed dish summary uses filled drawn progress stars")
 	_require(_has_progress_node_matching(visual, 0, 3), "unfinished dish summary uses empty drawn progress stars")
+	_require(_dish_progress_name_labels(visual) >= 4, "dish summary keeps cook names visible beside progress stars")
 	_require(not _has_label_containing(visual, "3/3"), "dish summary hides numeric slash progress")
 
 	var settlement := _snapshot_fixture()
@@ -1259,6 +1274,15 @@ func _has_progress_node_matching(node: Node, filled: int, total: int) -> bool:
 		if str(raw_child.name).find("ProgressStars") >= 0 and _progress_node_matches(raw_child, filled, total):
 			return true
 	return false
+
+
+func _dish_progress_name_labels(node: Node) -> int:
+	var count := 0
+	for raw_child in node.find_children("DishProgressName", "Label", true, false):
+		var label := raw_child as Label
+		if label != null and label.visible and label.text.strip_edges() != "":
+			count += 1
+	return count
 
 
 func _assert_public_action_temporarily_highlights_actor(visual: Node) -> void:

@@ -9,7 +9,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.3"
+const APP_VERSION := "0.0.4"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -21,6 +21,7 @@ const LOBBY_SEAT_SETUP_STORE_TMP_PATH := "user://lobby-seat-setup.tmp"
 const DESKTOP_ANDROID_PREVIEW_SIZE := Vector2i(1080, 1920)
 const DESKTOP_ANDROID_PREVIEW_MARGIN := 48
 const TABLE_VISUAL_BOTTOM_SAFE_MARGIN := 18.0
+const TABLE_VISUAL_PANEL_CLIP_PADDING := 8.0
 const TABLE_VISUAL_MAX_UPSCALE_PORTRAIT := 1.16
 const TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE := 1.12
 const TABLE_VISUAL_MIN_SCALE := 0.45
@@ -364,7 +365,7 @@ func _build_ui() -> void:
 
 	_table_visual_holder = Control.new()
 	_table_visual_holder.visible = false
-	_table_visual_holder.clip_contents = true
+	_table_visual_holder.clip_contents = false
 	_table_visual_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_table_visual_holder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_table_visual_holder.custom_minimum_size = Vector2(0, 620)
@@ -2783,7 +2784,10 @@ func _fit_table_visual_to_window() -> void:
 		available_height -= float(_root_margin.get_theme_constant("margin_top") + _root_margin.get_theme_constant("margin_bottom"))
 	available_height -= TABLE_VISUAL_BOTTOM_SAFE_MARGIN
 	available_height = maxf(1.0, available_height)
-	var available_area := Vector2(available_width, available_height)
+	var panel_padding := TABLE_VISUAL_PANEL_CLIP_PADDING if game_started else 0.0
+	var fit_width := maxf(1.0, available_width - panel_padding * 2.0)
+	var fit_height := maxf(1.0, available_height - panel_padding * 2.0)
+	var available_area := Vector2(fit_width, fit_height)
 	if _table_visual.has_method("set_visual_layout_area"):
 		_table_visual.call("set_visual_layout_area", available_area)
 	var design_size := _table_visual.get_combined_minimum_size()
@@ -2800,19 +2804,20 @@ func _fit_table_visual_to_window() -> void:
 	var max_scale: float = 1.0
 	if game_started:
 		max_scale = TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE if design_size.x > design_size.y else TABLE_VISUAL_MAX_UPSCALE_PORTRAIT
-	var scale_value: float = minf(max_scale, available_width / design_size.x)
+	var scale_value: float = minf(max_scale, fit_width / design_size.x)
 	if game_started:
-		scale_value = minf(scale_value, available_height / design_size.y)
+		scale_value = minf(scale_value, fit_height / design_size.y)
 	scale_value = maxf(TABLE_VISUAL_MIN_SCALE, scale_value)
 	var scaled_size: Vector2 = design_size * scale_value
-	var holder_height: float = ceil(scaled_size.y)
+	var holder_height: float = ceil(scaled_size.y + panel_padding * 2.0)
 	if game_started:
 		holder_height = maxf(holder_height, ceil(available_height))
+	var visual_area_height := maxf(1.0, holder_height - panel_padding * 2.0)
 	_table_visual.size = design_size
 	_table_visual.scale = Vector2(scale_value, scale_value)
 	_table_visual.position = Vector2(
-		maxf(0.0, (available_width - scaled_size.x) * 0.5),
-		maxf(0.0, (holder_height - scaled_size.y) * 0.5)
+		panel_padding + maxf(0.0, (fit_width - scaled_size.x) * 0.5),
+		panel_padding + maxf(0.0, (visual_area_height - scaled_size.y) * 0.5)
 	)
 	_table_visual_holder.size_flags_vertical = Control.SIZE_EXPAND_FILL if game_started else Control.SIZE_SHRINK_BEGIN
 	_table_visual_holder.custom_minimum_size = Vector2(ceil(available_width) if game_started else 0.0, holder_height)

@@ -107,7 +107,7 @@
   - App name: `Recipes`.
   - Short description under 80 characters.
   - Full description covering offline pass-and-play, online table play, trading, cooking, settlement, and sharing food.
-  - Release notes for `0.0.3`.
+  - Release notes for `0.0.4`.
   - Support email and website.
   - Privacy policy URL.
 - [ ] Complete Play Console policy/app-content forms.
@@ -118,7 +118,7 @@
   - App access instructions for reviewers, including offline mode and a test server URL if online mode is enabled in the submitted build.
   - Permissions review, currently expected to include Internet for online play.
 - [ ] Prepare Android release build.
-  - Verify package id `org.grassecon.recipes`, app name, version name `0.0.3`, and monotonically increasing Android version code.
+  - Verify package id `org.grassecon.recipes`, app name, version name `0.0.4`, and monotonically increasing Android version code.
   - Build a signed Android App Bundle (`.aab`) for Play upload.
   - Create and securely store the upload keystore outside the repository; commit only documentation/placeholders.
   - Verify the Godot Android export target SDK meets the current Google Play target API requirement before upload.

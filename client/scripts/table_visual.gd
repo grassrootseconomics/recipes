@@ -358,6 +358,7 @@ var _selected_hand_voucher_id := ""
 var _selected_hand_ingredient_id := ""
 var _selected_inventory_asset_key := ""
 var _selected_platter_asset_key := ""
+var _create_offer_quantity := 1
 var _animation_queue: Array = []
 var _animation_running := false
 var _animation_deadline_msec := 0
@@ -2406,23 +2407,27 @@ func _dish_summary_cell(text: String) -> Label:
 
 
 func _dish_progress_cell(name_text: String, completed: int, target: int) -> Control:
-	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(112, 44)
+	var box := HBoxContainer.new()
+	box.custom_minimum_size = Vector2(178, 30)
 	box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", 0)
+	box.add_theme_constant_override("separation", 8)
 	var name := _muted_label(name_text)
-	name.custom_minimum_size = Vector2(108, 22)
-	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name.name = "DishProgressName"
+	name.custom_minimum_size = Vector2(104, 26)
+	name.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	name.clip_text = true
 	box.add_child(name)
 	if target > 0:
 		var center := CenterContainer.new()
-		center.custom_minimum_size = Vector2(108, 14)
+		center.custom_minimum_size = Vector2(44, 18)
+		center.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		var stars := ProgressStars.new()
 		stars.name = "DishProgressStars"
-		stars.set_star_size(11.0)
+		stars.set_star_size(12.0)
 		stars.set_progress(completed, target, completed >= target)
 		if completed >= target:
 			_start_star_pulse(stars)
@@ -2857,7 +2862,7 @@ func _on_participant_pressed(participant_id: String) -> void:
 	_open_cook_info_popup(participant_id)
 
 
-func _create_offer_to_participant(participant_id: String, requested_asset_override: Dictionary = {}) -> void:
+func _create_offer_to_participant(participant_id: String, requested_asset_override: Dictionary = {}, quantity := 1) -> void:
 	var phase := str(_snapshot.get("phase", ""))
 	if not _offer_phase_allows_creation(phase) or not _can_act_now(phase):
 		status_requested.emit("This is not your turn.")
@@ -2867,24 +2872,33 @@ func _create_offer_to_participant(participant_id: String, requested_asset_overri
 		status_requested.emit("That player cannot receive an offer right now.")
 		return
 	var requested_asset := requested_asset_override.duplicate(true) if not requested_asset_override.is_empty() else _offer_requested_asset_for_participant(participant_id)
+	var offer_quantity := clampi(quantity, 1, 2)
+	if offer_quantity > 1 and not _offer_can_use_quantity(participant_id, requested_asset, offer_quantity):
+		offer_quantity = 1
+	if not requested_asset.is_empty():
+		requested_asset["quantity"] = offer_quantity
 	if requested_asset.is_empty() or _selected_inventory_asset_key == "":
 		status_requested.emit("Choose different items for the offer.")
+		return
+	var offered_asset_refs := _asset_refs_from_selected_key(offer_quantity)
+	if offered_asset_refs.size() < offer_quantity:
+		status_requested.emit("You do not have enough to offer %s:%s." % [offer_quantity, offer_quantity])
 		return
 	intent_requested.emit({
 		"type": "create_offer",
 		"toParticipantId": participant_id,
-		"offeredAssets": [_asset_ref_from_key(_selected_inventory_asset_key)],
+		"offeredAssets": offered_asset_refs,
 		"requestedAsset": requested_asset
 	})
 	status_requested.emit("Offering %s to %s for %s." % [
-		_asset_label_from_key(_selected_inventory_asset_key),
+		_asset_label_from_key(_selected_inventory_asset_key, offer_quantity),
 		_participant_name(participant_id),
 		_offer_requested_asset_label(requested_asset, participant_id)
 	])
 	_clear_selections()
 
 
-func _open_create_offer_popup(participant_id: String, requested_asset_override: Dictionary = {}) -> void:
+func _open_create_offer_popup(participant_id: String, requested_asset_override: Dictionary = {}, quantity := 1) -> void:
 	_clear(_offer_popup_list)
 	_prepare_offer_popup_content(276)
 	var target := _participant_by_id(participant_id)
@@ -2895,12 +2909,24 @@ func _open_create_offer_popup(participant_id: String, requested_asset_override: 
 		_popup_centered_tight(228, 120)
 		return
 	var requested_asset := requested_asset_override.duplicate(true) if not requested_asset_override.is_empty() else _offer_requested_asset_for_participant(participant_id)
+	_create_offer_quantity = clampi(quantity, 1, 2)
+	var can_double := _offer_can_use_quantity(participant_id, requested_asset, 2)
+	if _create_offer_quantity > 1 and not can_double:
+		_create_offer_quantity = 1
+	if not requested_asset.is_empty():
+		requested_asset["quantity"] = _create_offer_quantity
 	var row := _offer_popup_button_row()
-	var create_button := _offer_popup_compact_button("Create", func(id := participant_id, request := requested_asset.duplicate(true)) -> void:
-		_create_offer_to_participant(id, request)
+	if can_double:
+		var toggle_label := "1:1" if _create_offer_quantity == 2 else "2:2"
+		var next_offer_quantity := 1 if _create_offer_quantity == 2 else 2
+		row.add_child(_offer_popup_compact_button(toggle_label, func(id := participant_id, request := requested_asset.duplicate(true), next_quantity := next_offer_quantity) -> void:
+			_open_create_offer_popup(id, request, next_quantity)
+		))
+	var create_button := _offer_popup_compact_button("Create", func(id := participant_id, request := requested_asset.duplicate(true), offer_quantity := _create_offer_quantity) -> void:
+		_create_offer_to_participant(id, request, offer_quantity)
 		_offer_popup.hide()
 	)
-	create_button.disabled = requested_asset.is_empty()
+	create_button.disabled = not _offer_can_use_quantity(participant_id, requested_asset, _create_offer_quantity)
 	row.add_child(create_button)
 	row.add_child(_offer_popup_compact_button("Cancel", func() -> void:
 		_offer_popup.hide()
@@ -2910,7 +2936,7 @@ func _open_create_offer_popup(participant_id: String, requested_asset_override: 
 	_offer_popup_list.add_child(_offer_popup_component_from_summaries(
 		"Offer",
 		participant_id,
-		_offer_asset_summary_from_key(_selected_inventory_asset_key),
+		_offer_asset_summary_from_key(_selected_inventory_asset_key, _create_offer_quantity),
 		_offer_summary_for_requested_asset({"requestedAsset": requested_asset}, participant_id),
 		_offer_create_detail_text(participant_id, requested_asset),
 		row
@@ -3164,11 +3190,11 @@ func _offer_summary_for_offered_assets(offer: Dictionary) -> Dictionary:
 		if str(ref.get("kind", "")) == "dish_part":
 			var part := _dish_part_by_id(str(ref.get("id", "")))
 			if not part.is_empty():
-				return _offer_dish_part_summary_from_part(part, 1)
+				return _offer_dish_part_summary_from_part(part, offer.get("offeredAssets", []).size())
 		if str(ref.get("kind", "")) == "voucher":
 			var ingredient_id := _ingredient_id_for_voucher(str(ref.get("id", "")))
 			if ingredient_id != "":
-				return _offer_asset_summary_for_ingredient(ingredient_id, 1)
+				return _offer_asset_summary_for_ingredient(ingredient_id, offer.get("offeredAssets", []).size())
 	return _generic_food_piece_summary(1)
 
 
@@ -3514,9 +3540,15 @@ func _offer_first_offered_ingredient_id(offer: Dictionary) -> String:
 
 
 func _offer_offered_quantity(offer: Dictionary) -> int:
+	var offered_parts: Array = offer.get("offeredDishParts", [])
+	if not offered_parts.is_empty():
+		return offered_parts.size()
 	var offered: Array = offer.get("offeredVouchers", [])
 	if not offered.is_empty():
 		return offered.size()
+	var assets: Array = offer.get("offeredAssets", [])
+	if not assets.is_empty():
+		return assets.size()
 	var ids: Array = offer.get("offeredVoucherIds", [])
 	return maxi(1, ids.size())
 
@@ -3531,19 +3563,9 @@ func _offer_sentence(offer: Dictionary) -> String:
 
 
 func _offer_assets_label(offer: Dictionary) -> String:
-	var labels: Array[String] = []
-	for raw_voucher in offer.get("offeredVouchers", []):
-		var voucher: Dictionary = raw_voucher
-		var ingredient_id := str(voucher.get("ingredientId", ""))
-		if ingredient_id != "":
-			labels.append("%s x1" % _ingredient_display(ingredient_id))
-	for raw_part in offer.get("offeredDishParts", []):
-		var part: Dictionary = raw_part
-		labels.append(str(_offer_dish_part_summary_from_part(part, 1).get("sentenceLabel", "Food piece x1")))
-	if labels.is_empty():
-		for raw_ref in offer.get("offeredAssets", []):
-			labels.append(_asset_label_from_ref(raw_ref))
-	return "nothing" if labels.is_empty() else ", ".join(labels)
+	var summary := _offer_summary_for_offered_assets(offer)
+	var label := str(summary.get("sentenceLabel", summary.get("label", ""))).strip_edges()
+	return "nothing" if label == "" else label
 
 
 func _offer_requested_label(offer: Dictionary) -> String:
@@ -3865,7 +3887,9 @@ func _offer_requested_asset_label(requested_asset: Dictionary, provider_particip
 			label = "dish piece"
 		return label
 	if str(requested_asset.get("kind", "")) == "voucher":
-		return _ingredient_display(str(requested_asset.get("ingredientId", "")))
+		var quantity := maxi(1, int(requested_asset.get("quantity", 1)))
+		var label := _ingredient_display(str(requested_asset.get("ingredientId", "")))
+		return "%s x%s" % [label, quantity] if quantity > 1 else label
 	return "something else"
 
 
@@ -3885,23 +3909,102 @@ func _asset_ref_from_key(key: String) -> Dictionary:
 	return {"kind": key.substr(0, separator), "id": key.substr(separator + 1)}
 
 
-func _offer_asset_summary_from_key(key: String) -> Dictionary:
+func _asset_refs_from_selected_key(quantity: int) -> Array:
+	var refs: Array = []
+	var qty := maxi(1, quantity)
+	if _selected_inventory_asset_key.begins_with("voucher:"):
+		var selected := _voucher_for_key(_selected_inventory_asset_key)
+		if selected.is_empty():
+			return refs
+		var selected_ingredient_id := str(selected.get("ingredientId", ""))
+		var selected_owner_id := str(selected.get("ownerParticipantId", ""))
+		for raw_voucher in _snapshot.get("ownHand", []):
+			var voucher: Dictionary = raw_voucher
+			if str(voucher.get("ingredientId", "")) != selected_ingredient_id:
+				continue
+			if str(voucher.get("ownerParticipantId", "")) != selected_owner_id:
+				continue
+			if not _voucher_has_stock(voucher):
+				continue
+			refs.append({"kind": "voucher", "id": str(voucher.get("id", ""))})
+			if refs.size() >= qty:
+				return refs
+	if _selected_inventory_asset_key.begins_with("dish_part:"):
+		var selected_part := _dish_part_by_id(_selected_inventory_asset_key.substr("dish_part:".length()))
+		if selected_part.is_empty():
+			return refs
+		var selected_dish_id := str(selected_part.get("dishId", ""))
+		var selected_maker_id := str(selected_part.get("makerParticipantId", ""))
+		for raw_part in _snapshot.get("ownFoodParts", []):
+			var part: Dictionary = raw_part
+			if str(part.get("dishId", "")) != selected_dish_id:
+				continue
+			if str(part.get("makerParticipantId", "")) != selected_maker_id:
+				continue
+			refs.append({"kind": "dish_part", "id": str(part.get("id", ""))})
+			if refs.size() >= qty:
+				return refs
+	return refs
+
+
+func _offer_can_use_quantity(participant_id: String, requested_asset: Dictionary, quantity: int) -> bool:
+	var qty := maxi(1, quantity)
+	if requested_asset.is_empty() or _selected_inventory_asset_key == "":
+		return false
+	if _asset_refs_from_selected_key(qty).size() < qty:
+		return false
+	if _requested_asset_available_count(participant_id, requested_asset) < qty:
+		return false
+	if _requested_asset_matches_selected_voucher_resource(requested_asset):
+		return false
+	return true
+
+
+func _requested_asset_available_count(participant_id: String, requested_asset: Dictionary) -> int:
+	var participant := _participant_by_id(participant_id)
+	if participant.is_empty():
+		return 0
+	if str(requested_asset.get("kind", "")) == "voucher":
+		var requested_ingredient_id := str(requested_asset.get("ingredientId", ""))
+		var requested_owner_id := str(requested_asset.get("ownerParticipantId", ""))
+		var total := 0
+		for raw_group in participant.get("heldVoucherGroups", []):
+			var group: Dictionary = raw_group
+			if str(group.get("ingredientId", "")) != requested_ingredient_id:
+				continue
+			if requested_owner_id != "" and str(group.get("ownerParticipantId", "")) != requested_owner_id:
+				continue
+			total += int(group.get("count", 0))
+		return total
+	if str(requested_asset.get("kind", "")) == "dish_part":
+		var food_total := 0
+		for raw_group in participant.get("heldFoodPartGroups", []):
+			var group: Dictionary = raw_group
+			if _food_part_group_matches_request(group, requested_asset):
+				food_total += int(group.get("count", 0))
+		return food_total
+	return 0
+
+
+func _offer_asset_summary_from_key(key: String, quantity := 1) -> Dictionary:
+	var qty := maxi(1, quantity)
 	if key.begins_with("voucher:"):
 		var voucher_id := key.substr("voucher:".length())
 		var ingredient_id := _ingredient_id_for_voucher(voucher_id)
 		if ingredient_id == "":
 			ingredient_id = _ingredient_id_for_platter_voucher(voucher_id)
-		return _offer_asset_summary_for_ingredient(ingredient_id, 1)
+		return _offer_asset_summary_for_ingredient(ingredient_id, qty)
 	if key.begins_with("dish_part:"):
 		var part_id := key.substr("dish_part:".length())
 		var part := _dish_part_by_id(part_id)
 		if not part.is_empty():
-			return _offer_dish_part_summary_from_part(part, 1)
-		return _generic_food_piece_summary(1)
-	return _generic_food_piece_summary(1)
+			return _offer_dish_part_summary_from_part(part, qty)
+		return _generic_food_piece_summary(qty)
+	return _generic_food_piece_summary(qty)
 
 
-func _asset_label_from_key(key: String) -> String:
+func _asset_label_from_key(key: String, quantity := 1) -> String:
+	var qty := maxi(1, quantity)
 	if key == "":
 		return ""
 	if key.begins_with("voucher:"):
@@ -3909,13 +4012,14 @@ func _asset_label_from_key(key: String) -> String:
 		var ingredient_id := _ingredient_id_for_voucher(voucher_id)
 		if ingredient_id == "":
 			ingredient_id = _ingredient_id_for_platter_voucher(voucher_id)
-		return _ingredient_display(ingredient_id) if ingredient_id != "" else "Card"
+		var label := _ingredient_display(ingredient_id) if ingredient_id != "" else "Card"
+		return "%s x%s" % [label, qty] if qty > 1 else label
 	if key.begins_with("dish_part:"):
 		var part_id := key.substr("dish_part:".length())
 		for raw_part in _snapshot.get("ownFoodParts", []) + _snapshot.get("platterFoodParts", []):
 			var part: Dictionary = raw_part
 			if str(part.get("id", "")) == part_id:
-				return str(_offer_dish_part_summary_from_part(part, 1).get("sentenceLabel", "Food piece x1"))
+				return str(_offer_dish_part_summary_from_part(part, qty).get("sentenceLabel", "Food piece x%s" % qty))
 		return "Food part"
 	return ""
 
@@ -5091,6 +5195,8 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 			dish_name = str(food_info.get("dishName", "Dish"))
 		events.append({
 			"type": "prepare",
+			"participantId": viewer_id,
+			"participantName": str(current_viewer.get("name", "Someone")),
 			"dishName": dish_name,
 			"unit": str(food_info.get("unitSingular", "piece"))
 		})
@@ -5108,6 +5214,7 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 		events.append({
 			"type": "public_prepare",
 			"participantId": participant_id,
+			"participantName": str(current_participant.get("name", "Someone")),
 			"dishName": str(prepare_info.get("dishName", "Dish")),
 			"unit": str(prepare_info.get("unit", "piece"))
 		})
@@ -5759,10 +5866,11 @@ func _animate_prepare_event(event: Dictionary) -> float:
 	_glow_recipe_slots()
 	_animate_prepare_ingredient_swirl(center)
 	_animate_poof_burst(center, 0.86)
+	_animate_prepare_announcement(_prepare_participant_name(event), dish_name, center, 0.78)
 	_animate_large_dish(texture, dish_name, center, end, 1.02)
 	_emit_sparkles(center, 24, Color(1.0, 0.76, 0.28), 0.82)
 	_emit_steam_wisps(center, 1.06)
-	return 2.05
+	return 2.20
 
 
 func _animate_public_prepare_event(event: Dictionary) -> float:
@@ -5779,10 +5887,11 @@ func _animate_public_prepare_event(event: Dictionary) -> float:
 		return 0.0
 	var finish := center + Vector2(0, -8)
 	_animate_poof_burst(center, 0.20)
+	_animate_prepare_announcement(_prepare_participant_name(event), dish_name, center, 0.18)
 	_animate_large_dish(texture, dish_name, center, finish, 0.36)
 	_emit_sparkles(center, 22, Color(1.0, 0.76, 0.28), 0.16)
 	_emit_steam_wisps(center, 0.42)
-	return 1.36
+	return 1.72
 
 
 func _animate_offer_event(event: Dictionary) -> float:
@@ -6323,6 +6432,76 @@ func _animate_large_dish(texture: Texture2D, dish_name: String, global_start: Ve
 	tween.parallel().tween_property(wrapper, "scale", Vector2(0.28, 0.28), 0.28)
 	tween.parallel().tween_property(wrapper, "modulate", Color(1, 1, 1, 0), 0.28)
 	tween.tween_callback(wrapper.queue_free)
+
+
+func _prepare_participant_name(event: Dictionary) -> String:
+	var name := str(event.get("participantName", "")).strip_edges()
+	if name != "":
+		return name
+	var participant_id := str(event.get("participantId", "")).strip_edges()
+	if participant_id == "":
+		participant_id = _viewer_id()
+	return _participant_name(participant_id)
+
+
+func _animate_prepare_announcement(participant_name: String, dish_name: String, global_anchor: Vector2, delay := 0.0) -> void:
+	if not is_instance_valid(_animation_layer):
+		return
+	var clean_name := participant_name.strip_edges()
+	if clean_name == "":
+		clean_name = "Someone"
+	var clean_dish := dish_name.strip_edges()
+	if clean_dish == "":
+		clean_dish = "a dish"
+	var text := "%s prepared %s!" % [clean_name, clean_dish]
+	debug_stats["lastPrepareAnnouncement"] = text
+
+	var table_rect := get_global_rect()
+	if table_rect.size.x <= 0.0 or table_rect.size.y <= 0.0:
+		return
+	var width := minf(560.0, maxf(300.0, table_rect.size.x - 70.0))
+	var height := 86.0
+	var anchor := global_anchor
+	if anchor == Vector2.INF:
+		anchor = table_rect.get_center()
+	var target := anchor + Vector2(0, -104)
+	target.x = clampf(target.x, table_rect.position.x + width * 0.5 + 16.0, table_rect.end.x - width * 0.5 - 16.0)
+	target.y = clampf(target.y, table_rect.position.y + height * 0.5 + 44.0, table_rect.end.y - height * 0.5 - 44.0)
+
+	var card := PanelContainer.new()
+	card.name = "PrepareAnnouncement"
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.size = Vector2(width, height)
+	card.pivot_offset = card.size * 0.5
+	card.position = _animation_local(target) - card.size * 0.5
+	card.scale = Vector2(0.82, 0.82)
+	card.modulate = Color(1, 1, 1, 0)
+	card.add_theme_stylebox_override("panel", _prepare_announcement_style())
+	_animation_layer.add_child(card)
+
+	var label := Label.new()
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.text = text
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 26)
+	label.add_theme_color_override("font_color", Color(0.32, 0.16, 0.05))
+	label.add_theme_color_override("font_outline_color", Color(1.0, 0.92, 0.66))
+	label.add_theme_constant_override("outline_size", 3)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	card.add_child(label)
+
+	var tween := create_tween()
+	if delay > 0.0:
+		tween.tween_interval(delay)
+	tween.tween_property(card, "modulate", Color(1, 1, 1, 1), 0.12)
+	tween.parallel().tween_property(card, "scale", Vector2(1.0, 1.0), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.tween_interval(1.05)
+	tween.tween_property(card, "position", card.position + Vector2(0, -12), 0.22).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(card, "modulate", Color(1, 1, 1, 0), 0.22)
+	tween.tween_callback(card.queue_free)
 
 
 func _animate_prepare_ingredient_swirl(global_center: Vector2) -> void:
@@ -8060,6 +8239,18 @@ func _prepare_dish_style() -> StyleBoxFlat:
 	style.shadow_color = Color(0.34, 0.20, 0.08, 0.32)
 	style.shadow_size = 10
 	style.shadow_offset = Vector2(0, 4)
+	return style
+
+
+func _prepare_announcement_style() -> StyleBoxFlat:
+	var style := _panel_style(Color(1.0, 0.88, 0.48, 0.98), Color(0.58, 0.31, 0.08), 2, 16)
+	style.content_margin_left = 14
+	style.content_margin_top = 8
+	style.content_margin_right = 14
+	style.content_margin_bottom = 8
+	style.shadow_color = Color(0.34, 0.18, 0.04, 0.36)
+	style.shadow_size = 12
+	style.shadow_offset = Vector2(0, 5)
 	return style
 
 

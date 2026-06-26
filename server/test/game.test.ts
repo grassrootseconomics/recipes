@@ -1330,6 +1330,53 @@ describe("platter, offers, and visibility", () => {
     expect(table.vouchers[requestedVoucherId].location).toEqual({ type: "hand", participantId: from.id });
   });
 
+  it("locks and resolves doubled promise-card offers atomically", () => {
+    const { table } = startAndDeposit(8, "doubled-card-offer");
+    const from = activeParticipants(table)[0] as Participant;
+    const to = firstOtherActive(table, from.id);
+    const offeredVoucherIds = handVoucherIds(table, from.id)
+      .filter((voucherId) => table.vouchers[voucherId].ownerParticipantId === from.id)
+      .slice(0, 2);
+    const requestedVoucherIds = handVoucherIds(table, to.id)
+      .filter((voucherId) => table.vouchers[voucherId].ownerParticipantId === to.id)
+      .slice(0, 2);
+    expect(offeredVoucherIds).toHaveLength(2);
+    expect(requestedVoucherIds).toHaveLength(2);
+    const requestedVoucher = table.vouchers[requestedVoucherIds[0] as string];
+
+    applyIntent(table, from.id, {
+      type: "create_offer",
+      toParticipantId: to.id,
+      offeredAssets: offeredVoucherIds.map((id) => ({ kind: "voucher", id })),
+      requestedAsset: {
+        kind: "voucher",
+        ingredientId: requestedVoucher.ingredientId,
+        ownerParticipantId: requestedVoucher.ownerParticipantId,
+        quantity: 2
+      }
+    });
+    const offer = Object.values(table.offers)[0];
+    expect(offer.offeredAssets).toHaveLength(2);
+    for (const voucherId of offeredVoucherIds) {
+      expect(table.vouchers[voucherId].location).toEqual({ type: "offer_lock", offerId: offer.id });
+    }
+
+    applyAsTurn(table, to.id, {
+      type: "respond_offer",
+      offerId: offer.id,
+      response: "accept",
+      voucherIds: requestedVoucherIds
+    });
+
+    expect(table.offers[offer.id]).toBeUndefined();
+    for (const voucherId of offeredVoucherIds) {
+      expect(table.vouchers[voucherId].location).toEqual({ type: "hand", participantId: to.id });
+    }
+    for (const voucherId of requestedVoucherIds) {
+      expect(table.vouchers[voucherId].location).toEqual({ type: "hand", participantId: from.id });
+    }
+  });
+
   it("allows direct offers of food pieces for promise cards", () => {
     const { table } = startAndDeposit(8, "food-piece-for-card-offer");
     const from = activeParticipants(table)[0] as Participant;
@@ -1373,6 +1420,53 @@ describe("platter, offers, and visibility", () => {
       itemOut: expect.stringContaining(table.dishParts[offeredPartId].dishName),
       itemBack: requestedVoucher.ingredientId[0].toUpperCase() + requestedVoucher.ingredientId.slice(1)
     });
+  });
+
+  it("locks and resolves doubled food-piece offers for promise cards", () => {
+    const { table } = startAndDeposit(8, "doubled-food-piece-offer");
+    const from = activeParticipants(table)[0] as Participant;
+    const to = firstOtherActive(table, from.id);
+    completeRecipeBySetup(table, from.id);
+    applyAsTurn(table, from.id, { type: "prepare" });
+    const offeredPartIds = inventoryDishPartIds(table, from.id).slice(0, 2);
+    const requestedVoucherIds = handVoucherIds(table, to.id)
+      .filter((voucherId) => table.vouchers[voucherId].ownerParticipantId === to.id)
+      .slice(0, 2);
+    expect(offeredPartIds).toHaveLength(2);
+    expect(requestedVoucherIds).toHaveLength(2);
+    const requestedVoucher = table.vouchers[requestedVoucherIds[0] as string];
+
+    applyAsTurn(table, from.id, {
+      type: "create_offer",
+      toParticipantId: to.id,
+      offeredAssets: offeredPartIds.map((id) => ({ kind: "dish_part", id })),
+      requestedAsset: {
+        kind: "voucher",
+        ingredientId: requestedVoucher.ingredientId,
+        ownerParticipantId: requestedVoucher.ownerParticipantId,
+        quantity: 2
+      }
+    });
+    const offer = Object.values(table.offers)[0];
+    expect(offer.offeredAssets).toHaveLength(2);
+    for (const partId of offeredPartIds) {
+      expect(table.dishParts[partId].location).toEqual({ type: "offer_lock", offerId: offer.id });
+    }
+
+    applyAsTurn(table, to.id, {
+      type: "respond_offer",
+      offerId: offer.id,
+      response: "accept",
+      voucherIds: requestedVoucherIds
+    });
+
+    expect(table.offers[offer.id]).toBeUndefined();
+    for (const partId of offeredPartIds) {
+      expect(table.dishParts[partId].location).toEqual({ type: "inventory", participantId: to.id });
+    }
+    for (const voucherId of requestedVoucherIds) {
+      expect(table.vouchers[voucherId].location).toEqual({ type: "hand", participantId: from.id });
+    }
   });
 
   it("allows direct offers of promise cards for food pieces", () => {
