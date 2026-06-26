@@ -1,0 +1,13 @@
+node_modules
+client
+art
+deploy
+scripts
+.git
+*.md
+!DESCRIPTION.md
+.env*
+.DS_Store
+*.log
+*.import
+.godot
