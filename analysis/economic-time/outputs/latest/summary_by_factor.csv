@@ -1,0 +1,65 @@
+factor,factorLabel,x,runs,successes,successRate,medianSuccessTurns,p25SuccessTurns,p75SuccessTurns,meanProductionTurns,meanSettlementTurns,meanInteractions,meanMaxHoardingIndex,meanScarcityEvents
+basket_thinness,Common Basket thinness,0,12,12,1,222,212,227,159.333,57.417,536.833,2.833,0
+basket_thinness,Common Basket thinness,0.05,12,12,1,199,188,210,145.583,55.917,536.333,2.583,0
+basket_thinness,Common Basket thinness,0.1,12,12,1,207,196,214,155.5,53.083,531.917,2.667,0
+basket_thinness,Common Basket thinness,0.15,12,12,1,215,205,231,156.333,64.333,538.667,2.75,0
+basket_thinness,Common Basket thinness,0.2,12,12,1,208,205,230,157.667,58.333,533,2.667,0
+basket_thinness,Common Basket thinness,0.25,12,12,1,218,214,233,161.5,64.333,534.083,2.333,0
+basket_thinness,Common Basket thinness,0.3,12,12,1,237,225,245,170.667,66.25,534.333,2.667,0
+basket_thinness,Common Basket thinness,0.35,12,12,1,241,236,251,175.083,69.25,536.167,2.833,0
+basket_thinness,Common Basket thinness,0.4,12,12,1,251,239,270,180.083,74.25,537.167,2.75,0
+basket_thinness,Common Basket thinness,0.45,12,12,1,260,251,275,189.583,76.917,530.917,2.75,0
+basket_thinness,Common Basket thinness,0.5,12,12,1,292,273,303,201.667,92.667,536.167,2.917,0
+basket_thinness,Common Basket thinness,0.55,12,12,1,277,267,303,208.083,81.417,531.083,2.667,0
+basket_thinness,Common Basket thinness,0.6,12,12,1,334,312,365,238.167,102.75,536.5,2.583,0
+basket_thinness,Common Basket thinness,0.65,12,12,1,359,319,398,249.667,119.917,533.583,2.833,0
+basket_thinness,Common Basket thinness,0.7,12,12,1,435,383,457,278.667,145.25,533.917,2.417,0
+basket_thinness,Common Basket thinness,0.75,12,11,0.917,538,440,621,351.727,181.818,537.909,2.818,0
+coordination_delay,Coordination delay,0,12,12,1,211,189,219,148,56.75,538.083,2.583,0
+coordination_delay,Coordination delay,0.05,12,12,1,203,183,222,151.583,53.5,534.75,2.833,0
+coordination_delay,Coordination delay,0.1,12,12,1,206,194,222,152.083,58.917,536,2.75,0
+coordination_delay,Coordination delay,0.15,12,12,1,212,196,218,157.917,58.667,534.333,2.583,0
+coordination_delay,Coordination delay,0.2,12,12,1,218,206,239,160.333,62.917,538.417,2.833,0
+coordination_delay,Coordination delay,0.25,12,12,1,229,209,244,168.417,62.917,533.917,2.333,0
+coordination_delay,Coordination delay,0.3,12,12,1,224,216,244,165.167,67.167,537,2.667,0
+coordination_delay,Coordination delay,0.35,12,12,1,223,212,241,170.667,62.667,531.5,2.667,0
+coordination_delay,Coordination delay,0.4,12,12,1,221,207,249,167.5,65.417,535.25,2.667,0
+coordination_delay,Coordination delay,0.45,12,12,1,245,234,255,169.083,78,535.833,2.5,0
+coordination_delay,Coordination delay,0.5,12,12,1,250,234,263,175.5,78.083,536.333,2.5,0
+coordination_delay,Coordination delay,0.55,12,12,1,255,223,271,178.5,74,534.417,2.5,0
+coordination_delay,Coordination delay,0.6,12,12,1,278,266,288,190.417,89.25,536.667,2.833,0
+coordination_delay,Coordination delay,0.65,12,12,1,281,261,294,197.167,85.417,537,2.667,0
+coordination_delay,Coordination delay,0.7,12,12,1,286,269,295,185.5,102.667,535.583,2.333,0
+coordination_delay,Coordination delay,0.75,12,12,1,280,269,331,199.917,92.833,536.333,2.5,0
+hoarding,Hoarding surplus,0,12,12,1,212,196,223,151.5,61.667,536.25,2.917,0
+hoarding,Hoarding surplus,0.05,12,12,1,211,187,215,153.75,53,532.917,2.833,0
+hoarding,Hoarding surplus,0.1,12,12,1,198,189,215,150.5,60.5,537.25,2.583,0
+hoarding,Hoarding surplus,0.15,12,12,1,215,201,223,155.833,60.417,537.083,2.583,0
+hoarding,Hoarding surplus,0.2,12,12,1,207,197,222,150.167,59.167,536.667,2.917,0
+hoarding,Hoarding surplus,0.25,12,12,1,212,194,229,154.333,60.333,535.417,2.833,0
+hoarding,Hoarding surplus,0.3,12,12,1,201,186,219,147.75,61.583,538.667,2.667,0
+hoarding,Hoarding surplus,0.35,12,12,1,195,185,213,148.833,53.917,533,2.583,0
+hoarding,Hoarding surplus,0.4,12,12,1,214,209,221,153.25,65.583,537.833,2.75,0
+hoarding,Hoarding surplus,0.45,12,12,1,217,209,222,153.583,65.583,535.667,2.667,0
+hoarding,Hoarding surplus,0.5,12,12,1,218,204,228,149.75,67.25,536,2.667,0
+hoarding,Hoarding surplus,0.55,12,12,1,218,200,232,152.083,68.25,536.917,2.667,0
+hoarding,Hoarding surplus,0.6,12,12,1,227,200,230,146.667,74.833,537.75,2.917,0
+hoarding,Hoarding surplus,0.65,12,12,1,229,217,258,153.667,88.75,538.083,2.75,0
+hoarding,Hoarding surplus,0.7,12,12,1,227,207,236,147.333,81.833,538.25,2.75,0
+hoarding,Hoarding surplus,0.75,12,12,1,256,232,278,153.833,104.833,540.75,2.417,0
+last_ingredient,Last-ingredient reluctance,0,12,12,1,212,195,224,152.667,58.25,535.583,2.75,0
+last_ingredient,Last-ingredient reluctance,0.05,12,12,1,206,193,213,158.75,53.083,532.667,2.417,2.167
+last_ingredient,Last-ingredient reluctance,0.1,12,12,1,220,202,237,166.667,60.417,537.417,2.75,3.25
+last_ingredient,Last-ingredient reluctance,0.15,12,12,1,250,229,263,195,60.5,538,2.667,7.833
+last_ingredient,Last-ingredient reluctance,0.2,12,12,1,251,233,283,200.583,58.667,538.167,2.75,10.333
+last_ingredient,Last-ingredient reluctance,0.25,12,12,1,263,247,278,220,59.75,537.917,2.583,12.5
+last_ingredient,Last-ingredient reluctance,0.3,12,12,1,295,276,310,240.583,53.333,534.25,2.667,19.833
+last_ingredient,Last-ingredient reluctance,0.35,12,12,1,292,272,317,240.083,55.5,535.917,2.833,18.583
+last_ingredient,Last-ingredient reluctance,0.4,12,12,1,293,288,340,261.25,52.333,535.25,2.583,25.25
+last_ingredient,Last-ingredient reluctance,0.45,12,12,1,341,313,369,296.417,55.333,537.083,2.5,30.75
+last_ingredient,Last-ingredient reluctance,0.5,12,12,1,366,303,397,317.167,53.667,539.917,2.5,33.667
+last_ingredient,Last-ingredient reluctance,0.55,12,12,1,389,337,492,362.667,56.75,534.833,2.583,45.417
+last_ingredient,Last-ingredient reluctance,0.6,12,12,1,454,413,488,403.833,55,535.917,2.25,52.167
+last_ingredient,Last-ingredient reluctance,0.65,12,12,1,478,429,596,453.083,53.833,535.667,2.667,68.333
+last_ingredient,Last-ingredient reluctance,0.7,12,10,0.833,558,547,583,492.2,56.3,532.9,2.5,77.9
+last_ingredient,Last-ingredient reluctance,0.75,12,1,0.083,466,466,466,419,47,539,2,70

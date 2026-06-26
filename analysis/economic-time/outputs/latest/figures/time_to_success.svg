@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img">
+<rect width="1200" height="760" fill="#f8fafc"/>
+<text x="76" y="38" font-size="25" font-weight="700" fill="#111827">Time To Settlement</text>
+<text x="76" y="62" font-size="14" fill="#4b5563">Median 8-player-turn cycles in the production-to-clearance cycle; bands show p25-p75 across cleared runs</text>
+<rect x="76" y="88" width="874" height="598" fill="#ffffff"/>
+<line x1="76" y1="686" x2="950" y2="686" stroke="#111827" stroke-width="1"/>
+<line x1="76" y1="88" x2="76" y2="686" stroke="#111827" stroke-width="1"/>
+<line x1="76" y1="686.0" x2="950" y2="686.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="66" y="690.0" text-anchor="end" font-size="12" fill="#4b5563">18.75</text>
+<line x1="76" y1="566.4" x2="950" y2="566.4" stroke="#e5e7eb" stroke-width="1"/>
+<text x="66" y="570.4" text-anchor="end" font-size="12" fill="#4b5563">30</text>
+<line x1="76" y1="446.8" x2="950" y2="446.8" stroke="#e5e7eb" stroke-width="1"/>
+<text x="66" y="450.8" text-anchor="end" font-size="12" fill="#4b5563">41.25</text>
+<line x1="76" y1="327.2" x2="950" y2="327.2" stroke="#e5e7eb" stroke-width="1"/>
+<text x="66" y="331.2" text-anchor="end" font-size="12" fill="#4b5563">52.5</text>
+<line x1="76" y1="207.6" x2="950" y2="207.6" stroke="#e5e7eb" stroke-width="1"/>
+<text x="66" y="211.6" text-anchor="end" font-size="12" fill="#4b5563">63.75</text>
+<line x1="76" y1="88.0" x2="950" y2="88.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="66" y="92.0" text-anchor="end" font-size="12" fill="#4b5563">75</text>
+<line x1="76.0" y1="88" x2="76.0" y2="686" stroke="#f3f4f6" stroke-width="1"/>
+<text x="76.0" y="708" text-anchor="middle" font-size="12" fill="#4b5563">0.1</text>
+<line x1="155.5" y1="88" x2="155.5" y2="686" stroke="#f3f4f6" stroke-width="1"/>
+<text x="155.5" y="708" text-anchor="middle" font-size="12" fill="#4b5563">0.15</text>
+<line x1="393.8" y1="88" x2="393.8" y2="686" stroke="#f3f4f6" stroke-width="1"/>
+<text x="393.8" y="708" text-anchor="middle" font-size="12" fill="#4b5563">0.3</text>
+<line x1="632.2" y1="88" x2="632.2" y2="686" stroke="#f3f4f6" stroke-width="1"/>
+<text x="632.2" y="708" text-anchor="middle" font-size="12" fill="#4b5563">0.45</text>
+<line x1="870.5" y1="88" x2="870.5" y2="686" stroke="#f3f4f6" stroke-width="1"/>
+<text x="870.5" y="708" text-anchor="middle" font-size="12" fill="#4b5563">0.6</text>
+<line x1="950.0" y1="88" x2="950.0" y2="686" stroke="#f3f4f6" stroke-width="1"/>
+<text x="950.0" y="708" text-anchor="middle" font-size="12" fill="#4b5563">0.65</text>
+<polygon points="76.0,570.4 155.5,535.8 234.9,509.3 314.4,515.9 393.8,473.4 473.3,464.1 552.7,433.5 632.2,395.0 711.6,357.8 791.1,231.5 870.5,236.8 950.0,93.3 950.0,315.2 870.5,336.5 791.1,437.5 711.6,482.7 632.2,469.4 552.7,502.6 473.3,523.9 393.8,518.6 314.4,557.1 234.9,575.7 155.5,581.0 76.0,616.9" fill="#ca8a04" opacity="0.14"/>
+<path d="M 76.0 593.0 L 155.5 553.1 L 234.9 551.8 L 314.4 535.8 L 393.8 493.3 L 473.3 497.3 L 552.7 496.0 L 632.2 432.2 L 711.6 399.0 L 791.1 368.4 L 870.5 282.0 L 950.0 250.1" fill="none" stroke="#ca8a04" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="76.0" cy="593.0" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="155.5" cy="553.1" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="234.9" cy="551.8" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="314.4" cy="535.8" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="393.8" cy="493.3" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="473.3" cy="497.3" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="552.7" cy="496.0" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="632.2" cy="432.2" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="711.6" cy="399.0" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="791.1" cy="368.4" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="870.5" cy="282.0" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="950.0" cy="250.1" r="4.5" fill="#ca8a04" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="76.0,601.0 155.5,578.4 234.9,579.7 314.4,575.7 393.8,559.8 473.3,551.8 552.7,526.5 632.2,519.9 711.6,482.7 791.1,482.7 870.5,400.3 950.0,356.4 950.0,461.4 870.5,470.7 791.1,530.5 711.6,522.5 632.2,551.8 552.7,567.7 473.3,571.7 393.8,586.3 314.4,601.0 234.9,612.9 155.5,612.9 76.0,624.9" fill="#059669" opacity="0.14"/>
+<path d="M 76.0 610.3 L 155.5 599.6 L 234.9 608.9 L 314.4 595.6 L 393.8 570.4 L 473.3 565.1 L 552.7 551.8 L 632.2 539.8 L 711.6 497.3 L 791.1 517.2 L 870.5 441.5 L 950.0 408.3" fill="none" stroke="#059669" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="76.0" cy="610.3" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="155.5" cy="599.6" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="234.9" cy="608.9" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="314.4" cy="595.6" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="393.8" cy="570.4" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="473.3" cy="565.1" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="552.7" cy="551.8" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="632.2" cy="539.8" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="711.6" cy="497.3" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="791.1" cy="517.2" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="870.5" cy="441.5" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="950.0" cy="408.3" r="4.5" fill="#059669" stroke="#ffffff" stroke-width="1.5"/>
+<text x="513.0" y="740" text-anchor="middle" font-size="13" fill="#374151">x: scenario intensity</text>
+<text x="20" y="387.0" transform="rotate(-90 20 387.0)" text-anchor="middle" font-size="13" fill="#374151">cycles (8 player turns)</text>
+<line x1="984" y1="92" x2="1006" y2="92" stroke="#ca8a04" stroke-width="4"/>
+<circle cx="995" cy="92" r="4" fill="#ca8a04" stroke="#ffffff" stroke-width="1"/>
+<text x="1016" y="97" font-size="13" fill="#111827">Scarcity Hoarding</text>
+<line x1="984" y1="120" x2="1006" y2="120" stroke="#059669" stroke-width="4"/>
+<circle cx="995" cy="120" r="4" fill="#059669" stroke="#ffffff" stroke-width="1"/>
+<text x="1016" y="125" font-size="13" fill="#111827">Common Basket thinness</text>
+</svg>

@@ -109,3 +109,9 @@ Future analysis work should treat the transaction history as an economic event l
 - player-level productivity and exchange-network centrality.
 
 These should be generated from exported transaction CSVs and, where needed, richer state snapshots. The live client should keep showing compact, readable summaries while deeper analysis lives in scripts and reports.
+
+The first headless Monte Carlo analysis package lives in `analysis/economic-time/`.
+It varies coordination delay, hoarding, last-ingredient reluctance, Common Basket
+thinness, then writes reusable run-level CSVs, per-event timeline CSVs for
+later animation, and final SVG/PNG figures for the production-to-clearance
+cycle.
