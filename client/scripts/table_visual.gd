@@ -19,7 +19,7 @@ const OPENING_OFFERINGS_PER_PLAYER := 2
 # [5] [1] [2] [6]
 const BASKET_CENTER_OUT_SLOTS := [5, 6, 1, 2, 4, 7, 3, 0]
 const TABLE_CONTENT_WIDTH := 680
-const TABLE_CONTENT_HEIGHT := 960
+const TABLE_CONTENT_HEIGHT := 940
 const BASKET_BACKDROP_SIZE := Vector2(668, 230)
 const BASKET_SLOT_SIZE := Vector2(118, 82)
 const BASKET_COMPACT_SLOT_SIZE := Vector2(92, 52)
@@ -142,47 +142,38 @@ class BasketBackdrop:
 		return dx * dx + dy * dy <= 1.0
 
 
-class ProgressStars:
+class StarPip:
 	extends Control
 
-	var filled_count := 0
-	var total_count := 3
+	var filled := false
 	var glowing := false
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		custom_minimum_size = Vector2(54, 22)
+		custom_minimum_size = Vector2(16, 16)
 
-	func set_progress(filled: int, total: int, should_glow := false) -> void:
-		total_count = maxi(1, total)
-		filled_count = clampi(filled, 0, total_count)
+	func set_state(should_fill: bool, should_glow := false) -> void:
+		filled = should_fill
 		glowing = should_glow
 		queue_redraw()
 
-	func _notification(what: int) -> void:
-		if what == NOTIFICATION_RESIZED:
-			queue_redraw()
-
 	func _draw() -> void:
-		var total := maxi(1, total_count)
-		var width_per_star := size.x / float(total)
-		var outer := minf(width_per_star * 0.42, size.y * 0.45)
-		var inner := outer * 0.48
-		var y := size.y * 0.52
-		for index in range(total):
-			var center := Vector2(width_per_star * (float(index) + 0.5), y)
-			var filled := index < filled_count
-			if glowing and filled:
-				draw_circle(center, outer * 1.45, Color(1.0, 0.62, 0.06, 0.26))
-			var points := _star_points(center, outer, inner)
-			var shadow := PackedVector2Array()
-			for point in points:
-				shadow.append(point + Vector2(1.0, 1.0))
+		var radius := minf(size.x, size.y) * 0.42
+		var center := size * 0.5
+		if glowing and filled:
+			draw_circle(center, radius * 1.45, Color(1.0, 0.62, 0.06, 0.26))
+		var points := _star_points(center, radius, radius * 0.48)
+		var shadow := PackedVector2Array()
+		for point in points:
+			shadow.append(point + Vector2(1.0, 1.0))
+		if filled:
 			draw_colored_polygon(shadow, Color(0.25, 0.16, 0.06, 0.24))
-			draw_colored_polygon(points, Color(1.0, 0.70, 0.12) if filled else Color(1.0, 0.96, 0.78, 0.72))
-			var closed := points.duplicate()
-			closed.append(points[0])
-			draw_polyline(closed, Color(0.38, 0.21, 0.04) if filled else Color(0.48, 0.38, 0.22), 1.8, true)
+			draw_colored_polygon(points, Color(1.0, 0.70, 0.12))
+		else:
+			draw_colored_polygon(points, Color(1.0, 0.98, 0.88, 0.18))
+		var closed := points.duplicate()
+		closed.append(points[0])
+		draw_polyline(closed, Color(0.38, 0.21, 0.04) if filled else Color(0.66, 0.55, 0.35, 0.86), 1.8, true)
 
 	func _star_points(center: Vector2, outer_radius: float, inner_radius: float) -> PackedVector2Array:
 		var points := PackedVector2Array()
@@ -191,6 +182,54 @@ class ProgressStars:
 			var angle := -PI * 0.5 + float(point_index) * PI / 5.0
 			points.append(Vector2(center.x + cos(angle) * radius, center.y + sin(angle) * radius))
 		return points
+
+
+class ProgressStars:
+	extends HBoxContainer
+
+	var filled_count := 0
+	var total_count := 3
+	var glowing := false
+	var star_size := 16.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		alignment = BoxContainer.ALIGNMENT_CENTER
+		add_theme_constant_override("separation", 1)
+		custom_minimum_size = Vector2(52, 18)
+
+	func set_star_size(value: float) -> void:
+		star_size = maxf(10.0, value)
+		_update_minimum_size()
+		_rebuild()
+
+	func set_progress(filled: int, total: int, should_glow := false) -> void:
+		total_count = maxi(1, total)
+		filled_count = clampi(filled, 0, total_count)
+		glowing = should_glow
+		_update_minimum_size()
+		_rebuild()
+
+	func _notification(what: int) -> void:
+		if what == NOTIFICATION_READY:
+			_rebuild()
+
+	func _update_minimum_size() -> void:
+		var width := float(total_count) * star_size + float(maxi(0, total_count - 1))
+		custom_minimum_size = Vector2(width, star_size)
+
+	func _rebuild() -> void:
+		if not is_inside_tree():
+			return
+		for child in get_children():
+			remove_child(child)
+			child.queue_free()
+		for index in range(total_count):
+			var pip := StarPip.new()
+			pip.name = "StarPip_%s" % index
+			pip.custom_minimum_size = Vector2(star_size, star_size)
+			pip.set_state(index < filled_count, glowing and index < filled_count)
+			add_child(pip)
 
 
 class CheckmarkBadge:
@@ -925,7 +964,7 @@ func _build() -> void:
 	_recipe_title_prefix_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_recipe_title_stars = ProgressStars.new()
 	_recipe_title_stars.name = "RecipeTitleStars"
-	_recipe_title_stars.custom_minimum_size = Vector2(42, 16)
+	_recipe_title_stars.set_star_size(13.0)
 	_recipe_name_label = _label("")
 	_recipe_name_label.name = "RecipeTitleLabel"
 	_recipe_name_label.add_theme_font_size_override("font_size", 16)
@@ -1369,10 +1408,11 @@ func _basket_ingredient_slot(ingredient_id: String, group: Dictionary, visual_sl
 	if group.is_empty():
 		return slot
 
-	var meta := VisualAssets.ingredient_meta(ingredient_id)
+	var card_count := int(group.get("count", 0))
+	var meta := _card_meta_with_stack(VisualAssets.ingredient_meta(ingredient_id), card_count)
 	var label := "%s x%s" % [
 		_ingredient_display(ingredient_id),
-		int(group.get("count", 0))
+		card_count
 	]
 	var button := _visual_card("", label, meta, slot_size, func(g := group) -> void:
 		_on_platter_voucher_group_pressed(g)
@@ -1576,7 +1616,10 @@ func _render_eating_action_controls() -> void:
 		return
 	var groups := _food_part_group_options(_snapshot.get("ownFoodParts", []))
 	if groups.is_empty():
-		_redeem_box.add_child(_action_label("No finished dish pieces to eat."))
+		if _held_food_part_total() > 0:
+			_redeem_box.add_child(_action_label("You have shared all your food. Waiting for other cooks."))
+		else:
+			_redeem_box.add_child(_action_label("All food is shared. Finishing the table."))
 		return
 	_redeem_box.add_child(_action_label("Ready to eat."))
 	var button := _action_button("Share food.", _take_bite_action)
@@ -1686,7 +1729,7 @@ func _empty_recipe_title() -> String:
 		"settlement":
 			return "Dish Pieces Held"
 		"eating":
-			return "Food to Eat"
+			return "Food to Share"
 		_:
 			return "Dishes Made"
 
@@ -2250,22 +2293,22 @@ func _dish_summary_cell(text: String) -> Label:
 
 func _dish_progress_cell(name_text: String, completed: int, target: int) -> Control:
 	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(112, 40)
+	box.custom_minimum_size = Vector2(112, 44)
 	box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", 0)
 	var name := _muted_label(name_text)
-	name.custom_minimum_size = Vector2(108, 20)
+	name.custom_minimum_size = Vector2(108, 22)
 	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	box.add_child(name)
 	if target > 0:
 		var center := CenterContainer.new()
-		center.custom_minimum_size = Vector2(108, 18)
+		center.custom_minimum_size = Vector2(108, 14)
 		var stars := ProgressStars.new()
 		stars.name = "DishProgressStars"
-		stars.custom_minimum_size = Vector2(44, 16)
+		stars.set_star_size(11.0)
 		stars.set_progress(completed, target, completed >= target)
 		if completed >= target:
 			_start_star_pulse(stars)
@@ -2348,11 +2391,12 @@ func _render_hand() -> void:
 		var group: Dictionary = raw_group
 		count += 1
 		var ingredient_id := str(group.get("ingredientId", ""))
-		var meta := VisualAssets.ingredient_meta(ingredient_id)
+		var card_count := int(group.get("count", 0))
+		var meta := _card_meta_with_stack(VisualAssets.ingredient_meta(ingredient_id), card_count)
 		var has_stock := _voucher_group_has_stock(group)
 		var label := "%s x%s" % [
 			_ingredient_display(ingredient_id),
-			int(group.get("count", 0))
+			card_count
 		]
 		if not has_stock:
 			label += "\nNo stock"
@@ -2649,7 +2693,7 @@ func _take_bite_action() -> void:
 		return
 	var groups := _food_part_group_options(_snapshot.get("ownFoodParts", []))
 	if groups.is_empty():
-		status_requested.emit("No finished dish pieces to eat.")
+		status_requested.emit("You have shared all your food.")
 		return
 	intent_requested.emit({"type": "bite_all"})
 	status_requested.emit("Time to eat!")
@@ -7115,11 +7159,47 @@ func _visual_card(top_text: String, bottom_text: String, meta: Dictionary, minim
 	button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	button.clip_contents = true
 	_apply_button_style(button, meta.get("color", Color(0.8, 0.8, 0.8)), Color(0.30, 0.35, 0.42), 1)
+	_add_card_stack_layers(button, meta)
 	_add_visual_content(button, top_text, bottom_text, meta, minimum, _contrast_ink(meta.get("color", Color(0.8, 0.8, 0.8))), true)
 	_add_card_inset_outline(button, Color(0.30, 0.35, 0.42), 1)
 	if callback.is_valid():
 		button.pressed.connect(callback)
 	return button
+
+
+func _card_meta_with_stack(meta: Dictionary, count: int) -> Dictionary:
+	var stacked := meta.duplicate(true)
+	stacked["stacked_card"] = count > 1
+	stacked["stack_count"] = count
+	return stacked
+
+
+func _add_card_stack_layers(button: Button, meta: Dictionary) -> void:
+	if not bool(meta.get("stacked_card", false)):
+		return
+	var stack_count := clampi(int(meta.get("stack_count", 0)), 1, 4)
+	var layers := stack_count - 1
+	if layers <= 0:
+		return
+	var base_color: Color = meta.get("color", Color(0.8, 0.8, 0.8))
+	var border_color := Color(1.0, 0.98, 0.88, 0.80)
+	for layer_index in range(layers, 0, -1):
+		var layer := PanelContainer.new()
+		layer.name = "CardStackLayer_%s" % layer_index
+		layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+		var offset := layer_index * 4
+		layer.offset_left = offset
+		layer.offset_top = 0
+		layer.offset_right = 0
+		layer.offset_bottom = -offset
+		var style := _panel_style(Color(base_color.r, base_color.g, base_color.b, 0.10), border_color, 2, 8)
+		style.content_margin_left = 0
+		style.content_margin_top = 0
+		style.content_margin_right = 0
+		style.content_margin_bottom = 0
+		layer.add_theme_stylebox_override("panel", style)
+		button.add_child(layer)
 
 
 func _player_tile(top_text: String, bottom_text: String, meta: Dictionary, avatar_texture: Texture2D, offer_indicator: String, is_turn: bool, completed_dishes: int, target_dishes: int, minimum: Vector2, callback: Callable) -> Button:
@@ -7140,31 +7220,26 @@ func _player_tile(top_text: String, bottom_text: String, meta: Dictionary, avata
 func _add_player_tile_content(button: Button, top_text: String, bottom_text: String, meta: Dictionary, avatar_texture: Texture2D, offer_indicator: String, is_turn: bool, completed_dishes: int, target_dishes: int) -> void:
 	var turn_ink := Color(0.34, 0.18, 0.04)
 	var turn_outline := Color(1.0, 0.78, 0.18, 0.92)
-	var name_row := HBoxContainer.new()
-	name_row.name = "CookNameRow"
-	name_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	name_row.add_theme_constant_override("separation", 2)
-	name_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var name := _card_label(top_text, turn_ink if is_turn else TEXT_DARK, 14)
+	var name := _card_label(top_text, turn_ink if is_turn else TEXT_DARK, 13)
 	name.name = "CookNameLabel"
 	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	name.autowrap_mode = TextServer.AUTOWRAP_OFF
-	name.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	name.clip_text = true
 	name.add_theme_color_override("font_outline_color", turn_outline if is_turn else Color(0.96, 0.90, 0.72, 0.88))
 	name.add_theme_constant_override("outline_size", 2 if is_turn else 1)
 	if target_dishes > 0 and completed_dishes >= target_dishes:
 		_apply_star_completion_style(name)
-	name_row.add_child(name)
+	_place_overlay(name, 2, 0, -40, 22)
+	button.add_child(name)
 	if target_dishes > 0:
 		var stars := ProgressStars.new()
 		stars.name = "CookProgressStars"
-		stars.custom_minimum_size = Vector2(30, 12)
+		stars.set_star_size(10.0)
 		stars.set_progress(completed_dishes, target_dishes, completed_dishes >= target_dishes)
 		if completed_dishes >= target_dishes:
 			_start_star_pulse(stars)
-		name_row.add_child(stars)
-	_place_overlay(name_row, 2, 0, -2, 18)
-	button.add_child(name_row)
+		_place_overlay(stars, 88, 5, -2, 17)
+		button.add_child(stars)
 
 	var texture = meta.get("texture", null)
 	if texture is Texture2D:

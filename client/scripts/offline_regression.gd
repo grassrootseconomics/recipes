@@ -28,6 +28,7 @@ func _initialize() -> void:
 	_regression_same_card_offer_rejected(store)
 	_regression_stock_depleted_cards_not_usable(store)
 	_regression_lifecycle(store)
+	_regression_eating_turn_skips_empty_hands(store)
 	_regression_settlement_requires_returned_promise_cards(store)
 	_regression_bot_settlement_avoids_food_part_cycle(store)
 	_regression_bot_settlement_shortfall_extra_own_card(store)
@@ -194,6 +195,31 @@ func _regression_settlement_requires_returned_promise_cards(store: Node) -> void
 	_require(bool(holder_public.get("cleared", false)) and int(holder_public.get("foreignCardsInHand", 0)) == 0, "holder settles after returning foreign card")
 	_require(bool(owner_public.get("cleared", false)) and int(owner_public.get("ownCardsInOtherHands", 0)) == 0, "owner settles after own card returns to basket")
 	_require(str(store.table.get("phase", "")) == "eating", "offline settlement enters eating only after cards are returned")
+
+
+func _regression_eating_turn_skips_empty_hands(store: Node) -> void:
+	_setup_round_robin_table(store)
+	for participant_id in ["p1", "p2"]:
+		_complete_recipe(store, participant_id)
+		store.table["currentTurnParticipantId"] = participant_id
+		_require(store.handle_intent({"type": "prepare"}, participant_id), "prepare eating skip dish: %s" % _last_error)
+	for participant_id in _active_ids(store.latest_snapshot):
+		store.table["participants"][participant_id]["dishCount"] = 1
+		store.table["recipes"].erase(participant_id)
+	_force_all_accounts_cleared(store)
+	store._enter_settlement_phase()
+	store._advance_settlement_if_ready()
+	_require(str(store.table.get("phase", "")) == "eating", "eating skip table enters eating")
+	_require(_inventory_dish_parts(store, "p1").size() > 0, "p1 has food before eating")
+	_require(_inventory_dish_parts(store, "p2").size() > 0, "p2 has food before eating")
+	_require(_inventory_dish_parts(store, "p3").is_empty(), "p3 has no food before eating")
+	store.table["currentTurnParticipantId"] = "p1"
+	_require(store.handle_intent({"type": "bite_all"}, "p1"), "p1 bite-all succeeds: %s" % _last_error)
+	_require(_inventory_dish_parts(store, "p1").is_empty(), "p1 has no food after bite-all")
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "p2", "eating turn skips empty hands and advances to next eater")
+	_require(store.handle_intent({"type": "bite_all"}, "p2"), "p2 bite-all succeeds: %s" % _last_error)
+	_require(str(store.table.get("phase", "")) == "complete", "final bite-all completes offline table")
+	_require(str(store.table.get("currentTurnParticipantId", "")) == "", "complete offline table clears current turn")
 
 
 func _regression_bot_settlement_avoids_food_part_cycle(store: Node) -> void:

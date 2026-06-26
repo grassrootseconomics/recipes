@@ -997,6 +997,9 @@ func _bite_all(actor: Dictionary) -> bool:
 		_record_transaction(actor, "Eat", str(actor.get("name", "")), _asset_label({"kind": "dish_part", "value": part}), "Eaten")
 	if _all_dish_parts_eaten():
 		table["phase"] = "complete"
+		table["currentTurnParticipantId"] = ""
+	else:
+		_advance_turn(str(actor.get("id", "")))
 	return true
 
 
@@ -2058,9 +2061,20 @@ func _next_turn_participant_id(after_id: String) -> String:
 	for offset in range(1, order.size() + 1):
 		var index := offset - 1 if after_id == "" else (start_index + offset) % order.size()
 		var participant: Dictionary = table["participants"][order[index]]
-		if str(participant.get("role", "")) == "active":
+		if _participant_can_receive_turn(participant):
 			return str(participant.get("id", ""))
 	return ""
+
+
+func _participant_can_receive_turn(participant: Dictionary) -> bool:
+	if str(participant.get("role", "")) != "active":
+		return false
+	var phase := str(table.get("phase", "lobby"))
+	if phase == "playing" or phase == "settlement":
+		return true
+	if phase == "eating":
+		return not _inventory_dish_parts(str(participant.get("id", ""))).is_empty()
+	return false
 
 
 func _turn_order_participant_ids() -> Array:

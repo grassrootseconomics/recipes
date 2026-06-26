@@ -2733,6 +2733,10 @@ describe("winning and eating", () => {
     const ownerBites = Object.values(harness.table.dishes).reduce((total, dish) => total + (dish.biteCounts[owner.id] ?? 0), 0);
     expect(ownerBites).toBe(DISH_PARTS_PER_DISH);
     expect(harness.table.transactionHistory.filter((row) => row.name === owner.name && row.action === "Eat")).toHaveLength(DISH_PARTS_PER_DISH);
+    const nextEaterId = harness.table.currentTurnParticipantId;
+    expect(nextEaterId).toBeDefined();
+    expect(nextEaterId).not.toBe(owner.id);
+    expect(inventoryDishPartIds(harness.table, nextEaterId ?? "")).not.toHaveLength(0);
   });
 
   it("has bots settle accounts and eat held food parts deterministically", () => {

@@ -245,6 +245,11 @@ cd /home/wor/src/recipes
 npm run serve:web -- --host 127.0.0.1 --port 8081
 ```
 
+The local smoke server sends no-cache headers. If an older browser session still
+shows stale UI, clear the old Godot service worker once in DevTools:
+`Application -> Service Workers -> Unregister`, then
+`Application -> Storage -> Clear site data`.
+
 Remote static Web hosting:
 
 ```bash
@@ -355,7 +360,7 @@ sudo chown -R www-data:www-data /var/www/recipes
 sudo systemctl reload nginx
 ```
 
-If `client/data/servers.json`, Godot scripts, art, or recipes change, rebuild the Web export and copy `client/web/` again. Browser clients may also need a hard refresh or service-worker reset after an update because the Godot Web export includes PWA caching.
+If `client/data/servers.json`, Godot scripts, art, or recipes change, rebuild the Web export and copy `client/web/` again. The current export does not intentionally use a PWA service worker; if a tester previously loaded an older build, they may need to unregister the old service worker and clear site data once.
 
 Remote smoke checks:
 

@@ -21,6 +21,7 @@ const DESKTOP_ANDROID_PREVIEW_MARGIN := 48
 const TABLE_VISUAL_BOTTOM_SAFE_MARGIN := 18.0
 const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 1.25
 const PUBLIC_TABLES_POLL_SECONDS := 2.0
+const MAX_LOBBY_SEAT_NAME_LENGTH := 12
 
 var _status_label: Label
 var _server_input: LineEdit
@@ -3249,7 +3250,8 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 	var displayed_name := str(participant.get("name", ""))
 	if _lobby_pending_seat_names.has(participant_id):
 		displayed_name = str(_lobby_pending_seat_names.get(participant_id, displayed_name))
-	var name_input := _line_edit("Seat name", displayed_name)
+	var name_input := _line_edit("Seat name", _sanitize_lobby_seat_name(displayed_name))
+	name_input.max_length = MAX_LOBBY_SEAT_NAME_LENGTH
 	name_input.custom_minimum_size = Vector2(130, 38) if compact else Vector2(180, 50)
 	name_input.editable = name_editable
 	name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3323,7 +3325,9 @@ func _seat_ingredient_id(snapshot: Dictionary, participant: Dictionary, seat_ind
 
 
 func _rename_lobby_seat(participant_id: String, input: LineEdit) -> void:
-	var name := input.text.strip_edges()
+	var name := _sanitize_lobby_seat_name(input.text)
+	if input.text != name:
+		input.text = name
 	if participant_id == "":
 		return
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
@@ -3338,17 +3342,17 @@ func _remember_lobby_seat_name_edit(participant_id: String, name: String) -> voi
 	if participant_id == "":
 		return
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
-	var trimmed := name.strip_edges()
+	var trimmed := _sanitize_lobby_seat_name(name)
 	if not participant.is_empty() and trimmed == str(participant.get("name", "")).strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
 	else:
-		_lobby_pending_seat_names[participant_id] = name
+		_lobby_pending_seat_names[participant_id] = trimmed
 
 
 func _publish_lobby_seat_name_edit(participant_id: String, name: String) -> void:
 	if participant_id == "":
 		return
-	var trimmed := name.strip_edges()
+	var trimmed := _sanitize_lobby_seat_name(name)
 	if trimmed == "":
 		return
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
@@ -3362,6 +3366,13 @@ func _publish_lobby_seat_name_edit(participant_id: String, name: String) -> void
 func _schedule_lobby_name_publish() -> void:
 	if is_instance_valid(_lobby_name_publish_timer):
 		_lobby_name_publish_timer.start(LOBBY_NAME_PUBLISH_DELAY_SECONDS)
+
+
+func _sanitize_lobby_seat_name(name: String) -> String:
+	var trimmed := name.strip_edges()
+	if trimmed.length() > MAX_LOBBY_SEAT_NAME_LENGTH:
+		return trimmed.substr(0, MAX_LOBBY_SEAT_NAME_LENGTH)
+	return trimmed
 
 
 func _flush_pending_lobby_name_edits() -> void:
@@ -3415,7 +3426,7 @@ func _capture_lobby_seat_setup_edits() -> Array:
 		var toggle := _lobby_seat_kind_inputs.get(participant_id, null) as OptionButton
 		var name := str(participant.get("name", "")).strip_edges()
 		if input != null and is_instance_valid(input):
-			name = input.text.strip_edges()
+			name = _sanitize_lobby_seat_name(input.text)
 		var kind := "bot" if str(participant.get("kind", "human")) == "bot" else "player"
 		if toggle != null and is_instance_valid(toggle):
 			kind = "bot" if toggle.selected == 1 else "player"
@@ -3444,7 +3455,7 @@ func _save_lobby_seat_setup_from_edits(edits: Array) -> void:
 		if kind != "player" and kind != "bot":
 			kind = "bot"
 		seats.append({
-			"name": str(edit.get("name", "")).strip_edges(),
+			"name": _sanitize_lobby_seat_name(str(edit.get("name", ""))),
 			"kind": kind
 		})
 	if seats.is_empty():
@@ -3466,7 +3477,7 @@ func _commit_lobby_seat_setup_edit(edit: Dictionary) -> void:
 	var participant_id := str(edit.get("participantId", ""))
 	if participant_id == "":
 		return
-	var desired_name := str(edit.get("name", "")).strip_edges()
+	var desired_name := _sanitize_lobby_seat_name(str(edit.get("name", "")))
 	var desired_kind := str(edit.get("kind", "player"))
 	if desired_kind != "player" and desired_kind != "bot":
 		desired_kind = "player"

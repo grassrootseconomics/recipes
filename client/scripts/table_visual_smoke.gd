@@ -61,6 +61,7 @@ func _initialize() -> void:
 	var hand_card := visual.find_child("HandCard_rice", true, false) as Button
 	_require(hand_card != null and hand_card.custom_minimum_size == Vector2(96, 90), "Promise card keeps its fixed tile size")
 	_require(hand_card != null and hand_card.find_child("CardInsetOutline", true, false) != null, "Promise card draws an inset outline so borders are not clipped")
+	_require(hand_card != null and hand_card.find_child("CardStackLayer_1", true, false) != null, "grouped promise cards draw a tight stack layer without changing tile size")
 	_require(visual.find_child("Title_Cooks", true, false) == null, "visual table removes the separate Cooks title")
 	_require(_has_label_containing(visual, "Amina's Actions"), "Actions panel title includes the viewing cook name")
 	var table_menu_button := visual.find_child("TableMenuButton", true, false) as Button
@@ -200,7 +201,7 @@ func _initialize() -> void:
 	await process_frame
 	_require(food_popup != null and food_popup.visible, "food-piece info popup stays open across table refreshes")
 	food_popup.hide()
-	_require(visual.preferred_visual_size() == Vector2(700, 960), "visual table reports a stable preferred size")
+	_require(visual.preferred_visual_size() == Vector2(700, 940), "visual table reports a stable preferred size")
 	var full_tray := snapshot.duplicate(true)
 	full_tray["ownHand"] = [
 		{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
@@ -643,7 +644,7 @@ func _initialize() -> void:
 		{"id": "dish_3_part_1", "dishId": "dish_3", "dishName": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}}
 	]
 	visual.debug_apply_snapshot(eating)
-	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Food to Eat", "eating phase labels held food as food to eat")
+	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Food to Share", "eating phase labels held food as food to share")
 	_require(_has_text_containing(visual, "2 left"), "eating phase shows held pieces still left")
 	_require(_has_text_containing(visual, "3 eaten"), "eating phase shows bites already eaten")
 	var eating_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
@@ -788,7 +789,7 @@ func _initialize() -> void:
 	_require(_has_text_containing(visual, "Rice: 10"), "complete phase summarizes raw ingredient stock")
 	_require(_has_text_containing(visual, "Bites: 4"), "complete phase summarizes bites with label")
 	_require(int(visual.debug_stats.get("completeBiteSummaryCount", 0)) == 4, "complete phase summarizes bites for active players")
-	_require(visual.preferred_visual_size() == Vector2(700, 960), "complete phase keeps the same preferred table size")
+	_require(visual.preferred_visual_size() == Vector2(700, 940), "complete phase keeps the same preferred table size")
 	visual.call("_open_game_stats_popup")
 	await process_frame
 	_require(int(visual.debug_stats.get("offerPopupWidth", 0)) > 0 and int(visual.debug_stats.get("offerPopupWidth", 0)) <= 600, "game stats popup keeps a safe responsive width")

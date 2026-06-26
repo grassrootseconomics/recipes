@@ -2003,7 +2003,7 @@ function shouldGateTurn(table: Table, intent: Intent): boolean {
 }
 
 function shouldAdvanceTurnAfterIntent(table: Table, intent: Intent): boolean {
-  return intent.type === "pass_turn" || intent.type === "redeem_all_and_pass_turn";
+  return intent.type === "pass_turn" || intent.type === "redeem_all_and_pass_turn" || intent.type === "bite_all";
 }
 
 function requireCurrentTurn(table: Table, actor: Participant): void {
@@ -2056,7 +2056,15 @@ function participantCanReceiveTurn(table: Table, participant: Participant): bool
   if (table.phase === "playing") {
     return true;
   }
-  return table.phase === "settlement" || table.phase === "eating";
+  if (table.phase === "settlement") {
+    return true;
+  }
+  if (table.phase === "eating") {
+    return Object.values(table.dishParts ?? {}).some(
+      (part) => part.location.type === "inventory" && part.location.participantId === participant.id
+    );
+  }
+  return false;
 }
 
 function requireParticipant(table: Table, participantId: string): Participant {

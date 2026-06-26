@@ -25,6 +25,11 @@ esac
 cp "$ROOT_DIR/CNAME" "$WEB_DIR/CNAME"
 touch "$WEB_DIR/.nojekyll"
 
+# Godot's PWA service worker can keep serving stale index.pck/index.html while
+# iterating locally. Recipes is not relying on offline PWA caching yet, so keep
+# the export cache-neutral until a production cache strategy is intentional.
+rm -f "$WEB_DIR/index.service.worker.js" "$WEB_DIR/index.offline.html"
+
 if [[ "$WEB_DIR" = /* ]]; then
   DISPLAY_WEB_DIR="$WEB_DIR"
 else
