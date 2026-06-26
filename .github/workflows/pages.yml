@@ -1,0 +1,61 @@
+name: Deploy static content to Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.5.1
+          use-dotnet: false
+
+      - name: Generate PWA icons
+        run: |
+          python3 -c "
+          from PIL import Image
+          for w,h in [(144,144),(180,180),(512,512)]:
+              img = Image.new('RGBA', (w,h), (20,18,13,255))
+              img.save(f'client/web/index.{w}x{h}.png')
+          img = Image.new('RGBA', (512,512), (20,18,13,255))
+          img.save('client/web/index.icon.png')
+          "
+
+      - name: Build Godot web export
+        run: |
+          mkdir -p web
+          cp CNAME web/CNAME
+          touch web/.nojekyll
+          godot --headless --path client --export-release Web ../web/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './web/'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
