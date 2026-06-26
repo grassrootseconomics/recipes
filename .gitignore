@@ -23,6 +23,12 @@ client/web/*.pck
 client/web/*.js
 client/web/*.html
 client/web/*.png
+!client/web/index.144x144.png
+!client/web/index.180x180.png
+!client/web/index.512x512.png
+!client/web/index.icon.png
+!client/web/index.png
+!client/web/index.apple-touch-icon.png
 client/web/*.ico
 client/web/*.worker.js
 client/web/*.service.worker.js
