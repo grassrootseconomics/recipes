@@ -365,6 +365,8 @@ func _initialize() -> void:
 	_assert_animation_event(visual, _snapshot_fixture(), _public_redeem_after(), "public_redeem", "off-turn public redeem queues animation")
 	_assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual)
 	_assert_animation_event(visual, _prepare_before(), _prepare_after(), "prepare", "prepare confirmation queues animation")
+	_assert_animation_event(visual, _snapshot_fixture(), _public_prepare_after(), "public_prepare", "off-turn public prepare queues animation")
+	_require(str(visual.debug_animation_actor_for_event({"type": "public_prepare", "participantId": "p2", "dishName": "Bean Tacos", "unit": "taco"})) == "p2", "public prepare animation anchors to the preparing cook")
 	_assert_animation_event(visual, _offer_before(), _snapshot_fixture(), "offer", "offer badge change queues animation")
 	_assert_animation_event(visual, _settlement_before(), _settlement_after(), "settlement_swap", "settlement swap queues animation")
 	_assert_animation_event(visual, _eating_before(), _eating_after(), "eat", "bite confirmation queues animation")
@@ -379,6 +381,7 @@ func _initialize() -> void:
 	visual.debug_play_animation_event({"type": "redeem", "ingredientId": "rice", "slotIndex": 0})
 	visual.debug_play_animation_event({"type": "public_redeem", "participantId": "p2", "ownerParticipantId": "p1", "ingredientId": "rice"})
 	visual.debug_play_animation_event({"type": "prepare", "dishName": "Cheese Frittata", "unit": "slice"})
+	visual.debug_play_animation_event({"type": "public_prepare", "participantId": "p2", "dishName": "Bean Tacos", "unit": "taco"})
 	visual.debug_play_animation_event({"type": "offer", "participantId": "p2", "indicator": "!"})
 	visual.debug_play_animation_event({"type": "settlement_swap", "giveKind": "dish_part", "giveDishName": "Bean Dip", "giveUnit": "scoop", "takeKind": "voucher", "takeIngredientId": "beans"})
 	visual.debug_play_animation_event({"type": "eat", "dishName": "Cheese Frittata", "unit": "slice"})
@@ -512,9 +515,16 @@ func _initialize() -> void:
 
 	_intents.clear()
 	var offer_shortcut := _snapshot_fixture()
+	visual.debug_clear_selections()
 	visual.debug_apply_snapshot(offer_shortcut)
 	visual.debug_press_participant("p4")
-	_require(visual.debug_selected_hand_ingredient() == "rice", "player tap defaults offer-card to viewer main ingredient")
+	_require(_has_text_containing(visual, "Diego's Kitchen"), "plain cook tap opens a kitchen info panel")
+	_require(visual.debug_selected_hand_ingredient() == "", "plain cook tap does not auto-select an offer card")
+	_require(visual.find_child("OfferRecipeContext_p4", true, false) != null, "kitchen info popup shows target recipe context")
+	_require(visual.find_child("OfferHandContext_p4", true, false) != null, "kitchen info popup shows target hand context")
+	_require(visual.find_child("OfferGiveCard_rice", true, false) == null, "kitchen info popup does not show offer cards")
+	visual.debug_press_hand_ingredient("rice")
+	visual.debug_press_participant("p4")
 	var create_offer_height := int(visual.debug_stats.get("offerPopupHeight", 0))
 	_require(create_offer_height > 0 and create_offer_height <= 620, "create-offer popup stays within portrait bounds with recipe and hand context, height=%s" % create_offer_height)
 	_require(not bool(visual.debug_stats.get("offerPopupScrollEnabled", true)), "create-offer popup is tall enough to avoid a scrollbar")
@@ -1940,6 +1950,15 @@ func _prepare_after() -> Dictionary:
 	}
 	snapshot["ownFoodParts"] = [
 		{"id": "dish_3_part_1", "dishId": "dish_3", "dishName": "Rice Bean Bowl", "unitSingular": "bowl", "unitPlural": "bowls", "makerParticipantId": "p1", "location": {"type": "inventory", "participantId": "p1"}}
+	]
+	return snapshot
+
+
+func _public_prepare_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["participants"][1]["dishCount"] = 1
+	snapshot["transactionHistory"] = [
+		{"id": "tx_public_prepare", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Prepare", "counterparty": "Table", "itemOut": "Bean Tacos", "itemBack": "Bean Tacos taco"}
 	]
 	return snapshot
 

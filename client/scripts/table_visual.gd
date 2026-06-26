@@ -1212,7 +1212,7 @@ func _position_menu_button() -> void:
 
 
 func _table_menu_actions() -> Array[String]:
-	var actions: Array[String] = ["View History", _bot_speed_menu_label()]
+	var actions: Array[String] = ["View History", "Debug Sync", _bot_speed_menu_label()]
 	var phase := str(_snapshot.get("phase", ""))
 	if bool(_snapshot.get("viewerCanUseHostControls", false)) and phase != "complete" and phase != "lobby":
 		actions.append("End Game")
@@ -2844,17 +2844,14 @@ func _on_participant_pressed(participant_id: String) -> void:
 		_open_offer_popup(participant_id)
 		return
 	var phase := str(_snapshot.get("phase", ""))
-	if _selected_inventory_asset_key != "" and participant_id != _viewer_id() and _offer_phase_allows_creation(phase):
+	if _selected_inventory_asset_key != "" \
+			and participant_id != _viewer_id() \
+			and _offer_phase_allows_creation(phase) \
+			and _can_act_now(phase) \
+			and _participant_can_receive_offer(_participant_by_id(participant_id)):
 		_open_create_offer_popup(participant_id)
 		return
-	if participant_id != _viewer_id() and _offer_phase_allows_creation(phase):
-		if _auto_select_give_asset("", phase):
-			_open_create_offer_popup(participant_id)
-			return
-	if _can_view_participant(participant_id):
-		view_requested.emit(participant_id)
-	else:
-		status_requested.emit("Select a card, then tap another player to offer it.")
+	_open_cook_info_popup(participant_id)
 
 
 func _create_offer_to_participant(participant_id: String, requested_asset_override: Dictionary = {}) -> void:
@@ -3450,6 +3447,17 @@ func _open_offer_popup(participant_id: String) -> void:
 			_open_create_offer_popup(id)
 		))
 
+	_popup_centered_tight(430, 620, true)
+
+
+func _open_cook_info_popup(participant_id: String) -> void:
+	_clear(_offer_popup_list)
+	_prepare_offer_popup_content(292)
+	_offer_popup_list.add_child(_offer_popup_header("%s's Kitchen" % _participant_name(participant_id)))
+	_offer_popup_list.add_child(_offer_recipe_context(participant_id))
+	_offer_popup_list.add_child(_offer_participant_hand_context(participant_id))
+	if participant_id == _viewer_id():
+		_offer_popup_list.add_child(_offer_popup_text("Your cards and dish pieces are shown in Promise Cards."))
 	_popup_centered_tight(430, 620, true)
 
 
@@ -4199,6 +4207,8 @@ func _transaction_order_for_event(event: Dictionary, rows: Array) -> int:
 			return _transaction_order_by_action_and_ingredient(rows, ["Redeem"], str(event.get("participantId", "")), str(event.get("ingredientId", "")))
 		"prepare":
 			return _transaction_order_by_action(rows, ["Prepare"], _viewer_id(), "")
+		"public_prepare":
+			return _transaction_order_by_action(rows, ["Prepare"], str(event.get("participantId", "")), "")
 		"eat":
 			return _transaction_order_by_action(rows, ["Eat", "Bite"], _viewer_id(), "")
 		"turn":
@@ -4261,7 +4271,7 @@ func _events_with_visual_milestones(previous_snapshot: Dictionary, current_snaps
 		elif event_type == "turn":
 			working = _snapshot_after_turn_step(working, current_snapshot, event)
 			milestone["_snapshotAfter"] = working.duplicate(true)
-		elif event_type == "prepare":
+		elif event_type == "prepare" or event_type == "public_prepare":
 			working = _snapshot_after_prepare_step(working, current_snapshot, event)
 			milestone["_snapshotAfter"] = working.duplicate(true)
 		elif event_type == "eat":
@@ -5070,20 +5080,102 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 	var viewer_id := str(current_snapshot.get("viewerParticipantId", ""))
 	var previous_viewer := _participant_from_snapshot(previous_snapshot, viewer_id)
 	var current_viewer := _participant_from_snapshot(current_snapshot, viewer_id)
-	if previous_viewer.is_empty() or current_viewer.is_empty():
-		return events
-	if int(current_viewer.get("dishCount", 0)) <= int(previous_viewer.get("dishCount", 0)):
-		return events
-	var dish_name := _recipe_name(previous_snapshot.get("ownRecipe", {}))
-	var food_info := _new_food_part_info(previous_snapshot.get("ownFoodParts", []), current_snapshot.get("ownFoodParts", []))
-	if dish_name == "":
-		dish_name = str(food_info.get("dishName", "Dish"))
-	events.append({
-		"type": "prepare",
-		"dishName": dish_name,
-		"unit": str(food_info.get("unitSingular", "piece"))
-	})
+	if not previous_viewer.is_empty() and not current_viewer.is_empty() \
+			and int(current_viewer.get("dishCount", 0)) > int(previous_viewer.get("dishCount", 0)):
+		var dish_name := _recipe_name(previous_snapshot.get("ownRecipe", {}))
+		var food_info := _new_food_part_info(previous_snapshot.get("ownFoodParts", []), current_snapshot.get("ownFoodParts", []))
+		if dish_name == "":
+			dish_name = str(food_info.get("dishName", "Dish"))
+		events.append({
+			"type": "prepare",
+			"dishName": dish_name,
+			"unit": str(food_info.get("unitSingular", "piece"))
+		})
+	for raw_participant in current_snapshot.get("participants", []):
+		var current_participant: Dictionary = raw_participant
+		var participant_id := str(current_participant.get("id", ""))
+		if participant_id == "" or participant_id == viewer_id:
+			continue
+		var previous_participant := _participant_from_snapshot(previous_snapshot, participant_id)
+		if previous_participant.is_empty():
+			continue
+		if int(current_participant.get("dishCount", 0)) <= int(previous_participant.get("dishCount", 0)):
+			continue
+		var prepare_info := _public_prepare_info(previous_snapshot, current_snapshot, participant_id)
+		events.append({
+			"type": "public_prepare",
+			"participantId": participant_id,
+			"dishName": str(prepare_info.get("dishName", "Dish")),
+			"unit": str(prepare_info.get("unit", "piece"))
+		})
 	return events
+
+
+func _public_prepare_info(previous_snapshot: Dictionary, current_snapshot: Dictionary, participant_id: String) -> Dictionary:
+	var prepare_transaction := _prepare_transaction_for_participant(previous_snapshot, current_snapshot, participant_id)
+	var dish_name := _dish_name_from_prepare_transaction(prepare_transaction)
+	var unit := _unit_from_prepare_transaction(prepare_transaction)
+	if dish_name == "":
+		var previous_participant := _participant_from_snapshot(previous_snapshot, participant_id)
+		dish_name = _recipe_name(previous_participant.get("currentRecipe", {}))
+	if dish_name == "":
+		dish_name = _new_public_dish_name_for_participant(previous_snapshot, current_snapshot, participant_id)
+	if dish_name == "":
+		dish_name = "Dish"
+	if unit == "":
+		unit = "piece"
+	return {"dishName": dish_name, "unit": unit}
+
+
+func _prepare_transaction_for_participant(previous_snapshot: Dictionary, current_snapshot: Dictionary, participant_id: String) -> Dictionary:
+	for raw_transaction in _new_transactions(previous_snapshot, current_snapshot):
+		var transaction: Dictionary = raw_transaction
+		if str(transaction.get("action", "")) != "Prepare":
+			continue
+		if str(transaction.get("participantId", "")) == participant_id:
+			return transaction
+	return {}
+
+
+func _dish_name_from_prepare_transaction(transaction: Dictionary) -> String:
+	if transaction.is_empty():
+		return ""
+	var item_out := str(transaction.get("itemOut", "")).strip_edges()
+	if item_out != "":
+		return item_out
+	var item_back := str(transaction.get("itemBack", "")).strip_edges()
+	for unit in ["slice", "slices", "cup", "cups", "scoop", "scoops", "piece", "pieces", "portion", "portions", "serving", "servings", "bowl", "bowls"]:
+		var suffix: String = " " + unit
+		if item_back.ends_with(suffix):
+			return item_back.substr(0, item_back.length() - suffix.length()).strip_edges()
+	return item_back
+
+
+func _unit_from_prepare_transaction(transaction: Dictionary) -> String:
+	if transaction.is_empty():
+		return ""
+	var item_back := str(transaction.get("itemBack", "")).strip_edges()
+	for unit in ["slice", "cup", "scoop", "piece", "portion", "serving", "bowl"]:
+		if item_back.ends_with(" " + unit) or item_back.ends_with(" " + unit + "s"):
+			return unit
+	return ""
+
+
+func _new_public_dish_name_for_participant(previous_snapshot: Dictionary, current_snapshot: Dictionary, participant_id: String) -> String:
+	var previous_ids := {}
+	for raw_dish in previous_snapshot.get("dishes", []):
+		var dish: Dictionary = raw_dish
+		var dish_id := str(dish.get("id", ""))
+		if dish_id != "":
+			previous_ids[dish_id] = true
+	for raw_dish in current_snapshot.get("dishes", []):
+		var dish: Dictionary = raw_dish
+		var dish_id := str(dish.get("id", ""))
+		if dish_id != "" and previous_ids.has(dish_id):
+			continue
+		if str(dish.get("makerParticipantId", "")) == participant_id:
+			return str(dish.get("name", dish.get("dishName", "Dish")))
+	return ""
 
 
 func _detect_offer_events(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Array:
@@ -5296,6 +5388,8 @@ func _animation_actor_id(event: Dictionary) -> String:
 			return str(event.get("fromParticipantId", ""))
 		"public_redeem":
 			return str(event.get("participantId", ""))
+		"public_prepare":
+			return str(event.get("participantId", ""))
 		"redeem", "prepare", "eat":
 			return _viewer_id()
 		_:
@@ -5316,6 +5410,8 @@ func _play_animation_event(event: Dictionary) -> float:
 			return _animate_public_redeem_event(event)
 		"prepare":
 			return _animate_prepare_event(event)
+		"public_prepare":
+			return _animate_public_prepare_event(event)
 		"offer":
 			return _animate_offer_event(event)
 		"eat":
@@ -5504,6 +5600,11 @@ func _same_animation_event(left: Dictionary, right: Dictionary) -> bool:
 			return str(right.get("type", "")) == "prepare" \
 				and str(left.get("dishName", "")) == str(right.get("dishName", "")) \
 				and str(left.get("unit", "")) == str(right.get("unit", ""))
+		"public_prepare":
+			return str(right.get("type", "")) == "public_prepare" \
+				and str(left.get("participantId", "")) == str(right.get("participantId", "")) \
+				and str(left.get("dishName", "")) == str(right.get("dishName", "")) \
+				and str(left.get("unit", "")) == str(right.get("unit", ""))
 		"eat":
 			return str(right.get("type", "")) == "eat" \
 				and str(left.get("dishId", "")) == str(right.get("dishId", "")) \
@@ -5659,6 +5760,26 @@ func _animate_prepare_event(event: Dictionary) -> float:
 	_emit_sparkles(center, 24, Color(1.0, 0.76, 0.28), 0.82)
 	_emit_steam_wisps(center, 1.06)
 	return 2.05
+
+
+func _animate_public_prepare_event(event: Dictionary) -> float:
+	var participant_id := str(event.get("participantId", ""))
+	var dish_name := str(event.get("dishName", "Dish"))
+	var unit := str(event.get("unit", "piece"))
+	var texture = VisualAssets.dish_meta(dish_name, unit).get("texture", null)
+	if not texture is Texture2D:
+		texture = VisualAssets.unit_meta(unit).get("texture", null)
+	var center := _participant_tile_center(participant_id)
+	if center == Vector2.INF:
+		center = _control_global_center(_participant_row)
+	if center == Vector2.INF:
+		return 0.0
+	var finish := center + Vector2(0, -8)
+	_animate_poof_burst(center, 0.20)
+	_animate_large_dish(texture, dish_name, center, finish, 0.36)
+	_emit_sparkles(center, 22, Color(1.0, 0.76, 0.28), 0.16)
+	_emit_steam_wisps(center, 0.42)
+	return 1.36
 
 
 func _animate_offer_event(event: Dictionary) -> float:

@@ -83,6 +83,8 @@ var _confirm_offline_end_dialog: ConfirmationDialog
 var _offline_end_popup: Control
 var _history_popup: PopupPanel
 var _history_popup_controls: VBoxContainer
+var _debug_sync_popup: PopupPanel
+var _debug_sync_text: TextEdit
 var _csv_file_dialog: FileDialog
 var _csv_export_status_label: Label
 var _server_check_request: HTTPRequest
@@ -438,6 +440,10 @@ func _build_ui() -> void:
 	_history_popup = _build_history_popup()
 	_configure_persistent_popup(_history_popup)
 	add_child(_history_popup)
+
+	_debug_sync_popup = _build_debug_sync_popup()
+	_configure_persistent_popup(_debug_sync_popup)
+	add_child(_debug_sync_popup)
 
 	_csv_file_dialog = FileDialog.new()
 	_csv_file_dialog.title = "Save Transaction CSV"
@@ -1900,6 +1906,76 @@ func _build_history_popup() -> PopupPanel:
 	return popup
 
 
+func _build_debug_sync_popup() -> PopupPanel:
+	var popup := PopupPanel.new()
+	popup.add_theme_stylebox_override("panel", _confirmation_panel_style())
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	popup.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(box)
+
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(header)
+
+	var title := Label.new()
+	title.text = "Debug Sync"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
+	header.add_child(title)
+
+	var close_button := _button("Close", func() -> void:
+		popup.hide()
+	)
+	close_button.custom_minimum_size = Vector2(92, 38)
+	_style_confirmation_button(close_button, false)
+	header.add_child(close_button)
+
+	_debug_sync_text = TextEdit.new()
+	_debug_sync_text.editable = false
+	_debug_sync_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_debug_sync_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_debug_sync_text.custom_minimum_size = Vector2(520, 300)
+	_debug_sync_text.add_theme_font_size_override("font_size", 14)
+	_debug_sync_text.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	_debug_sync_text.add_theme_stylebox_override("normal", _warm_button_style(Color(0.98, 0.93, 0.78), Color(0.47, 0.36, 0.22), 1))
+	box.add_child(_debug_sync_text)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(row)
+
+	var copy_button := _button("Copy Report", func() -> void:
+		_copy_debug_sync_report()
+	)
+	copy_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_confirmation_button(copy_button, false)
+	row.add_child(copy_button)
+
+	var resync_button := _button("Fresh Snapshot", func() -> void:
+		popup.hide()
+		_force_fresh_snapshot()
+	)
+	resync_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_confirmation_button(resync_button, true)
+	row.add_child(resync_button)
+	return popup
+
+
 func _confirmation_panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.92, 0.86, 0.70)
@@ -2773,6 +2849,8 @@ func _on_table_visual_menu_requested(action: String) -> void:
 	match action:
 		"View History":
 			_open_history_popup()
+		"Debug Sync":
+			_open_debug_sync_popup()
 		"Main Menu":
 			_return_to_main_menu()
 		"End Game":
@@ -2780,6 +2858,143 @@ func _on_table_visual_menu_requested(action: String) -> void:
 				_confirm_offline_end_game()
 			else:
 				RecipesClient.send_host_intent({"type": "stop"})
+
+
+func _open_debug_sync_popup() -> void:
+	if not is_instance_valid(_debug_sync_popup) or not is_instance_valid(_debug_sync_text):
+		return
+	_debug_sync_text.text = _debug_sync_report()
+	var viewport_size := get_viewport_rect().size
+	var popup_size := Vector2i(
+		mini(760, maxi(320, int(viewport_size.x * 0.86))),
+		mini(560, maxi(300, int(viewport_size.y * 0.68)))
+	)
+	_debug_sync_popup.popup_centered(popup_size)
+
+
+func _copy_debug_sync_report() -> void:
+	if not is_instance_valid(_debug_sync_text):
+		return
+	var report := _debug_sync_text.text
+	if OS.get_name() == "Web":
+		JavaScriptBridge.eval("navigator.clipboard && navigator.clipboard.writeText(%s);" % JSON.stringify(report), true)
+	else:
+		DisplayServer.clipboard_set(report)
+	_status_label.text = "Debug sync report copied."
+	_status_label.visible = true
+
+
+func _force_fresh_snapshot() -> void:
+	if RecipesClient.offline_mode:
+		_status_label.text = "Offline mode already uses local state."
+		_status_label.visible = true
+		return
+	RecipesClient.connect_socket()
+	_status_label.text = "Requested a fresh table snapshot."
+	_status_label.visible = true
+
+
+func _debug_sync_report() -> String:
+	var snapshot := RecipesClient.latest_snapshot
+	var visual_stats := _table_visual_debug_stats()
+	var lines: Array[String] = []
+	lines.append("Recipes debug sync")
+	lines.append("Captured: %s" % Time.get_datetime_string_from_system(false, true))
+	lines.append("App version: %s" % APP_VERSION)
+	lines.append("OS: %s" % OS.get_name())
+	lines.append("Client profile: %s" % ("default" if _dev_client_profile == "" else _dev_client_profile))
+	lines.append("")
+	lines.append("Connection")
+	lines.append("Server URL: %s" % RecipesClient.server_url)
+	lines.append("Mode: %s" % ("offline" if RecipesClient.offline_mode else "online"))
+	lines.append("Socket connected: %s" % str(RecipesClient.is_socket_connected()))
+	lines.append("Reconnect attempt: %s" % RecipesClient.reconnect_attempt())
+	lines.append("Last close: %s" % RecipesClient.last_close_description)
+	lines.append("")
+	lines.append("Snapshot")
+	lines.append("Table: %s" % str(snapshot.get("tableCode", RecipesClient.table_code)))
+	lines.append("Version: %s" % str(snapshot.get("version", "?")))
+	lines.append("Phase: %s" % str(snapshot.get("phase", "?")))
+	lines.append("Turn number: %s" % str(snapshot.get("turn", "?")))
+	lines.append("Turn mode: %s" % str(snapshot.get("turnMode", "?")))
+	lines.append("Current turn: %s" % _debug_participant_label(snapshot, str(snapshot.get("currentTurnParticipantId", ""))))
+	lines.append("Viewer: %s" % _debug_participant_label(snapshot, str(snapshot.get("viewerParticipantId", ""))))
+	lines.append("Connection participant: %s" % _debug_participant_label(snapshot, str(snapshot.get("connectionParticipantId", ""))))
+	lines.append("Client acting participant: %s" % _debug_participant_label(snapshot, RecipesClient.acting_participant_id))
+	lines.append("Controlled seats: %s" % _debug_participant_list(snapshot, snapshot.get("controlledParticipantIds", [])))
+	lines.append("Transaction cursor: %s" % str(snapshot.get("transactionCursor", "?")))
+	lines.append("Transaction total: %s" % str(snapshot.get("transactionHistoryTotal", snapshot.get("transactionCursor", "?"))))
+	lines.append("Cached tx rows: %s" % snapshot.get("transactionHistory", []).size())
+	lines.append("Last tx: %s" % _debug_last_transaction(snapshot))
+	lines.append("")
+	lines.append("Visual")
+	lines.append("Visual layout: %s" % str(visual_stats.get("layoutMode", "?")))
+	lines.append("Visual phase: %s" % str(visual_stats.get("phase", "?")))
+	lines.append("Visual current turn: %s" % _debug_participant_label(snapshot, str(visual_stats.get("currentTurnParticipantId", ""))))
+	lines.append("Visual method turn: %s" % _debug_participant_label(snapshot, _debug_visual_method_turn()))
+	lines.append("Visual update waiting: %s" % _debug_visual_update_waiting())
+	lines.append("Animation actor: %s" % _debug_participant_label(snapshot, str(visual_stats.get("animationActorParticipantId", ""))))
+	lines.append("Animation events: %s" % str(visual_stats.get("lastAnimationTypes", [])))
+	lines.append("Animation event count: %s" % str(visual_stats.get("animationEventCount", 0)))
+	lines.append("Basket queue: %s, in flight: %s" % [str(visual_stats.get("basketSwapQueueSize", 0)), str(visual_stats.get("basketSwapInFlight", false))])
+	lines.append("")
+	lines.append("How to read this")
+	lines.append("- If Snapshot > Current turn differs across clients, capture server logs for that table.")
+	lines.append("- If Snapshot matches but Visual current turn differs, this is a visual animation/staging bug.")
+	lines.append("- If Viewer differs from Current turn, the client is viewing one controlled seat while another seat has the turn.")
+	return "\n".join(lines)
+
+
+func _table_visual_debug_stats() -> Dictionary:
+	if not is_instance_valid(_table_visual):
+		return {}
+	var value = _table_visual.get("debug_stats")
+	return value if typeof(value) == TYPE_DICTIONARY else {}
+
+
+func _debug_visual_method_turn() -> String:
+	if is_instance_valid(_table_visual) and _table_visual.has_method("current_visual_turn_id"):
+		return str(_table_visual.call("current_visual_turn_id"))
+	return ""
+
+
+func _debug_visual_update_waiting() -> String:
+	if is_instance_valid(_table_visual) and _table_visual.has_method("visual_update_waiting"):
+		return str(_table_visual.call("visual_update_waiting"))
+	return "?"
+
+
+func _debug_participant_label(snapshot: Dictionary, participant_id: String) -> String:
+	if participant_id == "":
+		return "(none)"
+	var participant := _participant_by_id(snapshot, participant_id)
+	if participant.is_empty():
+		return "%s (not in snapshot)" % participant_id
+	return "%s %s" % [participant_id, str(participant.get("name", "Someone"))]
+
+
+func _debug_participant_list(snapshot: Dictionary, participant_ids: Array) -> String:
+	if participant_ids.is_empty():
+		return "(none)"
+	var labels: Array[String] = []
+	for raw_id in participant_ids:
+		labels.append(_debug_participant_label(snapshot, str(raw_id)))
+	return ", ".join(labels)
+
+
+func _debug_last_transaction(snapshot: Dictionary) -> String:
+	var history: Array = snapshot.get("transactionHistory", [])
+	if history.is_empty():
+		return "(none)"
+	var tx: Dictionary = history[history.size() - 1]
+	return "#%s %s %s -> %s / %s for %s" % [
+		str(tx.get("turn", "?")),
+		str(tx.get("name", "?")),
+		str(tx.get("action", "?")),
+		str(tx.get("counterparty", "?")),
+		str(tx.get("itemOut", "-")),
+		str(tx.get("itemBack", "-"))
+	]
 
 
 func _open_history_popup() -> void:
