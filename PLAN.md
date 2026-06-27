@@ -70,6 +70,10 @@
   - Persist server URL, invite code, seat token, controller/seat ids, and last viewed seat in `user://`.
   - Reconnect silently when possible and fall back to a clear `Reconnect` / `Join as new cook` / `Main Menu` choice when the table is gone.
   - Ensure explicit `Leave Table` is distinct from accidental disconnect and gives up the seat by design.
+- [ ] Harden web visual synchronization under fast bot turns.
+  - Preserve enough queued authoritative snapshots for a full 8-bot burst so prepare/redeem/pass animations stay in order.
+  - Treat the stale-turn watchdog as an idle recovery path only; it should not skip an actively progressing animation queue.
+  - Keep smoke coverage for prepared dishes appearing after the prepare animation and remaining visible through later queued turn snapshots.
 - [ ] Add durable online server persistence if public restart recovery is in scope.
   - Use a simple versioned table store first, preferably SQLite or append-only JSON snapshots under a configurable data directory.
   - Persist tables, participants, vouchers, food pieces, offers, recipes, current turn, bot seeds, transaction history, and completed-game stats after each successful mutation.

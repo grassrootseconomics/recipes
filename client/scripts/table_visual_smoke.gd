@@ -390,7 +390,7 @@ func _initialize() -> void:
 	_assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual)
 	_assert_multi_redeem_pass_auto_prepare_waits_for_prepare_animation(visual)
 	_assert_stale_visual_turn_watchdog_flushes(visual)
-	_assert_pending_visual_backlog_compacts_to_latest_turn(visual)
+	_assert_pending_visual_backlog_preserves_animation_sequence(visual)
 	_assert_in_place_delta_redeem_pass_waits_for_animation(visual)
 	_assert_redeem_pass_and_public_turns_apply_in_order(visual)
 	_assert_deposits_update_basket_one_by_one(visual)
@@ -1744,6 +1744,7 @@ func _assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual: Node) 
 	var third: String = visual.debug_apply_next_animation_milestone()
 	_require(third == "turn", "auto-prepare third milestone is pass turn")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "auto-prepare passes turn only after redemption and preparation animations")
+	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "auto-prepare keeps prepared dish pieces visible after the turn milestone")
 	visual.debug_flush_animations()
 
 
@@ -1771,6 +1772,7 @@ func _assert_multi_redeem_pass_auto_prepare_waits_for_prepare_animation(visual: 
 	var fourth: String = visual.debug_apply_next_animation_milestone()
 	_require(fourth == "turn", "multi-redeem fourth milestone is pass turn")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "multi-redeem passes turn only after prepare animation")
+	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "multi-redeem keeps prepared dish pieces visible after the turn milestone")
 	visual.debug_flush_animations()
 
 
@@ -1789,10 +1791,11 @@ func _assert_stale_visual_turn_watchdog_flushes(visual: Node) -> void:
 	visual.debug_flush_animations()
 
 
-func _assert_pending_visual_backlog_compacts_to_latest_turn(visual: Node) -> void:
+func _assert_pending_visual_backlog_preserves_animation_sequence(visual: Node) -> void:
 	var before := _redeem_pass_auto_prepare_before()
 	var after := _redeem_pass_auto_prepare_after()
 	visual.debug_apply_snapshot(before)
+	var compactions_before := int(visual.pending_visual_debug_state().get("pendingCompactions", 0))
 	visual.render(after)
 
 	var p3_turn := after.duplicate(true)
@@ -1800,6 +1803,8 @@ func _assert_pending_visual_backlog_compacts_to_latest_turn(visual: Node) -> voi
 	p3_turn["turn"] = int(after.get("turn", 0)) + 1
 	p3_turn["currentTurnParticipantId"] = "p3"
 	p3_turn["transactionTotal"] = int(after.get("transactionTotal", 0)) + 1
+	p3_turn["transactionHistory"] = after.get("transactionHistory", []).duplicate(true)
+	p3_turn["transactionHistory"].append({"id": "tx_bot_p2_pass", "turn": 16, "participantId": "p2", "name": "Ben", "action": "Pass Turn", "counterpartyParticipantId": "p3", "counterparty": "Clara", "itemOut": "None", "itemBack": "None"})
 	visual.render(p3_turn)
 
 	var p4_turn := p3_turn.duplicate(true)
@@ -1807,14 +1812,20 @@ func _assert_pending_visual_backlog_compacts_to_latest_turn(visual: Node) -> voi
 	p4_turn["turn"] = int(p3_turn.get("turn", 0)) + 1
 	p4_turn["currentTurnParticipantId"] = "p4"
 	p4_turn["transactionTotal"] = int(p3_turn.get("transactionTotal", 0)) + 1
+	p4_turn["transactionHistory"] = p3_turn.get("transactionHistory", []).duplicate(true)
+	p4_turn["transactionHistory"].append({"id": "tx_bot_p3_pass", "turn": 17, "participantId": "p3", "name": "Clara", "action": "Pass Turn", "counterpartyParticipantId": "p4", "counterparty": "Diego", "itemOut": "None", "itemBack": "None"})
 	visual.render(p4_turn)
 
 	var pending: Dictionary = visual.pending_visual_debug_state()
 	_require(str(pending.get("latestPendingTurn", "")) == "p4", "pending visual backlog tracks the latest authoritative turn")
-	_require(int(pending.get("pendingCount", 0)) <= 1, "pending visual backlog compacts intermediate stale turns")
-	_require(int(pending.get("pendingCompactions", 0)) > 0, "pending visual backlog records compaction")
-	visual.debug_force_visual_turn_lag_flush()
-	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p4", "visual backlog flush lands on the latest turn")
+	_require(int(pending.get("pendingCount", 0)) >= 3, "pending visual backlog preserves queued animation snapshots")
+	_require(int(pending.get("pendingCompactions", 0)) == compactions_before, "normal bot-turn backlog is not compacted")
+	_require(str(visual.debug_apply_next_animation_milestone()) == "redeem", "preserved backlog still plays redeem milestone")
+	_require(str(visual.debug_apply_next_animation_milestone()) == "prepare", "preserved backlog still plays prepare milestone")
+	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "preserved backlog shows prepared dish before later turn snapshots")
+	_require(str(visual.debug_apply_next_animation_milestone()) == "turn", "preserved backlog still plays turn milestone")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p4", "visual backlog lands on the latest queued turn after animations finish")
+	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "prepared dish remains visible after queued turn snapshots apply")
 	visual.debug_flush_animations()
 
 

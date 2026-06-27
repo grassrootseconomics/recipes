@@ -99,7 +99,7 @@ const FAST_BOT_ANIMATION_SCALE := 0.25
 const VIEWER_ANIMATION_SCALE := 1.35
 const BASKET_SWAP_QUEUE_TIMEOUT_MS := 5000
 const VISUAL_TURN_LAG_FLUSH_MS := 3000
-const MAX_PENDING_VISUAL_SNAPSHOTS := 2
+const MAX_PENDING_VISUAL_SNAPSHOTS := 32
 const PREPARE_ANNOUNCEMENT_HOLD_SECONDS := 2.05
 const COMPLETE_FOOD_ORBIT_MIN_ITEMS := 8
 const COMPLETE_FOOD_ORBIT_MAX_ITEMS := 16
@@ -4732,6 +4732,9 @@ func _flush_stale_visual_turn_if_needed() -> void:
 	if not _visual_update_waiting():
 		_reset_visual_turn_lag_watch()
 		return
+	if _animation_running or not _animation_queue.is_empty():
+		_reset_visual_turn_lag_watch()
+		return
 	var pending_snapshot := _latest_pending_visual_snapshot()
 	if pending_snapshot.is_empty():
 		_reset_visual_turn_lag_watch()
@@ -6474,8 +6477,17 @@ func _queue_pending_visual_snapshot(snapshot: Dictionary) -> void:
 func _compact_pending_visual_snapshots() -> void:
 	if _pending_visual_snapshots.size() <= MAX_PENDING_VISUAL_SNAPSHOTS:
 		return
-	var latest_snapshot: Dictionary = _pending_visual_snapshots[_pending_visual_snapshots.size() - 1]
-	_pending_visual_snapshots = [latest_snapshot.duplicate(true)]
+	var compacted: Array = []
+	var first_snapshot: Dictionary = _pending_visual_snapshots[0]
+	compacted.append(first_snapshot.duplicate(true))
+	var start_index := maxi(1, _pending_visual_snapshots.size() - (MAX_PENDING_VISUAL_SNAPSHOTS - 1))
+	for index in range(start_index, _pending_visual_snapshots.size()):
+		var snapshot: Dictionary = _pending_visual_snapshots[index]
+		var last_snapshot: Dictionary = compacted[compacted.size() - 1]
+		if _snapshot_identity_key(snapshot) == _snapshot_identity_key(last_snapshot):
+			continue
+		compacted.append(snapshot.duplicate(true))
+	_pending_visual_snapshots = compacted
 	_pending_visual_compaction_count += 1
 
 
