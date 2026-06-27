@@ -5057,6 +5057,9 @@ func _events_with_visual_milestones(previous_snapshot: Dictionary, current_snaps
 			milestone["_snapshotTakeStart"] = take_started.duplicate(true)
 			working = _snapshot_after_swap_take_destination_step(take_started, current_snapshot, event)
 			milestone["_snapshotAfter"] = working.duplicate(true)
+			var take_end := _future_inventory_target_center(milestone, working)
+			if take_end != Vector2.INF:
+				milestone["takeEndPoint"] = take_end
 		elif event_type == "turn":
 			working = _snapshot_after_turn_step(working, current_snapshot, event)
 			milestone["_snapshotAfter"] = working.duplicate(true)
@@ -6905,17 +6908,38 @@ func _animate_prepare_event(event: Dictionary) -> float:
 		texture = VisualAssets.unit_meta(unit).get("texture", null)
 	var center := _control_global_center(_recipe_grid)
 	var end := _prepare_dish_end_center(event)
+	var speed_scale := _animation_speed_scale(event)
+	var landing_delay := _scaled(0.28, speed_scale)
+	var landing_seconds := landing_delay + _card_tile_landing_seconds(speed_scale)
 	debug_stats["lastPrepareDishStartPoint"] = center
 	debug_stats["lastPrepareDishEndPoint"] = end
 	debug_stats["lastPrepareDishGenericHandCenter"] = _control_global_center(_hand_row)
+	debug_stats["lastPrepareDishLandingSeconds"] = landing_seconds
 	_glow_recipe_slots()
 	_animate_prepare_ingredient_swirl(center)
 	_animate_poof_burst(center, 0.86)
 	_animate_prepare_announcement(_prepare_participant_name(event), dish_name, center, 0.78)
-	_animate_large_dish(texture, dish_name, center, end, 1.02)
+	_animate_dish_part_card_path(dish_name, unit, _valid_points([center, end]), landing_delay, true, speed_scale)
+	_animate_large_dish(texture, dish_name, center, end, 0.34)
+	_schedule_prepare_landing_snapshot(event, landing_seconds)
 	_emit_sparkles(center, 24, Color(1.0, 0.76, 0.28), 0.82)
 	_emit_steam_wisps(center, 1.06)
 	return 2.20
+
+
+func _schedule_prepare_landing_snapshot(event: Dictionary, landing_seconds: float) -> void:
+	if not is_inside_tree() or not event.has("_snapshotAfter"):
+		return
+	var event_copy := event.duplicate(true)
+	get_tree().create_timer(maxf(0.01, landing_seconds)).timeout.connect(func() -> void:
+		if _current_animation_event.is_empty() or not _same_animation_event(_current_animation_event, event_copy):
+			return
+		var snapshot: Dictionary = event_copy.get("_snapshotAfter", {})
+		if snapshot.is_empty():
+			return
+		_apply_snapshot(snapshot)
+		debug_stats["lastPrepareLandingSnapshotApplied"] = true
+	)
 
 
 func _prepare_dish_end_center(event: Dictionary) -> Vector2:
@@ -6969,6 +6993,30 @@ func _hand_grid_cell_center(index: int) -> Vector2:
 		rect.position.x + float(column) * (cell_size.x + h_gap) + cell_size.x * 0.5,
 		rect.position.y + float(row) * (cell_size.y + v_gap) + cell_size.y * 0.5
 	)
+
+
+func _future_inventory_target_center(event: Dictionary, future_snapshot: Dictionary) -> Vector2:
+	var actor_id := _swap_actor_id(event)
+	if actor_id != "" and actor_id != _viewer_id():
+		return Vector2.INF
+	var kind := str(event.get("takeKind", ""))
+	if kind == "voucher":
+		return _future_hand_voucher_center(future_snapshot, str(event.get("takeIngredientId", "")))
+	if kind == "dish_part":
+		return _future_hand_food_center(future_snapshot, str(event.get("takeDishName", "")))
+	return Vector2.INF
+
+
+func _future_hand_voucher_center(future_snapshot: Dictionary, ingredient_id: String) -> Vector2:
+	if future_snapshot.is_empty() or ingredient_id == "":
+		return Vector2.INF
+	var voucher_groups := _voucher_group_options(future_snapshot.get("ownHand", []))
+	voucher_groups.reverse()
+	for index in range(voucher_groups.size()):
+		var group: Dictionary = voucher_groups[index]
+		if str(group.get("ingredientId", "")) == ingredient_id:
+			return _hand_grid_cell_center(index)
+	return Vector2.INF
 
 
 func _animate_public_prepare_event(event: Dictionary) -> float:

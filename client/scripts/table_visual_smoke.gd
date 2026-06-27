@@ -401,6 +401,7 @@ func _initialize() -> void:
 	await _assert_public_settlement_food_part_uses_future_basket_slot(visual)
 	_assert_swap_updates_basket_before_returning_card(visual)
 	_assert_swap_return_targets_existing_hand_group_after_layout_shift(visual)
+	await _assert_local_food_part_swap_targets_future_hand_tile(visual)
 	_assert_public_swap_return_uses_recorded_actor_after_staged_layout(visual)
 	_assert_animation_handoffs_before_fade_out(visual)
 	_assert_public_swap_transactions_animate_separately(visual)
@@ -416,6 +417,7 @@ func _initialize() -> void:
 	_assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual)
 	_assert_redeem_paths_ignore_bad_cached_points(visual)
 	_assert_animation_event(visual, _prepare_before(), _prepare_after(), "prepare", "prepare confirmation queues animation")
+	await _assert_prepare_landing_updates_hand_before_popup_finishes(visual)
 	_assert_prepare_event_uses_actual_recipe_name(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _public_prepare_after(), "public_prepare", "off-turn public prepare queues animation")
 	_assert_public_prepare_event_falls_back_to_new_dish(visual)
@@ -991,6 +993,22 @@ func _assert_animation_event(visual: Node, before_snapshot: Dictionary, after_sn
 	visual.debug_flush_animations()
 
 
+func _assert_prepare_landing_updates_hand_before_popup_finishes(visual: Node) -> void:
+	visual.debug_apply_snapshot(_prepare_before())
+	await process_frame
+	visual.render(_prepare_after())
+	await process_frame
+	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 0, "prepare animation keeps the dish piece out of hand before landing")
+	var landing_seconds := float(visual.debug_stats.get("lastPrepareDishLandingSeconds", 0.0))
+	_require(landing_seconds > 0.0 and landing_seconds < 2.20, "prepare animation records a hand landing before the popup finishes")
+	await create_timer(landing_seconds + 0.15).timeout
+	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "prepare animation shows the prepared dish piece in hand at landing time")
+	_require(bool(visual.debug_stats.get("lastPrepareLandingSnapshotApplied", false)), "prepare animation applies the hand snapshot at landing time")
+	var state: Dictionary = visual.pending_visual_debug_state()
+	_require(bool(state.get("animationRunning", false)), "prepare popup is still finishing after the dish piece lands")
+	visual.debug_flush_animations()
+
+
 func _assert_prepare_event_uses_actual_recipe_name(visual: Node) -> void:
 	var before := _prepare_before()
 	before["ownRecipe"]["name"] = "Recipe Ingredients"
@@ -1419,6 +1437,24 @@ func _assert_swap_return_targets_existing_hand_group_after_layout_shift(visual: 
 	var existing_card := visual.find_child("HandCard_beans", true, false)
 	_require(existing_card != null, "existing-card swap keeps a visible grouped target")
 	_require(_points_close(target, _node_center(existing_card)), "swap return lands on the existing grouped hand item after the hand row shifts")
+	visual.debug_flush_animations()
+
+
+func _assert_local_food_part_swap_targets_future_hand_tile(visual: Node) -> void:
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	visual.render(_swap_food_return_after())
+	var event := _first_animation_event_of_type(visual, "swap")
+	_require(not event.is_empty(), "food-part return swap queues an animation")
+	_require(str(event.get("takeKind", "")) == "dish_part", "food-part return swap records a dish-piece take leg")
+	var points: Dictionary = visual.debug_animation_path_points(event)
+	var take_end: Vector2 = points.get("takeEnd", Vector2.INF)
+	_require(_is_finite_point(take_end), "food-part return swap has a concrete hand landing point")
+	_require(_points_differ(take_end, _node_center(visual.find_child("HandRow", true, false))), "food-part return swap does not fall back to the generic hand grid center")
+	visual.debug_apply_snapshot(_swap_food_return_after())
+	await process_frame
+	var food_tile := visual.find_child("HandFood_dish_1", true, false)
+	_require(food_tile != null, "food-part return final render shows the promised dish-piece tile")
+	_require(_points_close(take_end, _node_center(food_tile)), "food-part return lands on its future Promise Cards tile")
 	visual.debug_flush_animations()
 
 
@@ -2229,6 +2265,13 @@ func _swap_existing_return_after() -> Dictionary:
 	return snapshot
 
 
+func _swap_food_return_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	_move_voucher(snapshot, "rice_1", "ownHand", "platter")
+	_move_food_part(snapshot, "dish_1_part_1", "platterFoodParts", "ownFoodParts")
+	return snapshot
+
+
 func _swap_last_visible_cards_after() -> Dictionary:
 	var snapshot := _snapshot_fixture()
 	_move_voucher(snapshot, "cheese_1", "ownHand", "platter")
@@ -2631,6 +2674,20 @@ func _move_voucher(snapshot: Dictionary, voucher_id: String, from_key: String, t
 			from_array.remove_at(index)
 			var moved := voucher.duplicate(true)
 			moved["location"] = {"type": "hand", "participantId": "p1"} if to_key == "ownHand" else {"type": "platter"}
+			var to_array: Array = snapshot.get(to_key, [])
+			to_array.append(moved)
+			snapshot[to_key] = to_array
+			return
+
+
+func _move_food_part(snapshot: Dictionary, part_id: String, from_key: String, to_key: String) -> void:
+	var from_array: Array = snapshot.get(from_key, [])
+	for index in range(from_array.size()):
+		var part: Dictionary = from_array[index]
+		if str(part.get("id", "")) == part_id:
+			from_array.remove_at(index)
+			var moved := part.duplicate(true)
+			moved["location"] = {"type": "inventory", "participantId": "p1"} if to_key == "ownFoodParts" else {"type": "platter"}
 			var to_array: Array = snapshot.get(to_key, [])
 			to_array.append(moved)
 			snapshot[to_key] = to_array
