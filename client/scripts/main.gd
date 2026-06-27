@@ -9,7 +9,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.5"
+const APP_VERSION := "0.0.6"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -2930,6 +2930,7 @@ func _force_fresh_snapshot() -> void:
 func _debug_sync_report() -> String:
 	var snapshot := RecipesClient.latest_snapshot
 	var visual_stats := _table_visual_debug_stats()
+	var pending_visual := _table_visual_pending_debug_state()
 	var lines: Array[String] = []
 	lines.append("Recipes debug sync")
 	lines.append("Captured: %s" % Time.get_datetime_string_from_system(false, true))
@@ -2969,6 +2970,10 @@ func _debug_sync_report() -> String:
 	lines.append("Animation actor: %s" % _debug_participant_label(snapshot, str(visual_stats.get("animationActorParticipantId", ""))))
 	lines.append("Animation events: %s" % str(visual_stats.get("lastAnimationTypes", [])))
 	lines.append("Animation event count: %s" % str(visual_stats.get("animationEventCount", 0)))
+	lines.append("Pending visual turn: %s" % _debug_participant_label(snapshot, str(pending_visual.get("latestPendingTurn", ""))))
+	lines.append("Pending visual snapshots: %s" % str(pending_visual.get("pendingCount", 0)))
+	lines.append("Visual turn lag ms: %s" % str(pending_visual.get("visualTurnLagMs", 0)))
+	lines.append("Last visual turn flush: %s" % str(pending_visual.get("lastVisualTurnLagFlush", "")))
 	lines.append("Basket queue: %s, in flight: %s" % [str(visual_stats.get("basketSwapQueueSize", 0)), str(visual_stats.get("basketSwapInFlight", false))])
 	lines.append("")
 	lines.append("How to read this")
@@ -2983,6 +2988,13 @@ func _table_visual_debug_stats() -> Dictionary:
 		return {}
 	var value = _table_visual.get("debug_stats")
 	return value if typeof(value) == TYPE_DICTIONARY else {}
+
+
+func _table_visual_pending_debug_state() -> Dictionary:
+	if is_instance_valid(_table_visual) and _table_visual.has_method("pending_visual_debug_state"):
+		var value = _table_visual.call("pending_visual_debug_state")
+		return value if typeof(value) == TYPE_DICTIONARY else {}
+	return {}
 
 
 func _debug_visual_method_turn() -> String:

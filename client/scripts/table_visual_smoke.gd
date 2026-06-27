@@ -342,6 +342,7 @@ func _initialize() -> void:
 	_assert_turn_handoff_does_not_preempt_animation_actor(visual)
 	_assert_batch_redeem_updates_counts_one_by_one(visual)
 	_assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual)
+	_assert_stale_visual_turn_watchdog_flushes(visual)
 	_assert_in_place_delta_redeem_pass_waits_for_animation(visual)
 	_assert_redeem_pass_and_public_turns_apply_in_order(visual)
 	_assert_deposits_update_basket_one_by_one(visual)
@@ -1424,6 +1425,21 @@ func _assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual: Node) 
 	var third: String = visual.debug_apply_next_animation_milestone()
 	_require(third == "turn", "auto-prepare third milestone is pass turn")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "auto-prepare passes turn only after redemption and preparation animations")
+	visual.debug_flush_animations()
+
+
+func _assert_stale_visual_turn_watchdog_flushes(visual: Node) -> void:
+	var before := _redeem_pass_auto_prepare_before()
+	var after := _redeem_pass_auto_prepare_after()
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "watchdog fixture starts with the staged previous turn")
+	var pending_before: Dictionary = visual.pending_visual_debug_state()
+	_require(str(pending_before.get("latestPendingTurn", "")) == "p2", "watchdog sees the newest pending turn")
+	visual.debug_force_visual_turn_lag_flush()
+	var pending_after: Dictionary = visual.pending_visual_debug_state()
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "stale visual turn watchdog applies the newest turn")
+	_require(int(pending_after.get("pendingCount", 0)) == 0, "stale visual turn watchdog clears pending snapshots")
 	visual.debug_flush_animations()
 
 

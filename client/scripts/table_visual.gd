@@ -75,6 +75,7 @@ const TEXTURE_LAND_SCALE := Vector2(1.025, 1.025)
 const FAST_BOT_ANIMATION_SCALE := 0.25
 const VIEWER_ANIMATION_SCALE := 1.35
 const BASKET_SWAP_QUEUE_TIMEOUT_MS := 5000
+const VISUAL_TURN_LAG_FLUSH_MS := 7000
 
 
 class BasketBackdrop:
@@ -368,6 +369,9 @@ var _last_animation_types: Array[String] = []
 var _pending_visual_snapshot: Dictionary = {}
 var _has_pending_visual_snapshot := false
 var _pending_visual_snapshots: Array = []
+var _visual_turn_lag_started_msec := 0
+var _visual_turn_lag_key := ""
+var _last_visual_turn_lag_flush := ""
 var _queued_basket_swap_requests: Array = []
 var _basket_swap_intent_in_flight := false
 var _basket_swap_in_flight_snapshot_key := ""
@@ -643,6 +647,22 @@ func debug_animation_speed_scale_for_event(event: Dictionary) -> float:
 	return _animation_speed_scale(event)
 
 
+func debug_force_visual_turn_lag_flush() -> void:
+	var pending_snapshot := _latest_pending_visual_snapshot()
+	if pending_snapshot.is_empty():
+		return
+	var visual_turn := current_visual_turn_id()
+	var pending_turn := str(pending_snapshot.get("currentTurnParticipantId", ""))
+	if visual_turn == "" or pending_turn == "" or visual_turn == pending_turn:
+		return
+	_last_visual_turn_lag_flush = "%s:%s:%s" % [
+		str(_snapshot.get("tableCode", "")),
+		str(pending_snapshot.get("phase", "")),
+		pending_turn
+	]
+	_flush_visual_updates()
+
+
 func debug_press_offer_selected_to_common_basket() -> void:
 	_offer_selected_to_common_basket()
 
@@ -651,7 +671,15 @@ func debug_play_animation_event(event: Dictionary) -> void:
 	_play_animation_event(event)
 
 
+func flush_visual_updates() -> void:
+	_flush_visual_updates()
+
+
 func debug_flush_animations() -> void:
+	_flush_visual_updates()
+
+
+func _flush_visual_updates() -> void:
 	var final_pending_snapshot: Dictionary = {}
 	if not _pending_visual_snapshots.is_empty():
 		final_pending_snapshot = (_pending_visual_snapshots[_pending_visual_snapshots.size() - 1] as Dictionary).duplicate(true)
@@ -665,6 +693,7 @@ func debug_flush_animations() -> void:
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
 	_pending_visual_snapshots.clear()
+	_reset_visual_turn_lag_watch()
 	if not final_pending_snapshot.is_empty():
 		_apply_snapshot(final_pending_snapshot)
 		_clear_basket_swap_in_flight()
@@ -680,6 +709,7 @@ func debug_apply_snapshot(snapshot: Dictionary) -> void:
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
 	_pending_visual_snapshots.clear()
+	_reset_visual_turn_lag_watch()
 	_clear_basket_swap_queue()
 	_apply_snapshot(snapshot)
 
@@ -1173,6 +1203,7 @@ func _render_menu() -> void:
 
 func _process(_delta: float) -> void:
 	_finish_stalled_animation_if_needed()
+	_flush_stale_visual_turn_if_needed()
 	_sync_menu_visibility(false)
 	_process_queued_basket_swaps()
 
@@ -4086,6 +4117,7 @@ func current_visual_turn_id() -> String:
 
 
 func pending_visual_debug_state() -> Dictionary:
+	var latest_pending := _latest_pending_visual_snapshot()
 	return {
 		"animationRunning": _animation_running,
 		"queueSize": _animation_queue.size(),
@@ -4093,8 +4125,58 @@ func pending_visual_debug_state() -> Dictionary:
 		"pendingCount": _pending_visual_snapshots.size(),
 		"snapshotTurn": str(_snapshot.get("currentTurnParticipantId", "")),
 		"pendingTurn": str(_pending_visual_snapshot.get("currentTurnParticipantId", "")),
-		"pendingViewer": str(_pending_visual_snapshot.get("viewerParticipantId", ""))
+		"latestPendingTurn": str(latest_pending.get("currentTurnParticipantId", "")),
+		"pendingViewer": str(_pending_visual_snapshot.get("viewerParticipantId", "")),
+		"visualTurnLagMs": _visual_turn_lag_elapsed_msec(),
+		"lastVisualTurnLagFlush": _last_visual_turn_lag_flush
 	}
+
+
+func _flush_stale_visual_turn_if_needed() -> void:
+	if not _visual_update_waiting():
+		_reset_visual_turn_lag_watch()
+		return
+	var pending_snapshot := _latest_pending_visual_snapshot()
+	if pending_snapshot.is_empty():
+		_reset_visual_turn_lag_watch()
+		return
+	var visual_turn := current_visual_turn_id()
+	var pending_turn := str(pending_snapshot.get("currentTurnParticipantId", ""))
+	if visual_turn == "" or pending_turn == "" or visual_turn == pending_turn:
+		_reset_visual_turn_lag_watch()
+		return
+	var key := "%s:%s:%s" % [
+		str(_snapshot.get("tableCode", "")),
+		str(pending_snapshot.get("phase", "")),
+		pending_turn
+	]
+	if _visual_turn_lag_key != key:
+		_visual_turn_lag_key = key
+		_visual_turn_lag_started_msec = Time.get_ticks_msec()
+		return
+	if _visual_turn_lag_elapsed_msec() < VISUAL_TURN_LAG_FLUSH_MS:
+		return
+	_last_visual_turn_lag_flush = key
+	_flush_visual_updates()
+
+
+func _latest_pending_visual_snapshot() -> Dictionary:
+	if not _pending_visual_snapshots.is_empty():
+		return (_pending_visual_snapshots[_pending_visual_snapshots.size() - 1] as Dictionary).duplicate(true)
+	if _has_pending_visual_snapshot:
+		return _pending_visual_snapshot.duplicate(true)
+	return {}
+
+
+func _visual_turn_lag_elapsed_msec() -> int:
+	if _visual_turn_lag_started_msec <= 0:
+		return 0
+	return maxi(0, Time.get_ticks_msec() - _visual_turn_lag_started_msec)
+
+
+func _reset_visual_turn_lag_watch() -> void:
+	_visual_turn_lag_started_msec = 0
+	_visual_turn_lag_key = ""
 
 
 func _is_start_setup_transition(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> bool:
