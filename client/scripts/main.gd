@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.35"
+const APP_VERSION := "0.0.37"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -59,6 +59,7 @@ var _server_connect_button: Button
 var _generate_code_button: Button
 var _take_seat_name_input: LineEdit
 var _main_menu_button: Button
+var _back_to_online_setup_button: Button
 var _main_menu_spacer: Control
 var _home_panel: PanelContainer
 var _home_sprite_layer: Control
@@ -421,6 +422,10 @@ func _build_ui() -> void:
 	_main_menu_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_main_menu_spacer.visible = false
 	root.add_child(_main_menu_spacer)
+	_back_to_online_setup_button = _button("Back to Create/Join Table", _back_to_online_setup)
+	_back_to_online_setup_button.name = "BackToOnlineSetupButton"
+	_back_to_online_setup_button.visible = false
+	root.add_child(_back_to_online_setup_button)
 	root.add_child(_main_menu_button)
 
 	_confirm_bot_dialog = ConfirmationDialog.new()
@@ -2696,6 +2701,9 @@ func _refresh_connection_buttons(snapshot: Dictionary) -> void:
 		_main_menu_button.custom_minimum_size = Vector2(112, 34 if has_table and not game_started else 44)
 	if is_instance_valid(_main_menu_spacer):
 		_main_menu_spacer.visible = is_instance_valid(_main_menu_button) and _main_menu_button.visible and not (has_table and not game_started)
+	if is_instance_valid(_back_to_online_setup_button):
+		_back_to_online_setup_button.visible = has_table and not game_started and _is_online_snapshot(snapshot)
+		_back_to_online_setup_button.custom_minimum_size = Vector2(112, 34 if has_table and not game_started else 44)
 
 	_offline_table_button.visible = not has_table
 	_create_table_button.visible = not has_table or is_host
@@ -3247,7 +3255,6 @@ func _add_lobby_controls(snapshot: Dictionary) -> void:
 		_add_seat_setup_grid(snapshot, false)
 		if _is_online_snapshot(snapshot):
 			_add_lobby_footer_spacer()
-			_add_back_to_online_setup_button()
 		return
 
 	_add_seat_setup_grid(snapshot, true)
@@ -3257,13 +3264,12 @@ func _add_lobby_controls(snapshot: Dictionary) -> void:
 		_commit_lobby_seat_setup_edits()
 		RecipesClient.send_host_intent({"type": "start"})
 	)
-	start_button.disabled = active_count != REQUIRED_ACTIVE_SEATS
-	start_button.text = "Start Cooking" if active_count == REQUIRED_ACTIVE_SEATS else "Waiting for %s Seats" % (REQUIRED_ACTIVE_SEATS - active_count)
+	start_button.name = "StartCookingButton"
+	start_button.disabled = not _host_lobby_start_enabled(snapshot)
+	start_button.text = _host_lobby_start_label(snapshot)
 	start_button.custom_minimum_size = Vector2(112, 36 if compact else 48)
 	_style_start_cooking_button(start_button)
 	_phase_controls.add_child(start_button)
-	if _is_online_snapshot(snapshot):
-		_add_back_to_online_setup_button()
 
 
 func _is_online_snapshot(snapshot: Dictionary) -> bool:
@@ -3312,12 +3318,6 @@ func _add_online_lobby_invite_controls(snapshot: Dictionary) -> void:
 			visibility_button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.78, 0.70, 0.56), Color(0.47, 0.36, 0.22), 1))
 			visibility_button.add_theme_stylebox_override("hover", _warm_button_style(Color(0.86, 0.78, 0.62), Color(0.58, 0.42, 0.21), 2))
 		box.add_child(visibility_button)
-
-
-func _add_back_to_online_setup_button() -> void:
-	var back_button := _button("Back to Create/Join Table", _back_to_online_setup)
-	back_button.custom_minimum_size = Vector2(112, 34 if _is_compact_lobby() else 44)
-	_phase_controls.add_child(back_button)
 
 
 func _add_lobby_footer_spacer() -> void:
@@ -3411,6 +3411,41 @@ func _style_start_cooking_button(button: Button) -> void:
 	button.add_theme_stylebox_override("pressed", _warm_button_style(Color(0.30, 0.15, 0.07), Color(0.78, 0.52, 0.20), 2))
 	button.add_theme_stylebox_override("disabled", _warm_button_style(Color(0.58, 0.50, 0.38), Color(0.48, 0.40, 0.29), 1))
 	button.add_theme_stylebox_override("focus", _warm_button_style(Color(0.52, 0.28, 0.13), Color(1.0, 0.96, 0.78), 3))
+
+
+func _host_lobby_start_enabled(snapshot: Dictionary) -> bool:
+	if _active_count(snapshot) != REQUIRED_ACTIVE_SEATS:
+		return false
+	if not _is_online_snapshot(snapshot):
+		return true
+	return _joined_non_host_human_count(snapshot) > 0
+
+
+func _host_lobby_start_label(snapshot: Dictionary) -> String:
+	var active_count := _active_count(snapshot)
+	if active_count != REQUIRED_ACTIVE_SEATS:
+		return "Waiting for %s Seats" % maxi(0, REQUIRED_ACTIVE_SEATS - active_count)
+	if _is_online_snapshot(snapshot) and _joined_non_host_human_count(snapshot) <= 0:
+		return "Waiting for Cooks"
+	return "Start Cooking"
+
+
+func _joined_non_host_human_count(snapshot: Dictionary) -> int:
+	var count := 0
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		if str(participant.get("kind", "")) != "human":
+			continue
+		if bool(participant.get("isHost", false)):
+			continue
+		if not bool(participant.get("connected", false)):
+			continue
+		if str(participant.get("controllerParticipantId", "")) != "":
+			continue
+		count += 1
+	return count
 
 
 func _style_server_connect_button(connected: bool) -> void:

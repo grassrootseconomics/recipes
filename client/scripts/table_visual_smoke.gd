@@ -1643,6 +1643,10 @@ func _points_close(left: Vector2, right: Vector2) -> bool:
 	return left != Vector2.INF and right != Vector2.INF and left.distance_to(right) <= 2.0
 
 
+func _is_finite_point(point: Vector2) -> bool:
+	return point != Vector2.INF and not is_nan(point.x) and not is_nan(point.y) and not is_inf(point.x) and not is_inf(point.y)
+
+
 func _event_has_randomized_orbit_phase(event: Dictionary) -> bool:
 	if not event.has("completeOrbitPhase"):
 		return false
@@ -1728,6 +1732,11 @@ func _assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual: Node) 
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "auto-prepare redeem/pass keeps turn on viewer before animations")
 	var types: Array = visual.debug_stats.get("lastAnimationTypes", [])
 	_require(types.size() >= 3 and types[0] == "redeem" and types[1] == "prepare" and types[2] == "turn", "auto-prepare redeem/pass queues redeem, prepare, then turn: %s" % JSON.stringify(types))
+	var prepare_event := _first_animation_event_of_type(visual, "prepare")
+	var prepare_points: Dictionary = visual.debug_animation_path_points(prepare_event)
+	var generic_hand_center := _node_center(visual.find_child("HandRow", true, false))
+	_require(_points_differ(prepare_points.get("end", Vector2.INF), generic_hand_center), "auto-prepare dish flies to its future hand tile instead of the generic promise-card grid center")
+	_require(_is_finite_point(prepare_points.get("end", Vector2.INF)), "auto-prepare dish has a concrete hand landing point")
 
 	var first: String = visual.debug_apply_next_animation_milestone()
 	_require(first == "redeem", "auto-prepare first milestone is the final redemption")

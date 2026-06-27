@@ -1093,7 +1093,7 @@ func debug_animation_path_points(event: Dictionary) -> Dictionary:
 		"prepare":
 			return {
 				"start": _control_global_center(_recipe_grid),
-				"end": _control_global_center(_hand_row)
+				"end": _prepare_dish_end_center(event)
 			}
 		"public_prepare":
 			var public_center := _participant_tile_center(str(event.get("participantId", "")))
@@ -6904,7 +6904,10 @@ func _animate_prepare_event(event: Dictionary) -> float:
 	if not texture is Texture2D:
 		texture = VisualAssets.unit_meta(unit).get("texture", null)
 	var center := _control_global_center(_recipe_grid)
-	var end := _control_global_center(_hand_row)
+	var end := _prepare_dish_end_center(event)
+	debug_stats["lastPrepareDishStartPoint"] = center
+	debug_stats["lastPrepareDishEndPoint"] = end
+	debug_stats["lastPrepareDishGenericHandCenter"] = _control_global_center(_hand_row)
 	_glow_recipe_slots()
 	_animate_prepare_ingredient_swirl(center)
 	_animate_poof_burst(center, 0.86)
@@ -6913,6 +6916,59 @@ func _animate_prepare_event(event: Dictionary) -> float:
 	_emit_sparkles(center, 24, Color(1.0, 0.76, 0.28), 0.82)
 	_emit_steam_wisps(center, 1.06)
 	return 2.20
+
+
+func _prepare_dish_end_center(event: Dictionary) -> Vector2:
+	var explicit := _event_point_or_fallback(event.get("dishEndPoint", Vector2.INF), Vector2.INF)
+	if explicit != Vector2.INF:
+		return explicit
+	var future_snapshot: Dictionary = event.get("_snapshotAfter", {})
+	var future_center := _future_hand_food_center(future_snapshot, str(event.get("dishName", "")))
+	if future_center != Vector2.INF:
+		return future_center
+	return _control_global_center(_hand_row)
+
+
+func _future_hand_food_center(future_snapshot: Dictionary, dish_name: String) -> Vector2:
+	if future_snapshot.is_empty():
+		return Vector2.INF
+	var food_info := _new_food_part_info(_snapshot.get("ownFoodParts", []), future_snapshot.get("ownFoodParts", []))
+	var target_dish_id := str(food_info.get("dishId", ""))
+	var target_dish_name := str(food_info.get("dishName", "")).strip_edges()
+	if target_dish_name == "":
+		target_dish_name = dish_name.strip_edges()
+	var voucher_count := _voucher_group_options(future_snapshot.get("ownHand", [])).size()
+	var food_groups := _food_part_group_options(future_snapshot.get("ownFoodParts", []))
+	for index in range(food_groups.size()):
+		var group: Dictionary = food_groups[index]
+		var group_dish_id := str(group.get("dishId", ""))
+		var group_dish_name := str(group.get("dishName", "")).strip_edges()
+		var matches_id := target_dish_id != "" and group_dish_id == target_dish_id
+		var matches_name := target_dish_id == "" and target_dish_name != "" and group_dish_name == target_dish_name
+		if matches_id or matches_name:
+			return _hand_grid_cell_center(voucher_count + index)
+	return Vector2.INF
+
+
+func _hand_grid_cell_center(index: int) -> Vector2:
+	if index < 0 or not is_instance_valid(_hand_row):
+		return Vector2.INF
+	var rect := _hand_row.get_global_rect()
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return Vector2.INF
+	var columns := maxi(1, _hand_row.columns)
+	var row := index / columns
+	var column := index % columns
+	var cell_size := Vector2(
+		maxf(HAND_CARD_SIZE.x, HAND_FOOD_SIZE.x),
+		maxf(HAND_CARD_SIZE.y, HAND_FOOD_SIZE.y)
+	)
+	var h_gap := float(_hand_row.get_theme_constant("h_separation"))
+	var v_gap := float(_hand_row.get_theme_constant("v_separation"))
+	return Vector2(
+		rect.position.x + float(column) * (cell_size.x + h_gap) + cell_size.x * 0.5,
+		rect.position.y + float(row) * (cell_size.y + v_gap) + cell_size.y * 0.5
+	)
 
 
 func _animate_public_prepare_event(event: Dictionary) -> float:

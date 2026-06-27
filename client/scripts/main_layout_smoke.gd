@@ -9,6 +9,22 @@ func _initialize() -> void:
 	var app_tablecloth := main.find_child("AppTableclothBackground", true, false) as Control
 	_require(app_tablecloth != null and app_tablecloth.mouse_filter == Control.MOUSE_FILTER_IGNORE, "main scene renders a tiled tablecloth outside the table panel")
 
+	var online_waiting_snapshot := _online_lobby_snapshot(false)
+	_require(str(main.call("_host_lobby_start_label", online_waiting_snapshot)) == "Waiting for Cooks", "online host lobby waits for another cook before start")
+	_require(not bool(main.call("_host_lobby_start_enabled", online_waiting_snapshot)), "online host lobby disables start before another cook joins")
+	main.call("_refresh_connection_buttons", online_waiting_snapshot)
+	main.call("_refresh_controls", online_waiting_snapshot)
+	await process_frame
+	var back_to_setup := _control_from_property(main, "_back_to_online_setup_button")
+	var main_menu_button := _control_from_property(main, "_main_menu_button")
+	_require(back_to_setup != null and main_menu_button != null and back_to_setup.get_parent() == main_menu_button.get_parent() and back_to_setup.get_index() + 1 == main_menu_button.get_index(), "Back to Create/Join Table sits directly above Main Menu")
+	_require(back_to_setup != null and back_to_setup.visible, "Back to Create/Join Table is visible in online lobby")
+	var start_button := _current_start_button(main)
+	_require(start_button != null and start_button.disabled and start_button.text == "Waiting for Cooks", "online host Start Cooking button is disabled and relabeled before another cook joins")
+	var online_ready_snapshot := _online_lobby_snapshot(true)
+	_require(str(main.call("_host_lobby_start_label", online_ready_snapshot)) == "Start Cooking", "online host lobby start label restores after another cook joins")
+	_require(bool(main.call("_host_lobby_start_enabled", online_ready_snapshot)), "online host lobby enables start after another cook joins")
+
 	var recipes_client := root.get_node("/root/RecipesClient")
 	recipes_client.start_offline_table("", "")
 	await process_frame
@@ -188,6 +204,17 @@ func _control_from_property(node: Node, property_name: String) -> Control:
 	return null
 
 
+func _current_start_button(main: Node) -> Button:
+	var phase_controls := _control_from_property(main, "_phase_controls")
+	if phase_controls == null:
+		return null
+	var current: Button = null
+	for child in phase_controls.get_children():
+		if child is Button and child.name == "StartCookingButton":
+			current = child
+	return current
+
+
 func _window_property_false(node: Node, property_name: String, window_property_name: String) -> bool:
 	var value = node.get(property_name)
 	if not value is Window:
@@ -202,6 +229,56 @@ func _transaction_order_fixture() -> Dictionary:
 			{"turn": 2, "name": "Ben", "action": "Swap", "counterparty": "Platter", "itemOut": "Flour", "itemBack": "Herbs"},
 			{"turn": 3, "name": "Cara", "action": "Redeem", "counterparty": "Amina", "itemOut": "Cheese", "itemBack": "Real Cheese"}
 		]
+	}
+
+
+func _online_lobby_snapshot(joined_cook: bool) -> Dictionary:
+	var ingredients := ["herbs", "rice", "eggs", "vegetables", "flour", "spices", "cheese", "beans"]
+	var names := ["SmallHost", "BenB", "Nia_b", "Luc_b", "Ava_b", "Leo_b", "Mia_b", "Yan_b"]
+	var participants: Array = []
+	for index in range(8):
+		var is_host := index == 0
+		var is_joined := joined_cook and index == 1
+		participants.append({
+			"id": "p%s" % (index + 1),
+			"name": names[index],
+			"role": "active",
+			"kind": "human" if is_host or is_joined else "bot",
+			"isHost": is_host,
+			"connected": is_host or is_joined,
+			"ingredientId": ingredients[index],
+			"dishCount": 0,
+			"depositedInitial": false,
+			"openingOfferingsCount": 0
+		})
+	return {
+		"tableCode": "JOINME",
+		"phase": "lobby",
+		"turn": 0,
+		"version": 1,
+		"offline": false,
+		"viewerParticipantId": "p1",
+		"connectionParticipantId": "p1",
+		"viewerCanUseHostControls": true,
+		"hostParticipantId": "p1",
+		"controlledParticipantIds": [],
+		"participants": participants,
+		"ingredients": [
+			{"id": "cheese", "name": "Cheese"},
+			{"id": "flour", "name": "Flour"},
+			{"id": "herbs", "name": "Herbs"},
+			{"id": "vegetables", "name": "Vegetables"},
+			{"id": "rice", "name": "Rice"},
+			{"id": "beans", "name": "Beans"},
+			{"id": "spices", "name": "Spices"},
+			{"id": "eggs", "name": "Eggs"}
+		],
+		"platter": [],
+		"ownHand": [],
+		"ownFoodParts": [],
+		"platterFoodParts": [],
+		"offers": [],
+		"transactionHistory": []
 	}
 
 
