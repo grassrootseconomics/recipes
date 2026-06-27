@@ -11,6 +11,10 @@ const TEXT_DARK := Color(0.16, 0.14, 0.11)
 const TEXT_MUTED := Color(0.38, 0.35, 0.29)
 const TABLE_BG := Color(0.91, 0.88, 0.80)
 const PANEL_BG := Color(0.94, 0.92, 0.84)
+const BOARD_PANEL_BG := Color(0.90, 0.86, 0.76)
+const INVENTORY_UPPER_PANEL_BG := Color(0.76, 0.64, 0.46)
+const INVENTORY_LOWER_PANEL_BG := Color(0.62, 0.49, 0.31)
+const ACTION_PANEL_BG := Color(0.94, 0.89, 0.75)
 const PANEL_BORDER := Color(0.42, 0.36, 0.27)
 const DEFAULT_INGREDIENT_ORDER := ["cheese", "flour", "herbs", "vegetables", "rice", "beans", "spices", "eggs"]
 const OPENING_OFFERINGS_PER_PLAYER := 2
@@ -19,11 +23,18 @@ const OPENING_OFFERINGS_PER_PLAYER := 2
 # [5] [1] [2] [6]
 const BASKET_CENTER_OUT_SLOTS := [5, 6, 1, 2, 4, 7, 3, 0]
 const TABLE_CONTENT_WIDTH := 680
-const TABLE_CONTENT_HEIGHT := 940
+const TABLE_CONTENT_HEIGHT := 960
 const TABLE_PORTRAIT_SIZE := Vector2(TABLE_CONTENT_WIDTH + 20.0, TABLE_CONTENT_HEIGHT)
 const TABLE_LANDSCAPE_WIDTH := TABLE_CONTENT_WIDTH * 2 + 32
 const TABLE_LANDSCAPE_HEIGHT := 560
 const TABLE_LANDSCAPE_SIZE := Vector2(TABLE_LANDSCAPE_WIDTH, TABLE_LANDSCAPE_HEIGHT)
+const BOARD_PANEL_MARGIN_X := 6
+const BOARD_PANEL_MARGIN_Y := 4
+const INVENTORY_SECTION_MARGIN_X := 6
+const INVENTORY_SECTION_MARGIN_Y := 3
+const INVENTORY_HAND_PANEL_WIDTH := TABLE_CONTENT_WIDTH - INVENTORY_SECTION_MARGIN_X * 2.0
+const INVENTORY_UPPER_PANEL_MIN_HEIGHT := 220
+const ACTION_PANEL_MIN_WIDTH := 286
 const LANDSCAPE_MIN_AVAILABLE_WIDTH := 1060.0
 const LANDSCAPE_MIN_ASPECT := 1.25
 const BASKET_BACKDROP_SIZE := Vector2(668, 230)
@@ -33,9 +44,14 @@ const BASKET_COMPACT_SLOT_SIZE := Vector2(92, 52)
 const BASKET_GRID_GAP := 7
 const BASKET_COMPACT_GRID_GAP := 5
 const BASKET_GRID_SIZE := Vector2(BASKET_SLOT_SIZE.x * 4.0 + BASKET_GRID_GAP * 3.0, BASKET_SLOT_SIZE.y * 2.0 + BASKET_GRID_GAP)
-const RECIPE_SLOT_SIZE := Vector2(138, 92)
-const RECIPE_GRID_GAP := 6
+const RECIPE_SLOT_SIZE := Vector2(110, 76)
+const RECIPE_GRID_GAP := 5
 const RECIPE_GRID_SIZE := Vector2(RECIPE_SLOT_SIZE.x * 3.0 + RECIPE_GRID_GAP * 2.0, RECIPE_SLOT_SIZE.y * 2.0 + RECIPE_GRID_GAP)
+const RECIPE_SLOT_CONTENT_MARGIN := 2
+const RECIPE_SLOT_RADIUS := 6
+const RECIPE_SLOT_ICON_SIZE := Vector2(62, 44)
+const RECIPE_SLOT_REDEEMED_ICON_SIZE := Vector2(58, 40)
+const RECIPE_SLOT_LABEL_FONT_SIZE := 17
 const COOK_TILE_SIZE := Vector2(128, 96)
 const BASKET_TABLE_AREA_SIZE := Vector2(TABLE_CONTENT_WIDTH, 454)
 const BASKET_BACKDROP_POSITION := Vector2(6, 120)
@@ -379,6 +395,11 @@ var _basket_swap_in_flight_started_msec := 0
 
 var _root: VBoxContainer
 var _margin_container: MarginContainer
+var _board_panel: PanelContainer
+var _inventory_surface: PanelContainer
+var _inventory_surface_content: VBoxContainer
+var _inventory_upper_panel: PanelContainer
+var _inventory_lower_panel: PanelContainer
 var _basket_table_area: Control
 var _middle_row: HBoxContainer
 var _bottom_tray: VBoxContainer
@@ -907,7 +928,7 @@ func _build() -> void:
 	add_child(_margin_container)
 
 	_root = VBoxContainer.new()
-	_root.add_theme_constant_override("separation", 4)
+	_root.add_theme_constant_override("separation", 6)
 	_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_margin_container.add_child(_root)
 
@@ -935,13 +956,21 @@ func _build() -> void:
 	_menu_canvas.add_child(_main_menu_overlay_button)
 	_position_menu_button()
 
+	_board_panel = PanelContainer.new()
+	_board_panel.name = "BoardPanel"
+	_board_panel.custom_minimum_size = BASKET_TABLE_AREA_SIZE
+	_board_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_board_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_board_panel.add_theme_stylebox_override("panel", _board_surface_style())
+	_root.add_child(_board_panel)
+
 	_basket_table_area = Control.new()
 	_basket_table_area.name = "BasketTableArea"
 	_basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
 	_basket_table_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_basket_table_area.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_basket_table_area.clip_contents = false
-	_root.add_child(_basket_table_area)
+	_board_panel.add_child(_basket_table_area)
 
 	var basket_backdrop := BasketBackdrop.new()
 	basket_backdrop.name = "BasketBackdrop"
@@ -983,12 +1012,34 @@ func _build() -> void:
 	_participant_row.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_basket_table_area.add_child(_participant_row)
 
+	_inventory_surface = PanelContainer.new()
+	_inventory_surface.name = "InventorySurface"
+	_inventory_surface.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	_inventory_surface.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_inventory_surface.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_inventory_surface.add_theme_stylebox_override("panel", _inventory_surface_style())
+	_root.add_child(_inventory_surface)
+	_inventory_surface_content = VBoxContainer.new()
+	_inventory_surface_content.name = "InventorySurfaceContent"
+	_inventory_surface_content.add_theme_constant_override("separation", 4)
+	_inventory_surface_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_inventory_surface.add_child(_inventory_surface_content)
+
+	_inventory_upper_panel = PanelContainer.new()
+	_inventory_upper_panel.name = "InventoryUpperPanel"
+	_inventory_upper_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT)
+	_inventory_upper_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_inventory_upper_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_inventory_upper_panel.add_theme_stylebox_override("panel", _inventory_upper_panel_style())
+	_inventory_surface_content.add_child(_inventory_upper_panel)
+
 	_middle_row = HBoxContainer.new()
 	_middle_row.name = "MiddleRow"
 	_middle_row.add_theme_constant_override("separation", 10)
 	_middle_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_middle_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_middle_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	_root.add_child(_middle_row)
+	_inventory_upper_panel.add_child(_middle_row)
 
 	_redeem_box = VBoxContainer.new()
 	_redeem_box.custom_minimum_size = Vector2(0, 0)
@@ -996,15 +1047,17 @@ func _build() -> void:
 	_redeem_box.add_theme_constant_override("separation", 5)
 	var action_panel := _framed_box(_redeem_box)
 	action_panel.name = "ActionPanel"
-	action_panel.custom_minimum_size = Vector2(226, 0)
-	action_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	action_panel.custom_minimum_size = Vector2(ACTION_PANEL_MIN_WIDTH, 0)
+	action_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	action_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_middle_row.add_child(action_panel)
 
 	var recipe_panel := VBoxContainer.new()
 	recipe_panel.name = "RecipePanel"
 	recipe_panel.add_theme_constant_override("separation", 4)
 	recipe_panel.custom_minimum_size = Vector2(RECIPE_GRID_SIZE.x, 0)
-	recipe_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	recipe_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	recipe_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_middle_row.add_child(recipe_panel)
 	var recipe_title_center := CenterContainer.new()
 	recipe_title_center.custom_minimum_size = Vector2(RECIPE_GRID_SIZE.x, 22)
@@ -1022,7 +1075,7 @@ func _build() -> void:
 	_recipe_title_prefix_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_recipe_title_prefix_label.clip_text = true
 	_recipe_title_prefix_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_recipe_title_prefix_label.custom_minimum_size = Vector2(134, 20)
+	_recipe_title_prefix_label.custom_minimum_size = Vector2(112, 20)
 	_recipe_title_prefix_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_recipe_title_stars = ProgressStars.new()
 	_recipe_title_stars.name = "RecipeTitleStars"
@@ -1036,7 +1089,7 @@ func _build() -> void:
 	_recipe_name_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_recipe_name_label.clip_text = true
 	_recipe_name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_recipe_name_label.custom_minimum_size = Vector2(228, 20)
+	_recipe_name_label.custom_minimum_size = Vector2(178, 20)
 	_recipe_name_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_recipe_title_row.add_child(_recipe_title_prefix_label)
 	_recipe_title_row.add_child(_recipe_title_stars)
@@ -1048,14 +1101,21 @@ func _build() -> void:
 	_recipe_grid.custom_minimum_size = RECIPE_GRID_SIZE
 	_recipe_grid.add_theme_constant_override("h_separation", RECIPE_GRID_GAP)
 	_recipe_grid.add_theme_constant_override("v_separation", RECIPE_GRID_GAP)
-	_recipe_grid.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_recipe_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	recipe_panel.add_child(_recipe_grid)
+
+	_inventory_lower_panel = PanelContainer.new()
+	_inventory_lower_panel.name = "InventoryLowerPanel"
+	_inventory_lower_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_inventory_lower_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_inventory_lower_panel.add_theme_stylebox_override("panel", _inventory_lower_panel_style())
+	_inventory_surface_content.add_child(_inventory_lower_panel)
 
 	_bottom_tray = VBoxContainer.new()
 	_bottom_tray.name = "BottomTray"
 	_bottom_tray.add_theme_constant_override("separation", 4)
 	_bottom_tray.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_root.add_child(_bottom_tray)
+	_inventory_lower_panel.add_child(_bottom_tray)
 
 	var inventory_panel := _titled_panel("Inventory")
 	inventory_panel.name = "InventoryPanel"
@@ -1069,8 +1129,8 @@ func _build() -> void:
 	_inventory_row.add_theme_constant_override("separation", 6)
 	inventory_panel.add_child(_scroll_wrap(_inventory_row, 104))
 
-	_hand_panel = _titled_panel("Promise Cards")
-	_hand_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	_hand_panel = _titled_panel("Promise Cards", true)
+	_hand_panel.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
 	_hand_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_bottom_tray.add_child(_hand_panel)
 	_hand_row = GridContainer.new()
@@ -1120,7 +1180,12 @@ func _should_use_landscape_layout(area: Vector2) -> bool:
 
 
 func _apply_visual_layout_mode(mode: String) -> void:
-	if not is_instance_valid(_root) or not is_instance_valid(_basket_table_area) or not is_instance_valid(_middle_row) or not is_instance_valid(_bottom_tray):
+	if not is_instance_valid(_root) \
+			or not is_instance_valid(_board_panel) \
+			or not is_instance_valid(_inventory_surface) \
+			or not is_instance_valid(_inventory_surface_content) \
+			or not is_instance_valid(_inventory_upper_panel) \
+			or not is_instance_valid(_inventory_lower_panel):
 		_layout_mode = mode
 		return
 	var normalized := "landscape" if mode == "landscape" else "portrait"
@@ -1130,30 +1195,38 @@ func _apply_visual_layout_mode(mode: String) -> void:
 		if is_instance_valid(_margin_container):
 			_margin_container.custom_minimum_size = Vector2(TABLE_LANDSCAPE_WIDTH - 12.0, 0)
 		_root.add_theme_constant_override("separation", 0)
+		_inventory_surface_content.add_theme_constant_override("separation", 6)
 		_move_control_to_parent(_landscape_row, _root)
-		_move_control_to_parent(_basket_table_area, _landscape_left)
-		_move_control_to_parent(_middle_row, _landscape_right)
-		_move_control_to_parent(_bottom_tray, _landscape_right)
+		_move_control_to_parent(_board_panel, _landscape_left)
+		_move_control_to_parent(_inventory_surface, _landscape_right)
 		_basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
-		_middle_row.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
-		_bottom_tray.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+		_board_panel.custom_minimum_size = BASKET_TABLE_AREA_SIZE
+		_inventory_surface.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+		_inventory_upper_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT)
+		_inventory_lower_panel.custom_minimum_size = Vector2(0, 0)
+		_middle_row.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
+		_bottom_tray.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
 		if is_instance_valid(_hand_panel):
-			_hand_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+			_hand_panel.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
 	else:
 		custom_minimum_size = TABLE_PORTRAIT_SIZE
 		if is_instance_valid(_margin_container):
 			_margin_container.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
-		_root.add_theme_constant_override("separation", 4)
-		_move_control_to_parent(_basket_table_area, _root)
-		_move_control_to_parent(_middle_row, _root)
-		_move_control_to_parent(_bottom_tray, _root)
+		_root.add_theme_constant_override("separation", 6)
+		_inventory_surface_content.add_theme_constant_override("separation", 4)
+		_move_control_to_parent(_board_panel, _root)
+		_move_control_to_parent(_inventory_surface, _root)
 		if is_instance_valid(_landscape_row) and _landscape_row.get_parent() == _root:
 			_root.remove_child(_landscape_row)
 		_basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
+		_board_panel.custom_minimum_size = BASKET_TABLE_AREA_SIZE
+		_inventory_surface.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+		_inventory_upper_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT)
+		_inventory_lower_panel.custom_minimum_size = Vector2(0, 0)
 		_middle_row.custom_minimum_size = Vector2(0, 0)
-		_bottom_tray.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+		_bottom_tray.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
 		if is_instance_valid(_hand_panel):
-			_hand_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+			_hand_panel.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
 	_layout_mode = normalized
 	debug_stats["layoutMode"] = _layout_mode
 
@@ -5274,10 +5347,10 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 		var participant_name := str(current_viewer.get("name", "")).strip_edges()
 		if participant_name == "":
 			participant_name = _participant_name(viewer_id)
-		var dish_name := _recipe_name(previous_snapshot.get("ownRecipe", {})).strip_edges()
 		var food_info := _new_food_part_info(previous_snapshot.get("ownFoodParts", []), current_snapshot.get("ownFoodParts", []))
+		var dish_name := str(food_info.get("dishName", "")).strip_edges()
 		if dish_name == "":
-			dish_name = str(food_info.get("dishName", "")).strip_edges()
+			dish_name = _recipe_dish_name(previous_snapshot.get("ownRecipe", {})).strip_edges()
 		if dish_name == "":
 			dish_name = _dish_name_from_prepare_transaction(_prepare_transaction_for_participant(previous_snapshot, current_snapshot, viewer_id)).strip_edges()
 		if dish_name == "":
@@ -5319,7 +5392,7 @@ func _public_prepare_info(previous_snapshot: Dictionary, current_snapshot: Dicti
 	var unit := _unit_from_prepare_transaction(prepare_transaction)
 	if dish_name == "":
 		var previous_participant := _participant_from_snapshot(previous_snapshot, participant_id)
-		dish_name = _recipe_name(previous_participant.get("currentRecipe", {}))
+		dish_name = _recipe_dish_name(previous_participant.get("currentRecipe", {}))
 	if dish_name == "":
 		dish_name = _new_public_dish_name_for_participant(previous_snapshot, current_snapshot, participant_id)
 	if dish_name == "":
@@ -5343,14 +5416,15 @@ func _dish_name_from_prepare_transaction(transaction: Dictionary) -> String:
 	if transaction.is_empty():
 		return ""
 	var item_out := str(transaction.get("itemOut", "")).strip_edges()
-	if item_out != "":
+	if item_out != "" and not _is_generic_recipe_label(item_out):
 		return item_out
 	var item_back := str(transaction.get("itemBack", "")).strip_edges()
 	for unit in ["slice", "slices", "cup", "cups", "scoop", "scoops", "piece", "pieces", "portion", "portions", "serving", "servings", "bowl", "bowls"]:
 		var suffix: String = " " + unit
 		if item_back.ends_with(suffix):
-			return item_back.substr(0, item_back.length() - suffix.length()).strip_edges()
-	return item_back
+			var dish_name := item_back.substr(0, item_back.length() - suffix.length()).strip_edges()
+			return dish_name if not _is_generic_recipe_label(dish_name) else ""
+	return item_back if not _is_generic_recipe_label(item_back) else ""
 
 
 func _unit_from_prepare_transaction(transaction: Dictionary) -> String:
@@ -5375,7 +5449,10 @@ func _new_public_dish_name_for_participant(previous_snapshot: Dictionary, curren
 		var dish_id := str(dish.get("id", ""))
 		if dish_id != "" and previous_ids.has(dish_id):
 			continue
-		if str(dish.get("makerParticipantId", "")) == participant_id:
+		var maker_id := str(dish.get("makerParticipantId", ""))
+		if maker_id == "":
+			maker_id = str(dish.get("ownerParticipantId", ""))
+		if maker_id == participant_id:
 			return str(dish.get("name", dish.get("dishName", "Dish")))
 	return ""
 
@@ -6545,6 +6622,8 @@ func _animate_prepare_announcement(participant_name: String, dish_name: String, 
 	var clean_dish := dish_name.strip_edges()
 	if clean_dish == "":
 		clean_dish = "a dish"
+	else:
+		clean_dish = _dish_name_with_article(clean_dish)
 	var text := "%s prepared %s!" % [clean_name, clean_dish]
 	debug_stats["lastPrepareAnnouncement"] = text
 
@@ -6599,6 +6678,19 @@ func _animate_prepare_announcement(participant_name: String, dish_name: String, 
 	tween.tween_property(card, "position", card.position + Vector2(0, -12), 0.22).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tween.parallel().tween_property(card, "modulate", Color(1, 1, 1, 0), 0.22)
 	tween.tween_callback(card.queue_free)
+
+
+func _dish_name_with_article(dish_name: String) -> String:
+	var clean := dish_name.strip_edges()
+	if clean == "":
+		return "a dish"
+	var words := clean.split(" ", false)
+	var last_word := str(words[words.size() - 1]).strip_edges().to_lower() if words.size() > 0 else ""
+	if last_word.ends_with("s") and not last_word.ends_with("ss"):
+		return clean
+	var first_letter := clean.substr(0, 1).to_lower()
+	var article := "an" if ["a", "e", "i", "o", "u"].has(first_letter) else "a"
+	return "%s %s" % [article, clean]
 
 
 func _animate_prepare_ingredient_swirl(global_center: Vector2) -> void:
@@ -7043,6 +7135,28 @@ func _recipe_name(recipe: Dictionary) -> String:
 	return str(recipe.get("dishName", ""))
 
 
+func _recipe_dish_name(recipe: Dictionary) -> String:
+	if recipe.is_empty():
+		return ""
+	var dish_name := str(recipe.get("dishName", "")).strip_edges()
+	if dish_name != "" and not _is_generic_recipe_label(dish_name):
+		return dish_name
+	var name := str(recipe.get("name", "")).strip_edges()
+	if name != "" and not _is_generic_recipe_label(name):
+		return name
+	return ""
+
+
+func _is_generic_recipe_label(value: String) -> bool:
+	var normalized := value.strip_edges().to_lower()
+	return normalized == "recipe" \
+		or normalized == "recipe ingredients" \
+		or normalized == "ingredients" \
+		or normalized == "food to share" \
+		or normalized == "dish pieces held" \
+		or normalized == "dishes made"
+
+
 func _recipe_title(recipe_name: String) -> String:
 	var target := int(_snapshot.get("targetDishCount", 0))
 	var viewer := _participant_by_id(_viewer_id())
@@ -7116,21 +7230,24 @@ func _recipe_slot(slot: Dictionary, index: int) -> Control:
 	wrapper.custom_minimum_size = RECIPE_SLOT_SIZE
 	wrapper.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	wrapper.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	wrapper.clip_contents = false
+	wrapper.clip_contents = true
 	var panel := PanelContainer.new()
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.clip_contents = true
 	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	panel.add_theme_stylebox_override("panel", _real_ingredient_slot_style() if status == "redeemed" else _panel_style(bg, border, 1, 8))
+	panel.add_theme_stylebox_override("panel", _real_ingredient_slot_style() if status == "redeemed" else _recipe_slot_panel_style(bg, border))
 	wrapper.add_child(panel)
 	var box := VBoxContainer.new()
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_theme_constant_override("separation", 0 if status == "redeemed" else 1)
 	var texture = meta.get("texture", null)
 	if texture is Texture2D:
 		var icon := TextureRect.new()
 		icon.texture = texture
-		icon.custom_minimum_size = Vector2(48, 36) if status == "redeemed" else Vector2(42, 32)
+		icon.custom_minimum_size = RECIPE_SLOT_REDEEMED_ICON_SIZE if status == "redeemed" else RECIPE_SLOT_ICON_SIZE
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.modulate = Color(1, 1, 1, 1) if status == "redeemed" else Color(0.55, 0.55, 0.55, 0.72)
 		box.add_child(icon)
@@ -7138,6 +7255,11 @@ func _recipe_slot(slot: Dictionary, index: int) -> Control:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.custom_minimum_size = Vector2(0, 23)
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.add_theme_font_size_override("font_size", RECIPE_SLOT_LABEL_FONT_SIZE)
 	label.add_theme_color_override("font_color", TEXT_DARK if status == "redeemed" else Color(0.30, 0.30, 0.28))
 	box.add_child(label)
 	panel.add_child(box)
@@ -7635,6 +7757,7 @@ func _titled_panel(title: String, centered := false) -> VBoxContainer:
 	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	title_label.add_theme_font_size_override("font_size", 16)
 	title_label.add_theme_color_override("font_color", TEXT_DARK)
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(title_label)
 	return box
 
@@ -7642,7 +7765,7 @@ func _titled_panel(title: String, centered := false) -> VBoxContainer:
 func _framed_box(content: Control) -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.add_theme_stylebox_override("panel", _panel_style(Color(1, 1, 1), Color(0.58, 0.54, 0.48), 1, 8))
+	panel.add_theme_stylebox_override("panel", _action_panel_style())
 	panel.add_child(content)
 	return panel
 
@@ -8300,6 +8423,55 @@ func _safe_popup_width(preferred_width: int, min_width: int, horizontal_margin: 
 	return clampi(available, mini(min_width, available), preferred_width)
 
 
+func _board_surface_style() -> StyleBoxFlat:
+	var style := _panel_style(BOARD_PANEL_BG, Color(0.46, 0.38, 0.25), 1, 8)
+	_apply_surface_panel_metrics(style, BOARD_PANEL_MARGIN_X, BOARD_PANEL_MARGIN_Y)
+	style.shadow_color = Color(0.18, 0.12, 0.06, 0.18)
+	style.shadow_size = 4
+	style.shadow_offset = Vector2(0, 2)
+	return style
+
+
+func _inventory_surface_style() -> StyleBoxFlat:
+	var style := _panel_style(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0)
+	_apply_surface_panel_metrics(style, 0, 0)
+	return style
+
+
+func _inventory_upper_panel_style() -> StyleBoxFlat:
+	var style := _panel_style(INVENTORY_UPPER_PANEL_BG, Color(0.43, 0.31, 0.17), 1, 6)
+	_apply_surface_panel_metrics(style, INVENTORY_SECTION_MARGIN_X, INVENTORY_SECTION_MARGIN_Y)
+	style.shadow_color = Color(0.18, 0.11, 0.05, 0.16)
+	style.shadow_size = 2
+	style.shadow_offset = Vector2(0, 1)
+	return style
+
+
+func _inventory_lower_panel_style() -> StyleBoxFlat:
+	var style := _panel_style(INVENTORY_LOWER_PANEL_BG, Color(0.35, 0.23, 0.12), 1, 6)
+	_apply_surface_panel_metrics(style, INVENTORY_SECTION_MARGIN_X, INVENTORY_SECTION_MARGIN_Y)
+	style.shadow_color = Color(0.14, 0.08, 0.03, 0.18)
+	style.shadow_size = 2
+	style.shadow_offset = Vector2(0, 1)
+	return style
+
+
+func _action_panel_style() -> StyleBoxFlat:
+	var style := _panel_style(ACTION_PANEL_BG, Color(0.55, 0.44, 0.28), 1, 8)
+	style.content_margin_left = 8
+	style.content_margin_top = 6
+	style.content_margin_right = 8
+	style.content_margin_bottom = 6
+	return style
+
+
+func _apply_surface_panel_metrics(style: StyleBoxFlat, horizontal_margin: int, vertical_margin: int) -> void:
+	style.content_margin_left = horizontal_margin
+	style.content_margin_top = vertical_margin
+	style.content_margin_right = horizontal_margin
+	style.content_margin_bottom = vertical_margin
+
+
 func _offer_popup_panel_style() -> StyleBoxFlat:
 	var style := _panel_style(PANEL_BG, PANEL_BORDER, 1, 10)
 	style.content_margin_left = 8
@@ -8324,6 +8496,15 @@ func _real_ingredient_slot_style() -> StyleBoxFlat:
 	style.content_margin_top = 0
 	style.content_margin_right = 0
 	style.content_margin_bottom = 0
+	return style
+
+
+func _recipe_slot_panel_style(bg: Color, border: Color) -> StyleBoxFlat:
+	var style := _panel_style(bg, border, 1, RECIPE_SLOT_RADIUS)
+	style.content_margin_left = RECIPE_SLOT_CONTENT_MARGIN
+	style.content_margin_top = RECIPE_SLOT_CONTENT_MARGIN
+	style.content_margin_right = RECIPE_SLOT_CONTENT_MARGIN
+	style.content_margin_bottom = RECIPE_SLOT_CONTENT_MARGIN
 	return style
 
 

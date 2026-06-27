@@ -71,6 +71,30 @@ func _initialize() -> void:
 	_require(overlay_layer != null and overlay_layer.mouse_filter == Control.MOUSE_FILTER_IGNORE, "table overlay does not intercept gameplay clicks")
 	var animation_layer := visual.find_child("AnimationLayer", true, false) as Control
 	_require(animation_layer != null and animation_layer.get_parent() == overlay_layer, "animation layer shares the table canvas instead of using a detached CanvasLayer")
+	var board_panel := visual.find_child("BoardPanel", true, false) as PanelContainer
+	var inventory_surface := visual.find_child("InventorySurface", true, false) as PanelContainer
+	var inventory_surface_content := visual.find_child("InventorySurfaceContent", true, false) as VBoxContainer
+	var inventory_upper_panel := visual.find_child("InventoryUpperPanel", true, false) as PanelContainer
+	var inventory_lower_panel := visual.find_child("InventoryLowerPanel", true, false) as PanelContainer
+	var action_panel := visual.find_child("ActionPanel", true, false) as PanelContainer
+	promise_title = visual.find_child("Title_Promise_Cards", true, false) as Label
+	_require(board_panel != null, "visual table renders a separate Board panel")
+	_require(inventory_surface != null, "visual table renders a separate Inventory surface")
+	_require(inventory_surface_content != null and inventory_surface_content.get_parent() == inventory_surface, "Inventory surface owns its content column")
+	_require(inventory_upper_panel != null and inventory_upper_panel.get_parent() == inventory_surface_content, "Inventory surface owns an upper Actions and Recipe panel")
+	_require(inventory_lower_panel != null and inventory_lower_panel.get_parent() == inventory_surface_content, "Inventory surface owns a lower Promise Cards panel")
+	if inventory_upper_panel != null and inventory_lower_panel != null:
+		_require(inventory_upper_panel.get_index() < inventory_lower_panel.get_index(), "Inventory upper panel stays above the lower Promise Cards panel")
+	_require(board_panel.get_parent() == inventory_surface.get_parent() and board_panel.get_index() < inventory_surface.get_index(), "portrait layout places Board above Inventory")
+	_require(_panel_is_transparent(inventory_surface), "Inventory surface is a transparent layout wrapper")
+	_require(_panel_luminance(inventory_lower_panel) < _panel_luminance(inventory_upper_panel) - 0.06, "Promise Cards panel is visually distinct from the Actions and Recipe panel")
+	_require(action_panel != null and _panel_luminance(action_panel) < 0.93 and _panel_luminance(action_panel) > _panel_luminance(inventory_lower_panel), "Actions panel uses a light themed background instead of plain white")
+	_require(_recipe_slots_fit_panel(visual, inventory_upper_panel), "Recipe slots fit inside the Inventory upper panel")
+	_require(_recipe_slots_use_tight_tiles(visual), "Recipe slots use reduced tile size and margins")
+	_require(_upper_inventory_uses_wide_columns(visual, inventory_upper_panel), "Inventory upper panel is tall and uses wide action and recipe columns")
+	_require(promise_title != null and promise_title.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "Promise Cards title is centered horizontally")
+	_require(_title_is_centered_in_panel(promise_title, inventory_lower_panel), "Promise Cards title is centered within the lower panel")
+	_require(table_menu_button != null and not _is_descendant_of(table_menu_button, board_panel) and not _is_descendant_of(table_menu_button, inventory_surface), "table menu button stays outside Board and Inventory surfaces")
 	visual.debug_open_table_menu()
 	await process_frame
 	_require(visual.debug_table_menu_visible(), "table menu opens")
@@ -201,7 +225,7 @@ func _initialize() -> void:
 	await process_frame
 	_require(food_popup != null and food_popup.visible, "food-piece info popup stays open across table refreshes")
 	food_popup.hide()
-	_require(visual.preferred_visual_size() == Vector2(700, 940), "visual table reports a stable preferred size")
+	_require(visual.preferred_visual_size() == Vector2(700, 960), "visual table reports a stable preferred size")
 	_require(visual.preferred_visual_size_for_area(Vector2(1500, 720)) == Vector2(1392, 560), "visual table reports a stable landscape preferred size for wide screens")
 	visual.set_visual_layout_area(Vector2(1500, 720))
 	await process_frame
@@ -210,13 +234,27 @@ func _initialize() -> void:
 	var basket_area := visual.find_child("BasketTableArea", true, false) as Control
 	var middle_row := visual.find_child("MiddleRow", true, false) as Control
 	var bottom_tray := visual.find_child("BottomTray", true, false) as Control
+	var landscape_board := visual.find_child("BoardPanel", true, false) as Control
+	var landscape_inventory := visual.find_child("InventorySurface", true, false) as Control
+	var landscape_inventory_content := visual.find_child("InventorySurfaceContent", true, false) as Control
+	var landscape_inventory_upper := visual.find_child("InventoryUpperPanel", true, false) as Control
+	var landscape_inventory_lower := visual.find_child("InventoryLowerPanel", true, false) as Control
 	_require(landscape_row != null and landscape_row.get_parent() != null, "landscape layout creates a split row")
-	_require(basket_area != null and basket_area.get_parent() != null and basket_area.get_parent().name == "LandscapeBasketColumn", "landscape layout places cooks and basket in the left column")
-	_require(middle_row != null and middle_row.get_parent() != null and middle_row.get_parent().name == "LandscapePlayColumn", "landscape layout places actions and recipe in the right column")
-	_require(bottom_tray != null and bottom_tray.get_parent() != null and bottom_tray.get_parent().name == "LandscapePlayColumn", "landscape layout places Promise Cards under the right column")
+	_require(landscape_board != null and landscape_board.get_parent() != null and landscape_board.get_parent().name == "LandscapeBasketColumn", "landscape layout places Board panel in the left column")
+	_require(landscape_inventory != null and landscape_inventory.get_parent() != null and landscape_inventory.get_parent().name == "LandscapePlayColumn", "landscape layout places Inventory surface in the right column")
+	_require(basket_area != null and basket_area.get_parent() == landscape_board, "Board panel owns cooks and basket area")
+	_require(landscape_inventory_content != null and landscape_inventory_content.get_parent() == landscape_inventory, "Inventory surface owns the right-side content column")
+	_require(landscape_inventory_upper != null and landscape_inventory_upper.get_parent() == landscape_inventory_content, "Inventory surface content owns the upper Actions and Recipe panel")
+	_require(landscape_inventory_lower != null and landscape_inventory_lower.get_parent() == landscape_inventory_content, "Inventory surface content owns the lower Promise Cards panel")
+	_require(middle_row != null and middle_row.get_parent() == landscape_inventory_upper, "Inventory upper panel owns Actions and Recipe row")
+	_require(bottom_tray != null and bottom_tray.get_parent() == landscape_inventory_lower, "Inventory lower panel owns Promise Cards")
+	_require(landscape_board.get_global_rect().position.x < landscape_inventory.get_global_rect().position.x, "landscape layout places Board left of Inventory")
 	visual.set_visual_layout_area(Vector2(720, 1100))
 	await process_frame
 	_require(visual.debug_layout_mode() == "portrait", "visual table returns to portrait layout when the window is narrow")
+	var portrait_board := visual.find_child("BoardPanel", true, false) as Control
+	var portrait_inventory := visual.find_child("InventorySurface", true, false) as Control
+	_require(portrait_board != null and portrait_inventory != null and portrait_board.get_parent() == portrait_inventory.get_parent() and portrait_board.get_index() < portrait_inventory.get_index(), "portrait layout returns Board above Inventory")
 	var full_tray := snapshot.duplicate(true)
 	full_tray["ownHand"] = [
 		{"id": "rice_1", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
@@ -367,7 +405,9 @@ func _initialize() -> void:
 	_assert_animation_event(visual, _snapshot_fixture(), _public_redeem_after(), "public_redeem", "off-turn public redeem queues animation")
 	_assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual)
 	_assert_animation_event(visual, _prepare_before(), _prepare_after(), "prepare", "prepare confirmation queues animation")
+	_assert_prepare_event_uses_actual_recipe_name(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _public_prepare_after(), "public_prepare", "off-turn public prepare queues animation")
+	_assert_public_prepare_event_falls_back_to_new_dish(visual)
 	_require(str(visual.debug_animation_actor_for_event({"type": "public_prepare", "participantId": "p2", "dishName": "Bean Tacos", "unit": "taco"})) == "p2", "public prepare animation anchors to the preparing cook")
 	_assert_animation_event(visual, _offer_before(), _snapshot_fixture(), "offer", "offer badge change queues animation")
 	_assert_animation_event(visual, _settlement_before(), _settlement_after(), "settlement_swap", "settlement swap queues animation")
@@ -383,7 +423,7 @@ func _initialize() -> void:
 	visual.debug_play_animation_event({"type": "redeem", "ingredientId": "rice", "slotIndex": 0})
 	visual.debug_play_animation_event({"type": "public_redeem", "participantId": "p2", "ownerParticipantId": "p1", "ingredientId": "rice"})
 	visual.debug_play_animation_event({"type": "prepare", "dishName": "Cheese Frittata", "unit": "slice"})
-	_require(str(visual.debug_stats.get("lastPrepareAnnouncement", "")) == "Amina prepared Cheese Frittata!", "viewer prepare animation announces player and dish name")
+	_require(str(visual.debug_stats.get("lastPrepareAnnouncement", "")) == "Amina prepared a Cheese Frittata!", "viewer prepare animation announces player and dish name")
 	var viewer_prepare_center: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementGlobalCenter", Vector2.INF)
 	var viewer_prepare_table_center: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementTableCenter", Vector2.ZERO)
 	_require(viewer_prepare_center.distance_to(viewer_prepare_table_center) <= 1.0, "viewer prepare announcement is centered on the table screen")
@@ -393,6 +433,8 @@ func _initialize() -> void:
 	var public_prepare_center: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementGlobalCenter", Vector2.INF)
 	var public_prepare_table_center: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementTableCenter", Vector2.ZERO)
 	_require(public_prepare_center.distance_to(public_prepare_table_center) <= 1.0, "public prepare announcement is centered on the table screen")
+	visual.debug_play_animation_event({"type": "prepare", "dishName": "Egg Fried Rice", "unit": "plate"})
+	_require(str(visual.debug_stats.get("lastPrepareAnnouncement", "")) == "Amina prepared an Egg Fried Rice!", "viewer prepare animation uses an before vowel-starting dish names")
 	visual.debug_play_animation_event({"type": "public_prepare", "participantId": "p2", "participantName": "Alexandria", "dishName": "Vegetable Enchilada Bake", "unit": "piece"})
 	var long_prepare_size: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementSize", Vector2.ZERO)
 	_require(long_prepare_size.x > viewer_prepare_size.x, "prepare announcement width grows with message character count")
@@ -858,7 +900,7 @@ func _initialize() -> void:
 	_require(_has_text_containing(visual, "Rice: 10"), "complete phase summarizes raw ingredient stock")
 	_require(_has_text_containing(visual, "Bites: 4"), "complete phase summarizes bites with label")
 	_require(int(visual.debug_stats.get("completeBiteSummaryCount", 0)) == 4, "complete phase summarizes bites for active players")
-	_require(visual.preferred_visual_size() == Vector2(700, 940), "complete phase keeps the same preferred table size")
+	_require(visual.preferred_visual_size() == Vector2(700, 960), "complete phase keeps the same preferred table size")
 	visual.call("_open_game_stats_popup")
 	await process_frame
 	_require(int(visual.debug_stats.get("offerPopupWidth", 0)) > 0 and int(visual.debug_stats.get("offerPopupWidth", 0)) <= 600, "game stats popup keeps a safe responsive width")
@@ -886,6 +928,58 @@ func _assert_animation_event(visual: Node, before_snapshot: Dictionary, after_sn
 	visual.render(after_snapshot)
 	var types: Array = visual.debug_stats.get("lastAnimationTypes", [])
 	_require(types.has(expected_type), message)
+	visual.debug_flush_animations()
+
+
+func _assert_prepare_event_uses_actual_recipe_name(visual: Node) -> void:
+	var before := _prepare_before()
+	before["ownRecipe"]["name"] = "Recipe Ingredients"
+	before["ownRecipe"]["dishName"] = "Cheese Bowl"
+	before["ownFoodParts"] = []
+	var after := before.duplicate(true)
+	after["participants"][0]["dishCount"] = 1
+	after["ownRecipe"] = {
+		"id": "recipe_next",
+		"name": "Cheese Frittata",
+		"requirements": []
+	}
+	after["ownFoodParts"] = []
+	after["transactionHistory"] = []
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	var prepare_event := {}
+	for raw_event in visual.debug_stats.get("lastAnimationEvents", []):
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) == "prepare":
+			prepare_event = event
+			break
+	_require(not prepare_event.is_empty(), "generic recipe label regression queues prepare event")
+	_require(str(prepare_event.get("dishName", "")) == "Cheese Bowl", "prepare event uses actual recipe dishName instead of generic recipe label")
+	visual.debug_flush_animations()
+
+
+func _assert_public_prepare_event_falls_back_to_new_dish(visual: Node) -> void:
+	var before := _snapshot_fixture()
+	before["participants"][1]["currentRecipe"] = {"name": "Recipe Ingredients", "missingRequirements": []}
+	before["dishes"] = []
+	var after := before.duplicate(true)
+	after["participants"][1]["dishCount"] = 1
+	after["transactionHistory"] = [
+		{"id": "tx_public_prepare_generic", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Prepare", "counterparty": "Table", "itemOut": "Recipe Ingredients", "itemBack": "Recipe Ingredients piece"}
+	]
+	after["dishes"] = [
+		{"id": "dish_public_cheese_bowl", "ownerParticipantId": "p2", "name": "Cheese Bowl", "partsRemaining": 10, "partsEaten": 0, "bitesRemaining": 10, "biteCounts": {}}
+	]
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	var prepare_event := {}
+	for raw_event in visual.debug_stats.get("lastAnimationEvents", []):
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) == "public_prepare":
+			prepare_event = event
+			break
+	_require(not prepare_event.is_empty(), "generic public prepare regression queues public prepare event")
+	_require(str(prepare_event.get("dishName", "")) == "Cheese Bowl", "public prepare event falls back to new public dish name")
 	visual.debug_flush_animations()
 
 
@@ -2337,6 +2431,143 @@ func _is_width_sensitive_visual_node(name: String) -> bool:
 		or name.begins_with("BasketSlot_") \
 		or name.begins_with("PlatterVoucher_") \
 		or name.begins_with("RecipeSlot_")
+
+
+func _panel_is_transparent(panel: PanelContainer) -> bool:
+	if panel == null:
+		return false
+	var style := panel.get_theme_stylebox("panel") as StyleBoxFlat
+	if style == null:
+		return false
+	return style.bg_color.a <= 0.01 \
+		and style.border_width_left == 0 \
+		and style.border_width_top == 0 \
+		and style.border_width_right == 0 \
+		and style.border_width_bottom == 0 \
+		and style.content_margin_left == 0 \
+		and style.content_margin_top == 0 \
+		and style.content_margin_right == 0 \
+		and style.content_margin_bottom == 0
+
+
+func _recipe_slots_fit_panel(visual: Control, panel: PanelContainer) -> bool:
+	if visual == null or panel == null:
+		return false
+	var panel_rect := panel.get_global_rect()
+	var checked := 0
+	for raw_slot in visual.find_children("RecipeSlot_*", "Control", true, false):
+		var slot := raw_slot as Control
+		if slot == null or not slot.visible:
+			continue
+		checked += 1
+		var rect := slot.get_global_rect()
+		if rect.position.x < panel_rect.position.x - 1.0 \
+				or rect.position.y < panel_rect.position.y - 1.0 \
+				or rect.end.x > panel_rect.end.x + 1.0 \
+				or rect.end.y > panel_rect.end.y + 1.0:
+			return false
+	return checked > 0
+
+
+func _recipe_slots_use_tight_tiles(visual: Control) -> bool:
+	if visual == null:
+		return false
+	var checked := 0
+	for raw_slot in visual.find_children("RecipeSlot_*", "Control", true, false):
+		var slot := raw_slot as Control
+		if slot == null or not slot.visible:
+			continue
+		checked += 1
+		if slot.custom_minimum_size != Vector2(110, 76):
+			return false
+		var panel := slot.get_child(0) as PanelContainer if slot.get_child_count() > 0 else null
+		if panel == null:
+			return false
+		var style := panel.get_theme_stylebox("panel") as StyleBoxFlat
+		if style == null:
+			return false
+		var should_have_large_missing_icon := style.bg_color.a > 0.01
+		if style.bg_color.a > 0.01:
+			if style.content_margin_left > 2.1 \
+					or style.content_margin_top > 2.1 \
+					or style.content_margin_right > 2.1 \
+					or style.content_margin_bottom > 2.1:
+				return false
+		var found_visible_label := false
+		for raw_label in slot.find_children("*", "Label", true, false):
+			var label := raw_label as Label
+			if label == null or label.text.strip_edges() == "":
+				continue
+			var label_rect := label.get_global_rect()
+			var slot_rect := slot.get_global_rect()
+			if label_rect.size.y >= 21.0 \
+					and int(label.get_theme_font_size("font_size")) >= 17 \
+					and label_rect.position.y >= slot_rect.position.y - 1.0 \
+					and label_rect.end.y <= slot_rect.end.y + 1.0:
+				found_visible_label = true
+				break
+		if not found_visible_label:
+			return false
+		var found_large_icon := false
+		for raw_icon in slot.find_children("*", "TextureRect", true, false):
+			var icon := raw_icon as TextureRect
+			if icon == null:
+				continue
+			if should_have_large_missing_icon and icon.custom_minimum_size.x >= 62.0 and icon.custom_minimum_size.y >= 44.0:
+				found_large_icon = true
+				break
+			if not should_have_large_missing_icon and icon.custom_minimum_size.x >= 58.0 and icon.custom_minimum_size.y >= 40.0:
+				found_large_icon = true
+				break
+		if not found_large_icon:
+			return false
+	return checked > 0
+
+
+func _upper_inventory_uses_wide_columns(visual: Control, panel: PanelContainer) -> bool:
+	if visual == null or panel == null:
+		return false
+	var action_panel := visual.find_child("ActionPanel", true, false) as Control
+	var recipe_panel := visual.find_child("RecipePanel", true, false) as Control
+	if action_panel == null or recipe_panel == null:
+		return false
+	var panel_rect := panel.get_global_rect()
+	var action_rect := action_panel.get_global_rect()
+	var recipe_rect := recipe_panel.get_global_rect()
+	return panel_rect.size.y >= 220.0 \
+		and action_rect.size.x >= 280.0 \
+		and recipe_rect.size.x >= 340.0 \
+		and action_rect.position.x >= panel_rect.position.x - 1.0 \
+		and recipe_rect.end.x <= panel_rect.end.x + 1.0
+
+
+func _title_is_centered_in_panel(title: Label, panel: PanelContainer) -> bool:
+	if title == null or panel == null:
+		return false
+	var title_rect := title.get_global_rect()
+	var panel_rect := panel.get_global_rect()
+	return absf(title_rect.get_center().x - panel_rect.get_center().x) <= 2.0
+
+
+func _panel_luminance(panel: PanelContainer) -> float:
+	if panel == null:
+		return 1.0
+	var style := panel.get_theme_stylebox("panel") as StyleBoxFlat
+	if style == null:
+		return 1.0
+	var color := style.bg_color
+	return 0.299 * color.r + 0.587 * color.g + 0.114 * color.b
+
+
+func _is_descendant_of(node: Node, ancestor: Node) -> bool:
+	if node == null or ancestor == null:
+		return false
+	var current := node.get_parent()
+	while current != null:
+		if current == ancestor:
+			return true
+		current = current.get_parent()
+	return false
 
 
 func _popup_panels_have_expected_dismissal(node: Node) -> bool:
