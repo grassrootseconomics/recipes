@@ -654,7 +654,7 @@ func _create_offer(actor: Dictionary, to_id: String, offered_ids: Array, request
 		var asset := _resolve_asset(raw_ref)
 		if asset.is_empty() or not _asset_in_inventory(asset, str(actor.get("id", ""))):
 			return _fail("Offered asset is not held.")
-		if not _require_asset_backed_by_stock(asset):
+		if not _asset_backed_by_stock(asset):
 			return false
 		resolved_offered_assets.append(asset)
 	if _requests_offered_voucher_resource(resolved_offered_assets, normalized_requested_asset):
@@ -709,21 +709,19 @@ func _respond_offer(actor: Dictionary, offer_id: String, response: String, vouch
 		_release_offered_assets(offer)
 		table["offers"].erase(offer_id)
 		return true
-	var requested_asset: Dictionary = offer.get("requestedAsset", {})
-	if requested_asset.is_empty():
-		requested_asset = _legacy_requested_asset(actor, offer.get("requested", {}))
+	if not _offer_still_available_for_accept(offer, actor):
+		_invalidate_offer(offer)
+		return true
+	var requested_asset: Dictionary = _requested_asset_for_offer(actor, offer)
 	var accepted_asset_refs := _normalize_accepted_assets(voucher_ids, assets)
 	if accepted_asset_refs.size() != int(requested_asset.get("quantity", 1)):
 		return _fail("Accepted asset count does not match the request.")
 	var resolved_accepted_assets: Array = []
 	for raw_ref in accepted_asset_refs:
 		var asset := _resolve_asset(raw_ref)
-		if asset.is_empty() or not _asset_in_inventory(asset, str(actor.get("id", ""))):
-			return _fail("Accepted asset is not held.")
-		if not _require_asset_backed_by_stock(asset):
-			return false
-		if not _asset_matches_offer_request(asset, requested_asset):
-			return _fail("Accepted asset does not match the request.")
+		if asset.is_empty() or not _asset_in_inventory(asset, str(actor.get("id", ""))) or not _asset_backed_by_stock(asset) or not _asset_matches_offer_request(asset, requested_asset):
+			_invalidate_offer(offer)
+			return true
 		resolved_accepted_assets.append(asset)
 	offer["acceptedAssets"] = accepted_asset_refs.duplicate(true)
 	offer["acceptedVoucherIds"] = voucher_ids.duplicate()
@@ -2123,6 +2121,10 @@ func _require_asset_backed_by_stock(asset: Dictionary) -> bool:
 	return _require_voucher_backed_by_stock(asset.get("value", {}))
 
 
+func _asset_backed_by_stock(asset: Dictionary) -> bool:
+	return str(asset.get("kind", "")) != "voucher" or _voucher_has_stock(asset.get("value", {}))
+
+
 func _bot_can_use_pool(actor: Dictionary) -> bool:
 	return false if str(actor.get("kind", "")) == "bot" and str(actor.get("botType", "mixed")) == "barter_only" and _fail("This bot cannot use the platter.") else true
 
@@ -2292,6 +2294,22 @@ func _legacy_requested_asset(recipient: Dictionary, requested: Dictionary) -> Di
 	return {"kind": "voucher", "ingredientId": ingredient_id, "ownerParticipantId": recipient.get("id", ""), "quantity": quantity}
 
 
+func _requested_asset_for_offer(recipient: Dictionary, offer: Dictionary) -> Dictionary:
+	var requested_asset: Dictionary = offer.get("requestedAsset", {})
+	if not requested_asset.is_empty():
+		return requested_asset
+	if recipient.is_empty():
+		return {}
+	var requested: Dictionary = offer.get("requested", {})
+	var ingredient_id := str(requested.get("ingredientId", ""))
+	var quantity := int(requested.get("quantity", 1))
+	if quantity <= 0 or ingredient_id == "":
+		return {}
+	if ingredient_id != str(recipient.get("ingredientId", "")):
+		return {}
+	return {"kind": "voucher", "ingredientId": ingredient_id, "ownerParticipantId": recipient.get("id", ""), "quantity": quantity}
+
+
 func _validate_offer_asset_request(participant_id_for_offer: String, requested: Dictionary) -> bool:
 	if int(requested.get("quantity", 1)) <= 0:
 		return _fail("Offer request quantity must be positive.")
@@ -2379,13 +2397,17 @@ func _auto_refuse_unavailable_offers() -> void:
 		var offer: Dictionary = table["offers"][offer_id]
 		if str(offer.get("status", "")) != "pending":
 			continue
-		if not _offered_assets_still_locked_and_backed(offer):
-			_release_offered_assets(offer)
-			table["offers"].erase(offer_id)
+		var recipient := _participant_by_id(str(offer.get("toParticipantId", "")))
+		if recipient.is_empty():
+			_invalidate_offer(offer)
 			continue
-		var requested: Dictionary = offer.get("requestedAsset", {})
+		if not _offered_assets_still_locked_and_backed(offer):
+			_invalidate_offer(offer)
+			continue
+		var requested: Dictionary = _requested_asset_for_offer(recipient, offer)
 		if requested.is_empty():
-			requested = _legacy_requested_asset(_participant_by_id(str(offer.get("toParticipantId", ""))), offer.get("requested", {}))
+			_invalidate_offer(offer)
+			continue
 		var key := "%s:%s" % [offer.get("toParticipantId", ""), _offer_asset_request_key(requested)]
 		if not remaining.has(key):
 			remaining[key] = _offerable_asset_qty(str(offer.get("toParticipantId", "")), requested)
@@ -2393,8 +2415,24 @@ func _auto_refuse_unavailable_offers() -> void:
 			remaining[key] = int(remaining[key]) - int(requested.get("quantity", 1))
 			continue
 		_record_scarcity_pressure(requested, maxi(1, int(requested.get("quantity", 1)) - maxi(0, int(remaining[key]))))
-		_release_offered_assets(offer)
-		table["offers"].erase(offer_id)
+		_invalidate_offer(offer)
+
+
+func _offer_still_available_for_accept(offer: Dictionary, recipient: Dictionary) -> bool:
+	if recipient.is_empty():
+		return false
+	if not _offered_assets_still_locked_and_backed(offer):
+		return false
+	var requested: Dictionary = _requested_asset_for_offer(recipient, offer)
+	if requested.is_empty():
+		return false
+	return _offerable_asset_qty(str(recipient.get("id", "")), requested) >= int(requested.get("quantity", 1))
+
+
+func _invalidate_offer(offer: Dictionary) -> void:
+	offer["status"] = "refused"
+	_release_offered_assets(offer)
+	table["offers"].erase(str(offer.get("id", "")))
 
 
 func _record_scarcity_pressure(requested: Dictionary, missing_amount: int = 1) -> void:

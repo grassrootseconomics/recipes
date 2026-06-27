@@ -1273,24 +1273,39 @@ function respondOffer(
     return;
   }
 
-  const requestedAsset = offer.requestedAsset ?? legacyRequestedAsset(actor, offer.requested);
+  const requestedAsset = requestedAssetForOffer(actor, offer);
+  if (
+    !requestedAsset ||
+    !offeredAssetsStillLockedAndBacked(table, offer) ||
+    offerableAssetQty(table, actor.id, requestedAsset) < requestedAsset.quantity
+  ) {
+    invalidateOffer(table, offer);
+    return;
+  }
   const acceptedAssetRefs = normalizeAcceptedAssets(voucherIds, acceptedAssets);
   if (acceptedAssetRefs.length !== requestedAsset.quantity) {
     throw new GameError("Accepted asset count does not match the request.", "invalid_offer_response");
   }
-  const resolvedAcceptedAssets = acceptedAssetRefs.map((asset) => requirePlatterAsset(table, asset));
-  for (const asset of resolvedAcceptedAssets) {
-    requireAssetInInventory(asset, actor.id);
-    requireResolvedVoucherBackedByStock(table, asset);
-    if (!assetMatchesOfferRequest(asset, requestedAsset)) {
-      throw new GameError("Accepted asset does not match the request.", "invalid_offer_response");
+  const resolvedAcceptedAssets: ResolvedPlatterAsset[] = [];
+  for (const assetRef of acceptedAssetRefs) {
+    const asset = resolvePlatterAsset(table, assetRef);
+    if (
+      !asset ||
+      !assetIsInInventory(asset, actor.id) ||
+      !resolvedAssetIsBackedByStock(table, asset) ||
+      !assetMatchesOfferRequest(asset, requestedAsset)
+    ) {
+      invalidateOffer(table, offer);
+      return;
     }
+    resolvedAcceptedAssets.push(asset);
   }
 
   offer.status = "accepted";
   offer.acceptedAssets = acceptedAssetRefs.map((asset) => ({ ...asset }));
   offer.acceptedVoucherIds = [...voucherIds];
-  for (const asset of offer.offeredAssets.map((ref) => requirePlatterAsset(table, ref))) {
+  const resolvedOfferedAssets = offer.offeredAssets.map((ref) => requirePlatterAsset(table, ref));
+  for (const asset of resolvedOfferedAssets) {
     moveAssetToInventory(asset, offer.toParticipantId);
   }
   for (const asset of resolvedAcceptedAssets) {
@@ -1353,6 +1368,20 @@ function legacyRequestedAsset(recipient: Participant, requested?: OfferRequest):
     throw new GameError("Legacy ingredient offers can only ask for the recipient's own ingredient.", "invalid_offer");
   }
   return { kind: "voucher", ingredientId: requested.ingredientId, ownerParticipantId: recipient.id, quantity: requested.quantity };
+}
+
+function requestedAssetForOffer(recipient: Participant, offer: Offer): OfferAssetRequest | undefined {
+  if (offer.requestedAsset) {
+    return offer.requestedAsset;
+  }
+  try {
+    return legacyRequestedAsset(recipient, offer.requested);
+  } catch (error) {
+    if (error instanceof GameError) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function validateOfferAssetRequest(table: Table, recipient: Participant, requested: OfferAssetRequest): void {
@@ -1442,18 +1471,18 @@ function autoRefuseUnavailableOffers(table: Table): void {
     }
     const recipient = table.participants[offer.toParticipantId];
     if (!recipient) {
-      offer.status = "refused";
-      releaseOfferedAssets(table, offer);
-      delete table.offers[offer.id];
+      invalidateOffer(table, offer);
       continue;
     }
     if (!offeredAssetsStillLockedAndBacked(table, offer)) {
-      offer.status = "refused";
-      releaseOfferedAssets(table, offer);
-      delete table.offers[offer.id];
+      invalidateOffer(table, offer);
       continue;
     }
-    const requestedAsset = offer.requestedAsset ?? legacyRequestedAsset(recipient, offer.requested);
+    const requestedAsset = requestedAssetForOffer(recipient, offer);
+    if (!requestedAsset) {
+      invalidateOffer(table, offer);
+      continue;
+    }
     const key = `${recipient.id}:${offerAssetRequestKey(requestedAsset)}`;
     const remaining = remainingByRequest.get(key) ?? offerableAssetQty(table, recipient.id, requestedAsset);
     if (remaining >= requestedAsset.quantity) {
@@ -1461,9 +1490,7 @@ function autoRefuseUnavailableOffers(table: Table): void {
       continue;
     }
     recordScarcityPressure(table, requestedAsset, Math.max(1, requestedAsset.quantity - Math.max(0, remaining)));
-    offer.status = "refused";
-    releaseOfferedAssets(table, offer);
-    delete table.offers[offer.id];
+    invalidateOffer(table, offer);
   }
 }
 
@@ -1757,15 +1784,30 @@ function ingredientListLabel(table: Table, voucherIds: string[]): string {
   return voucherIds.map((voucherId) => ingredientName(table.vouchers[voucherId]?.ingredientId ?? "")).join(", ");
 }
 
-function requirePlatterAsset(table: Table, ref: PlatterAssetRef): ResolvedPlatterAsset {
+function resolvePlatterAsset(table: Table, ref: PlatterAssetRef): ResolvedPlatterAsset | undefined {
   switch (ref.kind) {
-    case "voucher":
-      return { kind: "voucher", value: requireVoucher(table, ref.id) };
-    case "dish_part":
-      return { kind: "dish_part", value: requireDishPart(table, ref.id) };
+    case "voucher": {
+      const voucher = table.vouchers[ref.id];
+      return voucher ? { kind: "voucher", value: voucher } : undefined;
+    }
+    case "dish_part": {
+      const part = table.dishParts?.[ref.id];
+      return part ? { kind: "dish_part", value: part } : undefined;
+    }
     default:
       assertNever(ref.kind);
   }
+}
+
+function requirePlatterAsset(table: Table, ref: PlatterAssetRef): ResolvedPlatterAsset {
+  const asset = resolvePlatterAsset(table, ref);
+  if (asset) {
+    return asset;
+  }
+  if (ref.kind === "voucher") {
+    throw new GameError("Voucher not found.", "missing_voucher");
+  }
+  throw new GameError("Dish part not found.", "missing_dish_part");
 }
 
 function aggregateAssetToExactRef(
@@ -1813,14 +1855,6 @@ function aggregateAssetToExactRef(
   return { kind: "dish_part", id: part.id };
 }
 
-function requireDishPart(table: Table, dishPartId: string): DishPart {
-  const part = table.dishParts?.[dishPartId];
-  if (!part) {
-    throw new GameError("Dish part not found.", "missing_dish_part");
-  }
-  return part;
-}
-
 function requireAssetInInventory(asset: ResolvedPlatterAsset, participantId: string): void {
   if (asset.kind === "voucher") {
     requireVoucherInHand(asset.value, participantId);
@@ -1829,6 +1863,17 @@ function requireAssetInInventory(asset: ResolvedPlatterAsset, participantId: str
   if (asset.value.location.type !== "inventory" || asset.value.location.participantId !== participantId) {
     throw new GameError("Dish part is not in participant inventory.", "dish_part_not_held");
   }
+}
+
+function assetIsInInventory(asset: ResolvedPlatterAsset, participantId: string): boolean {
+  if (asset.kind === "voucher") {
+    return asset.value.location.type === "hand" && asset.value.location.participantId === participantId;
+  }
+  return asset.value.location.type === "inventory" && asset.value.location.participantId === participantId;
+}
+
+function resolvedAssetIsBackedByStock(table: Table, asset: ResolvedPlatterAsset): boolean {
+  return asset.kind !== "voucher" || voucherIsBackedByStock(table, asset.value);
 }
 
 function requireAssetInPlatter(asset: ResolvedPlatterAsset): void {
@@ -1914,9 +1959,18 @@ export function offerableUnreservedIngredientQty(table: Table, participantId: st
   return Math.max(0, rawAvailable - pendingRequested);
 }
 
+function invalidateOffer(table: Table, offer: Offer): void {
+  offer.status = "refused";
+  releaseOfferedAssets(table, offer);
+  delete table.offers[offer.id];
+}
+
 function offeredAssetsStillLockedAndBacked(table: Table, offer: Offer): boolean {
   for (const assetRef of offer.offeredAssets) {
-    const asset = requirePlatterAsset(table, assetRef);
+    const asset = resolvePlatterAsset(table, assetRef);
+    if (!asset) {
+      return false;
+    }
     if (asset.kind === "voucher") {
       if (asset.value.location.type !== "offer_lock" || asset.value.location.offerId !== offer.id || !voucherIsBackedByStock(table, asset.value)) {
         return false;
@@ -1932,7 +1986,10 @@ function offeredAssetsStillLockedAndBacked(table: Table, offer: Offer): boolean 
 
 function releaseOfferedAssets(table: Table, offer: Offer): void {
   for (const assetRef of offer.offeredAssets) {
-    const asset = requirePlatterAsset(table, assetRef);
+    const asset = resolvePlatterAsset(table, assetRef);
+    if (!asset) {
+      continue;
+    }
     if (asset.kind === "voucher") {
       if (asset.value.location.type === "offer_lock" && asset.value.location.offerId === offer.id) {
         asset.value.location = { type: "hand", participantId: offer.fromParticipantId };

@@ -44,9 +44,11 @@ func _initialize() -> void:
 	var cook_ring := visual.find_child("CookRing", true, false) as Control
 	_require(cook_ring != null and cook_ring.get_child_count() == 8, "renders the 8 cooks around the basket")
 	if cook_ring != null and cook_ring.get_child_count() == 8:
+		var p4 := visual.find_child("Participant_p4", true, false) as Control
 		var p5 := visual.find_child("Participant_p5", true, false) as Control
 		var p8 := visual.find_child("Participant_p8", true, false) as Control
 		_require(p5 != null and p8 != null and p5.position.x > p8.position.x, "lower cooks are positioned clockwise around the basket")
+		_require(p4 != null and p5 != null and is_equal_approx(p5.position.x, p4.position.x), "lower-right cook aligns with the upper-right cook x position")
 	_require(visual.find_child("Participant_p1", true, false) != null, "keeps the viewing cook visible in the 8-cook grid")
 	_require(bool(visual.debug_stats.get("viewerCookVisible", false)), "shows the viewing cook in the 8-cook grid")
 	_assert_key_visuals_fit_assigned_width(visual, 720.0)
@@ -64,6 +66,9 @@ func _initialize() -> void:
 	_require(hand_card != null and hand_card.find_child("CardStackLayer_1", true, false) != null, "grouped promise cards draw a tight stack layer without changing tile size")
 	_require(visual.find_child("Title_Cooks", true, false) == null, "visual table removes the separate Cooks title")
 	_require(_has_label_containing(visual, "Amina's Actions"), "Actions panel title includes the viewing cook name")
+	var main_tablecloth := visual.find_child("MainTableclothPattern", true, false) as Control
+	_require(main_tablecloth != null and main_tablecloth.mouse_filter == Control.MOUSE_FILTER_IGNORE, "main table panel renders a non-interactive tiled tablecloth layer")
+	_require(main_tablecloth != null and main_tablecloth.get_parent() == visual and main_tablecloth.get_index() < 1, "main tablecloth layer stays behind table content")
 	var table_menu_button := visual.find_child("TableMenuButton", true, false) as Button
 	_require(table_menu_button != null and table_menu_button.visible, "renders a table menu button")
 	_require(table_menu_button != null and table_menu_button.size.x <= 48.0 and table_menu_button.size.y <= 40.0, "table menu button stays compact")
@@ -226,7 +231,7 @@ func _initialize() -> void:
 	_require(food_popup != null and food_popup.visible, "food-piece info popup stays open across table refreshes")
 	food_popup.hide()
 	_require(visual.preferred_visual_size() == Vector2(700, 960), "visual table reports a stable preferred size")
-	_require(visual.preferred_visual_size_for_area(Vector2(1500, 720)) == Vector2(1392, 560), "visual table reports a stable landscape preferred size for wide screens")
+	_require(visual.preferred_visual_size_for_area(Vector2(1500, 720)) == Vector2(1426, 560), "visual table reports a stable landscape preferred size with right-edge breathing room")
 	visual.set_visual_layout_area(Vector2(1500, 720))
 	await process_frame
 	_require(visual.debug_layout_mode() == "landscape", "visual table switches to horizontal layout when the window is wide")
@@ -249,6 +254,9 @@ func _initialize() -> void:
 	_require(middle_row != null and middle_row.get_parent() == landscape_inventory_upper, "Inventory upper panel owns Actions and Recipe row")
 	_require(bottom_tray != null and bottom_tray.get_parent() == landscape_inventory_lower, "Inventory lower panel owns Promise Cards")
 	_require(landscape_board.get_global_rect().position.x < landscape_inventory.get_global_rect().position.x, "landscape layout places Board left of Inventory")
+	var landscape_visual_rect := visual.get_global_rect()
+	var landscape_inventory_rect := landscape_inventory.get_global_rect()
+	_require(landscape_visual_rect.end.x - landscape_inventory_rect.end.x >= 20.0, "landscape layout keeps Inventory away from the outer table edge")
 	visual.set_visual_layout_area(Vector2(720, 1100))
 	await process_frame
 	_require(visual.debug_layout_mode() == "portrait", "visual table returns to portrait layout when the window is narrow")
@@ -404,6 +412,7 @@ func _initialize() -> void:
 	await _assert_redeem_animation_has_no_dialog_artifacts(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _public_redeem_after(), "public_redeem", "off-turn public redeem queues animation")
 	_assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual)
+	_assert_redeem_paths_ignore_bad_cached_points(visual)
 	_assert_animation_event(visual, _prepare_before(), _prepare_after(), "prepare", "prepare confirmation queues animation")
 	_assert_prepare_event_uses_actual_recipe_name(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _public_prepare_after(), "public_prepare", "off-turn public prepare queues animation")
@@ -412,9 +421,11 @@ func _initialize() -> void:
 	_assert_animation_event(visual, _offer_before(), _snapshot_fixture(), "offer", "offer badge change queues animation")
 	_assert_animation_event(visual, _settlement_before(), _settlement_after(), "settlement_swap", "settlement swap queues animation")
 	_assert_animation_event(visual, _eating_before(), _eating_after(), "eat", "bite confirmation queues animation")
-	_assert_animation_count(visual, _eating_many_before(), _eating_many_after(), "eat", 3, "bite-all queues one animation per held dish piece")
+	_assert_animation_count(visual, _eating_many_before(), _eating_many_after(), "eat", 2, "share-food queues one launch per held dish bundle")
 	await _assert_eat_animation_starts_at_held_food_part(visual)
 	await _assert_eat_animation_reanchors_after_food_group_reflow(visual)
+	await _assert_final_eat_starts_orbit_before_congratulations(visual)
+	_assert_public_final_eat_uses_avatar_source(visual)
 	_assert_animation_event(visual, _complete_before(), _complete_after(), "complete", "complete confirmation queues animation")
 	visual.render(snapshot)
 	visual.debug_play_animation_event({"type": "deposit", "ingredientId": "rice", "participantId": "p1"})
@@ -612,11 +623,26 @@ func _initialize() -> void:
 	_require(target_hand_food.find_child("CardInsetOutline", true, false) == null, "create-offer popup renders non-viewing dish pieces without card frames")
 	_require(visual.find_child("OfferPopupClose", true, false) != null, "offer popup has a top-right close button")
 	_assert_offer_actions_below_cards(visual)
-	_require(_has_text_containing(visual, "2:2"), "create-offer popup offers a 2:2 toggle when both sides have enough assets")
-	_require(_press_button_containing(visual, "2:2"), "2:2 toggle can be selected")
-	_require(_has_text_containing(visual, "1:1"), "doubled offer can switch back to 1:1")
-	_require(_has_text_containing(visual, "Rice x2"), "doubled offer shows two offered cards")
-	_require(_has_text_containing(visual, "Veggies x2") or _has_text_containing(visual, "Vegetables x2"), "doubled offer shows two requested cards")
+	var quantity_toggle := visual.find_child("OfferQuantityToggle", true, false) as Button
+	var pair_middle := visual.find_child("OfferPairMiddle", true, false)
+	var action_row := visual.find_child("OfferActionRow", true, false)
+	_require(quantity_toggle != null and quantity_toggle.text == "1:1", "create-offer quantity toggle starts at 1:1")
+	_require(quantity_toggle != null and quantity_toggle.get_parent() == pair_middle, "create-offer quantity toggle sits between the offer cards below the arrow")
+	_require(action_row != null and action_row.find_child("OfferQuantityToggle", true, false) == null, "create-offer action row does not contain the quantity toggle")
+	_require(quantity_toggle != null and quantity_toggle.custom_minimum_size.x <= 46.0 and quantity_toggle.custom_minimum_size.y <= 24.0, "create-offer quantity toggle stays tight around its label")
+	_require(_has_text_containing(visual.find_child("OfferGiveCard_rice", true, false), "Rice x1"), "1:1 offer shows one offered card")
+	_require(_has_text_containing(visual.find_child("OfferGetCard_vegetables", true, false), "Veggies x1") or _has_text_containing(visual.find_child("OfferGetCard_vegetables", true, false), "Vegetables x1"), "1:1 offer shows one requested card")
+	_require(_press_button_containing(visual, "1:1"), "1:1 toggle can switch to 2:2")
+	quantity_toggle = visual.find_child("OfferQuantityToggle", true, false) as Button
+	_require(quantity_toggle != null and quantity_toggle.text == "2:2", "doubled offer toggle shows current 2:2 state")
+	_require(_has_text_containing(visual.find_child("OfferGiveCard_rice", true, false), "Rice x2"), "doubled offer shows two offered cards")
+	_require(_has_text_containing(visual.find_child("OfferGetCard_vegetables", true, false), "Veggies x2") or _has_text_containing(visual.find_child("OfferGetCard_vegetables", true, false), "Vegetables x2"), "doubled offer shows two requested cards")
+	_require(_press_button_containing(visual, "2:2"), "2:2 toggle can switch back to 1:1")
+	quantity_toggle = visual.find_child("OfferQuantityToggle", true, false) as Button
+	_require(quantity_toggle != null and quantity_toggle.text == "1:1", "quantity toggle returns to current 1:1 state")
+	_require(_has_text_containing(visual.find_child("OfferGiveCard_rice", true, false), "Rice x1"), "returned 1:1 offer shows one offered card")
+	_require(_has_text_containing(visual.find_child("OfferGetCard_vegetables", true, false), "Veggies x1") or _has_text_containing(visual.find_child("OfferGetCard_vegetables", true, false), "Vegetables x1"), "returned 1:1 offer shows one requested card")
+	_require(_press_button_containing(visual, "1:1"), "1:1 toggle can be selected again for doubled creation")
 	_intents.clear()
 	_require(_press_button_containing(visual, "Create"), "doubled offer can be created")
 	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "create_offer", "doubled offer emits create_offer")
@@ -629,6 +655,7 @@ func _initialize() -> void:
 	visual.debug_press_participant("p4")
 	visual.debug_press_offer_hand_voucher("beans", "p2")
 	_require(visual.find_child("OfferGetCard_beans", true, false) != null, "clicking a target hand card makes it the requested offer asset")
+	_require(visual.find_child("OfferQuantityToggle", true, false) == null, "create-offer popup hides the quantity toggle when a 2:2 offer is not possible")
 	_require(_press_button_containing(visual, "Create"), "specific hand-asset offer has a Create button")
 	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "create_offer", "specific hand-asset offer emits create_offer")
 	_require(str(_intents[0].get("requestedAsset", {}).get("ingredientId", "")) == "beans", "specific hand-asset offer requests the clicked ingredient")
@@ -754,7 +781,7 @@ func _initialize() -> void:
 	visual.debug_apply_snapshot(eating)
 	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Food to Share", "eating phase labels held food as food to share")
 	_require(_has_text_containing(visual, "2 left"), "eating phase shows held pieces still left")
-	_require(_has_text_containing(visual, "3 eaten"), "eating phase shows bites already eaten")
+	_require(_has_text_containing(visual, "3 shared"), "eating phase shows food already shared")
 	var eating_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
 	_require(eating_actions.has("Share food."), "eating phase labels the eat-all action as Share food")
 	_require(bool(visual.debug_stats.get("takeBiteEnabled", false)), "eating phase enables Share food for cleared player with held food parts")
@@ -892,13 +919,33 @@ func _initialize() -> void:
 	_require(bool(visual.debug_stats.get("completeFireworks", false)), "complete phase renders animated fireworks in Actions")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Congratulations!", "complete phase replaces recipe title")
 	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Congratulations! 32 player turns", "complete phase shows player turn count in title")
-	_require(main_menu_overlay != null and main_menu_overlay.visible, "complete phase exposes the top Main Menu button")
+	var complete_title_label := visual.find_child("RecipeTitleLabel", true, false) as Label
+	_require(complete_title_label != null and complete_title_label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "complete phase centers the Congratulations title")
+	_require(complete_title_label != null and complete_title_label.custom_minimum_size.x >= 300.0, "complete phase gives the Congratulations title enough width")
+	var complete_action_panel := visual.find_child("ActionPanel", true, false) as Control
+	_require(complete_action_panel != null and complete_action_panel.get_combined_minimum_size().y <= 220.0, "complete phase does not let ActionPanel content resize the panel")
+	_require(main_menu_overlay != null and main_menu_overlay.visible, "complete phase exposes the bottom Main Menu button")
+	var table_rect := visual.get_global_rect()
+	var main_menu_rect := main_menu_overlay.get_global_rect() if main_menu_overlay != null else Rect2()
+	_require(main_menu_overlay != null and main_menu_rect.position.y > table_rect.position.y + table_rect.size.y * 0.5, "complete phase places the Main Menu button in the lower half of the table")
+	_require(main_menu_overlay != null and abs(main_menu_rect.end.x - (table_rect.end.x - 10.0)) <= 2.0, "complete phase right-aligns the Main Menu button inside the table")
+	_require(main_menu_overlay != null and abs(main_menu_rect.end.y - (table_rect.end.y - 10.0)) <= 2.0, "complete phase bottom-aligns the Main Menu button inside the table")
 	var complete_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
 	_require(complete_actions.has("Game Stats"), "complete phase exposes detailed game stats")
 	_require(visual.find_child("ActionFireworks", true, false) != null, "complete phase has a fireworks control")
+	var complete_orbit := visual.find_child("CompleteFoodOrbit", true, false)
+	_require(complete_orbit != null, "complete phase keeps prepared food orbiting around the main table")
+	_require(int(visual.debug_stats.get("completeFoodOrbitCount", 0)) >= 2, "complete phase orbits completed food bundles without duplicating individual bites")
+	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "complete phase shows the whole food orbit")
+	var orbit_margin := float(complete_orbit.get_meta("orbit_margin", 0.0)) if complete_orbit != null else 0.0
+	_require(orbit_margin > 0.0 and orbit_margin <= 22.5, "complete food orbit follows the main table edge while staying visible")
+	_require(complete_orbit != null and complete_orbit.find_child("OrbitFoodQuantity", true, false) == null, "complete food orbit hides quantity text on orbiting bunches")
+	_require(int(visual.debug_stats.get("completeAvatarDanceCount", 0)) >= 4, "complete phase makes cook avatars dance")
+	var dancing_avatar := visual.find_child("CookAvatar", true, false) as TextureRect
+	_require(dancing_avatar != null and bool(dancing_avatar.get_meta("complete_dance", false)), "complete phase marks avatar sprites with the dance animation")
 	_require(not _has_text_containing(visual, "Party fireworks"), "complete phase removes static Party fireworks text")
 	_require(_has_text_containing(visual, "Rice: 10"), "complete phase summarizes raw ingredient stock")
-	_require(_has_text_containing(visual, "Bites: 4"), "complete phase summarizes bites with label")
+	_require(_has_text_containing(visual, "Shared: 4"), "complete phase summarizes shared food with label")
 	_require(int(visual.debug_stats.get("completeBiteSummaryCount", 0)) == 4, "complete phase summarizes bites for active players")
 	_require(visual.preferred_visual_size() == Vector2(700, 960), "complete phase keeps the same preferred table size")
 	visual.call("_open_game_stats_popup")
@@ -928,6 +975,7 @@ func _assert_animation_event(visual: Node, before_snapshot: Dictionary, after_sn
 	visual.render(after_snapshot)
 	var types: Array = visual.debug_stats.get("lastAnimationTypes", [])
 	_require(types.has(expected_type), message)
+	_assert_animation_paths_are_sane(visual, message)
 	visual.debug_flush_animations()
 
 
@@ -1002,6 +1050,7 @@ func _assert_animation_count(visual: Node, before_snapshot: Dictionary, after_sn
 		if str(raw_type) == expected_type:
 			count += 1
 	_require(count >= expected_minimum, message)
+	_assert_animation_paths_are_sane(visual, message)
 	visual.debug_flush_animations()
 
 
@@ -1012,41 +1061,84 @@ func _assert_eat_animation_starts_at_held_food_part(visual: Node) -> void:
 	var event := _first_animation_event_of_type(visual, "eat")
 	_require(not event.is_empty(), "eat animation event is queued")
 	_require(str(event.get("dishId", "")) == "dish_3", "eat animation records the held dish id")
+	_require(bool(event.get("completeOrbit", false)), "share-food animation sends the held dish piece into the orbit")
 	_require(typeof(event.get("startPoint", null)) == TYPE_VECTOR2, "eat animation records the concrete held food-piece anchor")
 	var points: Dictionary = visual.debug_animation_path_points(event)
 	var held_piece_center := _node_center(visual.find_child("HandFood_dish_3", true, false))
 	var rice_card_center := _node_center(visual.find_child("HandCard_rice", true, false))
-	_require(_points_close(points.get("start", Vector2.INF), held_piece_center), "bite animation starts on the completed dish piece in the viewer hand")
-	_require(_points_differ(points.get("start", Vector2.INF), rice_card_center), "bite animation does not fall back to the first ingredient promise card")
-	var stale_event := event.duplicate(true)
-	stale_event["startPoint"] = rice_card_center
-	points = visual.debug_animation_path_points(stale_event)
-	_require(_points_close(points.get("start", Vector2.INF), held_piece_center), "bite animation prefers the visible held food-piece tile over a stale recorded point")
+	_require(_points_close(points.get("start", Vector2.INF), held_piece_center), "share-food launch starts on the completed dish piece in the viewer hand")
+	_require(_points_differ(points.get("start", Vector2.INF), rice_card_center), "share-food launch does not fall back to the first ingredient promise card")
+	_require(visual.find_child("CompleteFoodOrbit", true, false) != null, "share-food animation starts the shared food orbit before the next snapshot")
+	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "share-food animation flies the dish piece into orbit")
+	_require(visual.find_child("FlyingFoodQuantity", true, false) == null, "share-food launch hides quantity text on flying food bunches")
 	visual.debug_apply_next_animation_milestone()
 	await process_frame
-	_require(visual.find_child("HandFood_dish_3", true, false) == null, "bite milestone removes the eaten food-piece tile")
+	_require(visual.find_child("HandFood_dish_3", true, false) == null, "share-food milestone removes the launched food-piece tile")
 	points = visual.debug_animation_path_points(event)
-	_require(_points_close(points.get("start", Vector2.INF), held_piece_center), "bite animation keeps the recorded food-piece anchor after the hand grid updates")
+	_require(_points_close(points.get("start", Vector2.INF), held_piece_center), "share-food launch keeps the recorded food-piece anchor after the hand grid updates")
+	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) > 0, "eating phase keeps shared food visible in the orbit")
 	visual.debug_flush_animations()
 
 
 func _assert_eat_animation_reanchors_after_food_group_reflow(visual: Node) -> void:
 	visual.debug_apply_snapshot(_eating_many_before())
 	await process_frame
-	visual.render(_eating_many_after())
-	visual.debug_apply_next_animation_milestone()
-	visual.debug_apply_next_animation_milestone()
-	await process_frame
+	var cheese_piece_center := _node_center(visual.find_child("HandFood_dish_3", true, false))
 	var bean_piece_center := _node_center(visual.find_child("HandFood_dish_4", true, false))
 	var rice_card_center := _node_center(visual.find_child("HandCard_rice", true, false))
-	var points: Dictionary = visual.debug_animation_path_points({
-		"type": "eat",
-		"dishId": "dish_4",
-		"dishName": "Bean Dip",
-		"unit": "scoop"
-	})
-	_require(_points_close(points.get("start", Vector2.INF), bean_piece_center), "next bite animation re-anchors to the current food-piece position after hand reflow")
-	_require(_points_differ(points.get("start", Vector2.INF), rice_card_center), "next bite animation still avoids ingredient-card fallback after hand reflow")
+	visual.render(_eating_many_after())
+	var events: Array = visual.debug_stats.get("lastAnimationEvents", [])
+	var cheese_event: Dictionary = {}
+	var bean_event: Dictionary = {}
+	for raw_event in events:
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) != "eat":
+			continue
+		if str(event.get("dishId", "")) == "dish_3":
+			cheese_event = event
+		elif str(event.get("dishId", "")) == "dish_4":
+			bean_event = event
+	_require(not cheese_event.is_empty() and int(cheese_event.get("quantity", 0)) == 2, "share-food groups matching dish pieces into one Cheese Frittata x2 launch")
+	_require(not bean_event.is_empty() and int(bean_event.get("quantity", 0)) == 1, "share-food keeps the Bean Dip stack as one launch")
+	var points: Dictionary = visual.debug_animation_path_points(cheese_event)
+	_require(_points_close(points.get("start", Vector2.INF), cheese_piece_center), "grouped Cheese Frittata launch starts at its current hand tile")
+	points = visual.debug_animation_path_points(bean_event)
+	_require(_points_close(points.get("start", Vector2.INF), bean_piece_center), "grouped Bean Dip launch starts at its current hand tile")
+	_require(_points_differ(points.get("start", Vector2.INF), rice_card_center), "grouped food launch does not fall back to the first promise card")
+	visual.debug_flush_animations()
+
+
+func _assert_final_eat_starts_orbit_before_congratulations(visual: Node) -> void:
+	visual.debug_apply_snapshot(_final_eating_before())
+	await process_frame
+	visual.render(_final_eating_after())
+	await process_frame
+	var event := _first_animation_event_of_type(visual, "eat")
+	_require(not event.is_empty(), "final bite queues an eat animation")
+	_require(bool(event.get("completeOrbit", false)), "final bite is marked as the orbit transition")
+	_require(not visual.debug_stats.get("lastAnimationTypes", []).has("complete"), "final bite transition suppresses the separate complete animation")
+	_require(visual.find_child("CompleteFoodOrbit", true, false) != null, "final bite starts the table food orbit before the complete snapshot")
+	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "final bite flies the dish piece into the orbit")
+	_require(str(visual.debug_stats.get("phase", "")) == "eating", "congratulations are held until the orbit transition finishes")
+	_require(not bool(visual.debug_stats.get("completeCelebration", true)), "complete celebration is not shown before orbit transition finishes")
+	visual.debug_flush_animations()
+	await process_frame
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "complete celebration appears after orbit transition finishes")
+	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "final complete snapshot keeps the orbit visible")
+
+
+func _assert_public_final_eat_uses_avatar_source(visual: Node) -> void:
+	visual.debug_apply_snapshot(_public_final_eating_before())
+	await process_frame
+	visual.render(_public_final_eating_after())
+	var event := _first_animation_event_of_type(visual, "eat")
+	_require(not event.is_empty(), "public final bite queues an eat animation")
+	_require(str(event.get("participantId", "")) == "p2", "public final bite records the eating cook")
+	_require(bool(event.get("completeOrbit", false)), "public final bite is also marked as the orbit transition")
+	var participant := visual.find_child("Participant_p2", true, false) as Control
+	var avatar_center := _node_center(participant.find_child("CookAvatar", true, false) if participant != null else null)
+	var points: Dictionary = visual.debug_animation_path_points(event)
+	_require(_points_close(points.get("start", Vector2.INF), avatar_center), "public final bite starts from the non-viewing cook avatar")
 	visual.debug_flush_animations()
 
 
@@ -1329,6 +1421,29 @@ func _assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual: Node)
 	visual.debug_flush_animations()
 
 
+func _assert_redeem_paths_ignore_bad_cached_points(visual: Node) -> void:
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	var actor_center := _node_center(visual.find_child("Participant_p2", true, false))
+	var owner_center := _node_center(visual.find_child("Participant_p1", true, false))
+	var top_left_recipe_slot := _node_center(visual.find_child("RecipeSlot_rice_0", true, false))
+	_require(actor_center != Vector2.INF and owner_center != Vector2.INF and top_left_recipe_slot != Vector2.INF, "cached-point regression has visible actor, owner, and recipe-slot anchors")
+	var event := {
+		"type": "public_redeem",
+		"participantId": "p2",
+		"ownerParticipantId": "p1",
+		"ingredientId": "rice",
+		"cardStartPoint": Vector2.ZERO,
+		"ownerPoint": top_left_recipe_slot,
+		"ingredientEndPoint": Vector2.ZERO
+	}
+	var points: Dictionary = visual.debug_animation_path_points(event)
+	_require(_points_close(points.get("cardStart", Vector2.INF), actor_center), "public redeem ignores cached 0,0 card start and uses the acting cook")
+	_require(_points_close(points.get("cardEnd", Vector2.INF), owner_center), "public redeem ignores cached top-left-grid card end and uses the owner cook")
+	_require(_points_close(points.get("ingredientStart", Vector2.INF), owner_center), "public redeem ingredient starts from the resolved owner cook")
+	_require(_points_close(points.get("ingredientEnd", Vector2.INF), actor_center), "public redeem ignores cached 0,0 ingredient end and returns to the acting cook")
+	visual.debug_flush_animations()
+
+
 func _assert_redeem_animation_has_no_dialog_artifacts(visual: Node) -> void:
 	_statuses.clear()
 	visual.debug_apply_snapshot(_snapshot_fixture())
@@ -1337,7 +1452,16 @@ func _assert_redeem_animation_has_no_dialog_artifacts(visual: Node) -> void:
 	await process_frame
 	_require(_statuses.is_empty(), "redeem animation playback does not emit transient status text")
 	_require(not _has_label_containing(visual, "Redeeming"), "redeem animation playback does not create a transient caption panel")
+	_require(not _has_animation_pulse(visual), "redeem animation playback does not pulse recipe slot borders")
 	visual.debug_flush_animations()
+
+
+func _has_animation_pulse(node: Node) -> bool:
+	for raw_child in node.find_children("*", "PanelContainer", true, false):
+		var child := raw_child as PanelContainer
+		if child != null and str(child.name).begins_with("AnimationPulse"):
+			return true
+	return false
 
 
 func _has_text_containing(node: Node, needle: String) -> bool:
@@ -1419,11 +1543,40 @@ func _turn_circle_count(node: Node) -> int:
 	return count
 
 
+func _assert_animation_paths_are_sane(visual: Node, context: String) -> void:
+	var table := visual as Control
+	var bounds := Rect2()
+	if table != null:
+		bounds = table.get_global_rect().grow(96.0)
+	for raw_event in visual.debug_stats.get("lastAnimationEvents", []):
+		var event: Dictionary = raw_event
+		var points: Dictionary = visual.debug_animation_path_points(event)
+		if points.is_empty():
+			continue
+		for raw_key in points.keys():
+			var key := str(raw_key)
+			var point: Vector2 = points.get(raw_key, Vector2.INF)
+			_require(_animation_point_is_sane(point, bounds), "%s: %s %s uses a real on-table point, got %s" % [context, str(event.get("type", "")), key, point])
+
+
+func _animation_point_is_sane(point: Vector2, bounds: Rect2) -> bool:
+	if point == Vector2.INF:
+		return false
+	if is_nan(point.x) or is_nan(point.y) or is_inf(point.x) or is_inf(point.y):
+		return false
+	if absf(point.x) <= 1.0 and absf(point.y) <= 1.0:
+		return false
+	if bounds.size.x > 0.0 and bounds.size.y > 0.0 and not bounds.has_point(point):
+		return false
+	return true
+
+
 func _all_points_valid(points: Dictionary) -> bool:
 	if points.is_empty():
 		return false
 	for key in points.keys():
-		if points.get(key, Vector2.INF) == Vector2.INF:
+		var point: Vector2 = points.get(key, Vector2.INF)
+		if not _animation_point_is_sane(point, Rect2()):
 			return false
 	return true
 
@@ -2200,6 +2353,69 @@ func _eating_many_before() -> Dictionary:
 func _eating_many_after() -> Dictionary:
 	var snapshot := _eating_many_before()
 	snapshot["ownFoodParts"] = []
+	return snapshot
+
+
+func _final_eating_before() -> Dictionary:
+	var snapshot := _eating_before()
+	snapshot["currentTurnParticipantId"] = "p1"
+	snapshot["transactionHistory"] = []
+	snapshot["transactionTotal"] = 0
+	snapshot["gameStats"] = {"playerTurnCount": 18, "cycleCount": 2.25, "eatCount": 9}
+	snapshot["dishes"] = [
+		{"id": "dish_3", "ownerParticipantId": "p1", "name": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "totalParts": 10, "partsRemaining": 1, "partsEaten": 9, "totalBites": 10, "bitesRemaining": 1, "biteCounts": {"p1": 9}}
+	]
+	return snapshot
+
+
+func _final_eating_after() -> Dictionary:
+	var snapshot := _final_eating_before()
+	snapshot["phase"] = "complete"
+	snapshot["currentTurnParticipantId"] = ""
+	snapshot["ownFoodParts"] = []
+	snapshot["transactionHistory"] = [
+		{"id": "tx_final_eat_1", "turn": 19, "participantId": "p1", "name": "Amina", "action": "Eat", "counterparty": "Amina", "itemOut": "Cheese Frittata slice", "itemBack": "Eaten"}
+	]
+	snapshot["transactionTotal"] = 1
+	snapshot["gameStats"] = {"playerTurnCount": 18, "cycleCount": 2.25, "eatCount": 10}
+	snapshot["dishes"] = [
+		{"id": "dish_3", "ownerParticipantId": "p1", "name": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "totalParts": 10, "partsRemaining": 0, "partsEaten": 10, "totalBites": 10, "bitesRemaining": 0, "biteCounts": {"p1": 10}}
+	]
+	return snapshot
+
+
+func _public_final_eating_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["phase"] = "eating"
+	snapshot["currentTurnParticipantId"] = "p2"
+	snapshot["participants"][0]["cleared"] = true
+	snapshot["participants"][1]["cleared"] = true
+	snapshot["participants"][1]["heldFoodPartCount"] = 1
+	snapshot["participants"][1]["heldFoodPartGroups"] = [{"dishId": "dish_5", "dishName": "Bean Dip", "makerParticipantId": "p2", "unitSingular": "scoop", "unitPlural": "scoops", "count": 1}]
+	snapshot["ownFoodParts"] = []
+	snapshot["transactionHistory"] = []
+	snapshot["transactionTotal"] = 0
+	snapshot["gameStats"] = {"playerTurnCount": 21, "cycleCount": 2.5, "eatCount": 9}
+	snapshot["dishes"] = [
+		{"id": "dish_5", "ownerParticipantId": "p2", "name": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "totalParts": 10, "partsRemaining": 1, "partsEaten": 9, "totalBites": 10, "bitesRemaining": 1, "biteCounts": {"p2": 9}}
+	]
+	return snapshot
+
+
+func _public_final_eating_after() -> Dictionary:
+	var snapshot := _public_final_eating_before()
+	snapshot["phase"] = "complete"
+	snapshot["currentTurnParticipantId"] = ""
+	snapshot["participants"][1]["heldFoodPartCount"] = 0
+	snapshot["participants"][1]["heldFoodPartGroups"] = []
+	snapshot["transactionHistory"] = [
+		{"id": "tx_public_final_eat_1", "turn": 22, "participantId": "p2", "name": "Ben", "action": "Eat", "counterparty": "Ben", "itemOut": "Bean Dip scoop", "itemBack": "Eaten"}
+	]
+	snapshot["transactionTotal"] = 1
+	snapshot["gameStats"] = {"playerTurnCount": 21, "cycleCount": 2.5, "eatCount": 10}
+	snapshot["dishes"] = [
+		{"id": "dish_5", "ownerParticipantId": "p2", "name": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "totalParts": 10, "partsRemaining": 0, "partsEaten": 10, "totalBites": 10, "bitesRemaining": 0, "biteCounts": {"p2": 10}}
+	]
 	return snapshot
 
 

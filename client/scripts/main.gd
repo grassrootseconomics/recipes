@@ -2,6 +2,7 @@ extends Control
 
 const TableVisual := preload("res://scripts/table_visual.gd")
 const VisualAssets := preload("res://scripts/visual_asset_registry.gd")
+const TableclothPattern := preload("res://scripts/tablecloth_pattern.gd")
 const TRANSACTION_VISIBLE_ROWS := 20
 const TRANSACTION_ROW_HEIGHT := 30
 const TRANSACTION_ROW_GAP := 6
@@ -9,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.15"
+const APP_VERSION := "0.0.27"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -21,13 +22,24 @@ const LOBBY_SEAT_SETUP_STORE_TMP_PATH := "user://lobby-seat-setup.tmp"
 const DESKTOP_ANDROID_PREVIEW_SIZE := Vector2i(1080, 1920)
 const DESKTOP_ANDROID_PREVIEW_MARGIN := 48
 const TABLE_VISUAL_BOTTOM_SAFE_MARGIN := 18.0
-const TABLE_VISUAL_PANEL_CLIP_PADDING := 8.0
+const TABLE_VISUAL_PANEL_CLIP_PADDING := 14.0
+const TABLE_VISUAL_LANDSCAPE_WIDTH_INSET := 24.0
 const TABLE_VISUAL_MAX_UPSCALE_PORTRAIT := 1.16
 const TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE := 1.12
 const TABLE_VISUAL_MIN_SCALE := 0.45
 const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 1.25
 const PUBLIC_TABLES_POLL_SECONDS := 2.0
 const MAX_LOBBY_SEAT_NAME_LENGTH := 12
+
+
+class FixedScrollContainer:
+	extends ScrollContainer
+
+	var fixed_minimum_size := Vector2.ZERO
+
+	func _get_minimum_size() -> Vector2:
+		return fixed_minimum_size
+
 
 var _status_label: Label
 var _server_input: LineEdit
@@ -272,8 +284,8 @@ func _exit_tree() -> void:
 
 
 func _build_ui() -> void:
-	var background := ColorRect.new()
-	background.color = Color(0.84, 0.78, 0.64)
+	var background := TableclothPattern.new()
+	background.configure_background()
 	background.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(background)
 
@@ -2804,7 +2816,10 @@ func _fit_table_visual_to_window() -> void:
 	var max_scale: float = 1.0
 	if game_started:
 		max_scale = TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE if design_size.x > design_size.y else TABLE_VISUAL_MAX_UPSCALE_PORTRAIT
-	var scale_value: float = minf(max_scale, fit_width / design_size.x)
+	var scale_fit_width := fit_width
+	if game_started and design_size.x > design_size.y:
+		scale_fit_width = maxf(1.0, fit_width - TABLE_VISUAL_LANDSCAPE_WIDTH_INSET)
+	var scale_value: float = minf(max_scale, scale_fit_width / design_size.x)
 	if game_started:
 		scale_value = minf(scale_value, fit_height / design_size.y)
 	scale_value = maxf(TABLE_VISUAL_MIN_SCALE, scale_value)
@@ -4157,11 +4172,15 @@ func _add_transaction_history_controls(snapshot: Dictionary, target: VBoxContain
 			int(snapshot.get("transactionHistoryTotal", transactions.size()))
 		]))
 	target.add_child(_transaction_header_row())
-	var scroller := ScrollContainer.new()
+	var scroller := FixedScrollContainer.new()
 	scroller.name = "TransactionHistoryScroller"
-	scroller.custom_minimum_size = Vector2(0, (TRANSACTION_ROW_HEIGHT + TRANSACTION_ROW_GAP) * visible_rows)
+	var scroller_height := float((TRANSACTION_ROW_HEIGHT + TRANSACTION_ROW_GAP) * visible_rows)
+	scroller.fixed_minimum_size = Vector2(0, scroller_height)
+	scroller.custom_minimum_size = Vector2(0, scroller_height)
 	scroller.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroller.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroller.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	var rows := VBoxContainer.new()
 	rows.add_theme_constant_override("separation", TRANSACTION_ROW_GAP)
 	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL

@@ -6,6 +6,8 @@ func _initialize() -> void:
 	var main: Node = scene.instantiate()
 	root.add_child(main)
 	await process_frame
+	var app_tablecloth := main.find_child("AppTableclothBackground", true, false) as Control
+	_require(app_tablecloth != null and app_tablecloth.mouse_filter == Control.MOUSE_FILTER_IGNORE, "main scene renders a tiled tablecloth outside the table panel")
 
 	var recipes_client := root.get_node("/root/RecipesClient")
 	recipes_client.start_offline_table("", "")
@@ -44,6 +46,14 @@ func _initialize() -> void:
 	_require(short_popup_rows <= 6 and short_popup_rows >= 1, "short history popup uses an internal scroller instead of overflowing the screen")
 	var tall_popup_rows := int(main.call("_history_popup_row_count_for_size", Vector2i(680, 900)))
 	_require(tall_popup_rows <= 6, "history popup caps visible rows even on tall screens")
+	var history_controls := VBoxContainer.new()
+	root.add_child(history_controls)
+	main.call("_add_transaction_history_controls", _long_transaction_fixture(100), history_controls, short_popup_rows)
+	await process_frame
+	var history_scroller := history_controls.find_child("TransactionHistoryScroller", true, false) as ScrollContainer
+	_require(history_scroller != null, "long history popup uses a transaction scroller")
+	_require(history_scroller != null and history_scroller.get_combined_minimum_size().y <= float((30 + 6) * short_popup_rows) + 1.0, "long history scroller keeps a fixed visible height instead of forcing popup overflow")
+	history_controls.queue_free()
 	var transaction_label := str(main.call("_transaction_history_label", _transaction_order_fixture()))
 	_require(transaction_label.find("3 | Cara") < transaction_label.find("1 | Amina"), "transaction history display shows newest rows first")
 
@@ -64,6 +74,9 @@ func _initialize() -> void:
 	main.call("_fit_table_visual_to_window")
 	await process_frame
 	_require(str(visual.call("debug_layout_mode")) == "landscape", "main scene switches to horizontal table layout immediately on a wide window")
+	var landscape_viewport_width := root.get_viewport().get_visible_rect().size.x
+	var landscape_visual_rect := visual.get_global_rect()
+	_require(landscape_visual_rect.position.x >= 8.0 and landscape_visual_rect.end.x <= landscape_viewport_width - 8.0, "landscape table keeps an outer horizontal gutter; visual=%s viewport_width=%s" % [landscape_visual_rect, landscape_viewport_width])
 	root.size = original_window_size
 	await process_frame
 	main.call("_fit_table_visual_to_window")
@@ -189,6 +202,24 @@ func _transaction_order_fixture() -> Dictionary:
 			{"turn": 2, "name": "Ben", "action": "Swap", "counterparty": "Platter", "itemOut": "Flour", "itemBack": "Herbs"},
 			{"turn": 3, "name": "Cara", "action": "Redeem", "counterparty": "Amina", "itemOut": "Cheese", "itemBack": "Real Cheese"}
 		]
+	}
+
+
+func _long_transaction_fixture(count: int) -> Dictionary:
+	var rows: Array = []
+	for index in range(count):
+		rows.append({
+			"turn": index + 1,
+			"name": "Cook_%s" % index,
+			"action": "Redeem" if index % 2 == 0 else "Swap",
+			"counterparty": "Amina1234567" if index % 3 == 0 else "Platter",
+			"itemOut": "Cheese",
+			"itemBack": "Real Cheese"
+		})
+	return {
+		"transactionHistory": rows,
+		"transactionHistoryComplete": false,
+		"transactionHistoryTotal": count + 187
 	}
 
 

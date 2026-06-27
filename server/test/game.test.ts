@@ -1878,6 +1878,88 @@ describe("platter, offers, and visibility", () => {
     expect(buildSnapshot(table, recipient.id).offers).toHaveLength(0);
   });
 
+  it("invalidates a stale offer accepted after requested cards leave the recipient hand", () => {
+    const { table } = startAndDeposit(8, "stale-requested-offer-accept");
+    const recipient = activeParticipants(table)[0] as Participant;
+    const sender = firstOtherActive(table, recipient.id);
+    const recipientOwnHand = handVoucherIds(table, recipient.id).filter(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === recipient.id
+    );
+    const requestedVoucherId = recipientOwnHand[0] as string;
+    const offeredVoucherId = handVoucherIds(table, sender.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === sender.id
+    ) as string;
+
+    applyAsTurn(table, sender.id, {
+      type: "create_offer",
+      toParticipantId: recipient.id,
+      offeredVoucherIds: [offeredVoucherId],
+      requested: { ingredientId: recipient.ingredientId as string, quantity: 1 }
+    });
+    const offer = Object.values(table.offers)[0];
+    expect(table.vouchers[offeredVoucherId].location).toEqual({ type: "offer_lock", offerId: offer.id });
+
+    const exchangeCountBefore = table.transactionHistory.filter((transaction) => transaction.action === "Exchange").length;
+    table.vouchers[requestedVoucherId].location = { type: "platter" };
+
+    expect(() =>
+      applyAsTurn(table, recipient.id, {
+        type: "respond_offer",
+        offerId: offer.id,
+        response: "accept",
+        voucherIds: [requestedVoucherId]
+      })
+    ).not.toThrow();
+
+    expect(table.offers[offer.id]).toBeUndefined();
+    expect(table.vouchers[offeredVoucherId].location).toEqual({ type: "hand", participantId: sender.id });
+    expect(table.vouchers[requestedVoucherId].location).toEqual({ type: "platter" });
+    expect(table.transactionHistory.filter((transaction) => transaction.action === "Exchange")).toHaveLength(exchangeCountBefore);
+  });
+
+  it("invalidates a stale offer when the offered food piece no longer exists", () => {
+    const { table } = startAndDeposit(8, "missing-offered-food-piece");
+    const sender = activeParticipants(table)[0] as Participant;
+    const recipient = firstOtherActive(table, sender.id);
+    completeRecipeBySetup(table, sender.id);
+    applyAsTurn(table, sender.id, { type: "prepare" });
+    const offeredPartId = inventoryDishPartIds(table, sender.id)[0] as string;
+    const requestedVoucherId = handVoucherIds(table, recipient.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId === recipient.id
+    ) as string;
+    const requestedVoucher = table.vouchers[requestedVoucherId];
+
+    applyAsTurn(table, sender.id, {
+      type: "create_offer",
+      toParticipantId: recipient.id,
+      offeredAssets: [{ kind: "dish_part", id: offeredPartId }],
+      requestedAsset: {
+        kind: "voucher",
+        ingredientId: requestedVoucher.ingredientId,
+        ownerParticipantId: requestedVoucher.ownerParticipantId,
+        quantity: 1
+      }
+    });
+    const offer = Object.values(table.offers)[0];
+    expect(table.dishParts[offeredPartId].location).toEqual({ type: "offer_lock", offerId: offer.id });
+
+    const exchangeCountBefore = table.transactionHistory.filter((transaction) => transaction.action === "Exchange").length;
+    delete table.dishParts[offeredPartId];
+
+    expect(() =>
+      applyAsTurn(table, recipient.id, {
+        type: "respond_offer",
+        offerId: offer.id,
+        response: "accept",
+        assets: [{ kind: "voucher", id: requestedVoucherId }]
+      })
+    ).not.toThrow();
+
+    expect(table.offers[offer.id]).toBeUndefined();
+    expect(table.vouchers[requestedVoucherId].location).toEqual({ type: "hand", participantId: recipient.id });
+    expect(table.transactionHistory.filter((transaction) => transaction.action === "Exchange")).toHaveLength(exchangeCountBefore);
+  });
+
   it("reserves requested cards across pending incoming offers", () => {
     const { table } = startAndDeposit(8);
     const [recipient, senderOne, senderTwo] = activeParticipants(table) as [Participant, Participant, Participant];
