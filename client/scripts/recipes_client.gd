@@ -16,6 +16,7 @@ var latest_snapshot: Dictionary = {}
 var last_close_description := ""
 var offline_mode := false
 var ignored_stale_snapshot_count := 0
+var auto_fresh_snapshot_count := 0
 
 var _http_request: HTTPRequest
 var _offline_store: Node
@@ -371,9 +372,13 @@ func _handle_delta_message(message: Dictionary) -> void:
 		connect_socket()
 		return
 	var patch: Dictionary = message.get("patch", {})
+	var append: Dictionary = message.get("append", {})
+	if _delta_missing_viewer_prepare_food_parts(latest_snapshot, patch, append):
+		auto_fresh_snapshot_count += 1
+		call_deferred("connect_socket")
+		return
 	for key in patch.keys():
 		latest_snapshot[key] = patch[key]
-	var append: Dictionary = message.get("append", {})
 	if append.has("transactionHistory"):
 		var history: Array = latest_snapshot.get("transactionHistory", [])
 		for raw_transaction in append.get("transactionHistory", []):
@@ -387,6 +392,29 @@ func _handle_delta_message(message: Dictionary) -> void:
 		_merge_participant_rows(append.get("participants", []))
 	latest_snapshot["version"] = int(message.get("version", latest_snapshot.get("version", 0)))
 	snapshot_received.emit(latest_snapshot)
+
+
+func debug_delta_missing_viewer_prepare_food_parts(previous_snapshot: Dictionary, patch: Dictionary, append: Dictionary) -> bool:
+	return _delta_missing_viewer_prepare_food_parts(previous_snapshot, patch, append)
+
+
+func _delta_missing_viewer_prepare_food_parts(previous_snapshot: Dictionary, patch: Dictionary, append: Dictionary) -> bool:
+	var viewer_id := str(previous_snapshot.get("viewerParticipantId", ""))
+	if viewer_id == "":
+		return false
+	var prepared_for_viewer := false
+	for raw_transaction in append.get("transactionHistory", []):
+		var transaction: Dictionary = raw_transaction
+		if str(transaction.get("action", "")) == "Prepare" and str(transaction.get("participantId", "")) == viewer_id:
+			prepared_for_viewer = true
+			break
+	if not prepared_for_viewer:
+		return false
+	var previous_parts: Array = previous_snapshot.get("ownFoodParts", [])
+	if not patch.has("ownFoodParts"):
+		return true
+	var next_parts: Array = patch.get("ownFoodParts", [])
+	return next_parts.size() <= previous_parts.size()
 
 
 func _merge_dish_rows(rows: Array) -> void:

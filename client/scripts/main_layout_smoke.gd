@@ -26,6 +26,11 @@ func _initialize() -> void:
 	_require(bool(main.call("_host_lobby_start_enabled", online_ready_snapshot)), "online host lobby enables start after another cook joins")
 
 	var recipes_client := root.get_node("/root/RecipesClient")
+	var missing_prepare_append := {"transactionHistory": [{"action": "Prepare", "participantId": "p1"}]}
+	var complete_prepare_patch := {"ownFoodParts": [{"id": "dish_1_part_1", "dishId": "dish_1"}]}
+	_require(bool(recipes_client.call("debug_delta_missing_viewer_prepare_food_parts", _prepare_delta_snapshot_fixture(), {}, missing_prepare_append)), "online client requests a fresh snapshot when a viewer prepare delta omits ownFoodParts")
+	_require(not bool(recipes_client.call("debug_delta_missing_viewer_prepare_food_parts", _prepare_delta_snapshot_fixture(), complete_prepare_patch, missing_prepare_append)), "online client accepts prepare deltas that include prepared food parts")
+	_require(not bool(recipes_client.call("debug_delta_missing_viewer_prepare_food_parts", _prepare_delta_snapshot_fixture(), {}, {"transactionHistory": [{"action": "Prepare", "participantId": "p2"}]})), "online client does not freshen for other cooks' prepare deltas")
 	recipes_client.start_offline_table("", "")
 	await process_frame
 	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ben"})
@@ -279,6 +284,13 @@ func _online_lobby_snapshot(joined_cook: bool) -> Dictionary:
 		"platterFoodParts": [],
 		"offers": [],
 		"transactionHistory": []
+	}
+
+
+func _prepare_delta_snapshot_fixture() -> Dictionary:
+	return {
+		"viewerParticipantId": "p1",
+		"ownFoodParts": []
 	}
 
 

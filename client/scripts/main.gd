@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.38"
+const APP_VERSION := "0.0.39"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -2973,6 +2973,7 @@ func _debug_sync_report() -> String:
 	lines.append("Reconnect attempt: %s" % RecipesClient.reconnect_attempt())
 	lines.append("Last close: %s" % RecipesClient.last_close_description)
 	lines.append("Ignored stale snapshots: %s" % RecipesClient.ignored_stale_snapshot_count)
+	lines.append("Auto fresh snapshots: %s" % RecipesClient.auto_fresh_snapshot_count)
 	lines.append("")
 	lines.append("Snapshot")
 	lines.append("Table: %s" % str(snapshot.get("tableCode", RecipesClient.table_code)))
@@ -2988,6 +2989,9 @@ func _debug_sync_report() -> String:
 	lines.append("Transaction cursor: %s" % str(snapshot.get("transactionCursor", "?")))
 	lines.append("Transaction total: %s" % str(snapshot.get("transactionHistoryTotal", snapshot.get("transactionCursor", "?"))))
 	lines.append("Cached tx rows: %s" % snapshot.get("transactionHistory", []).size())
+	lines.append("Own food parts: %s" % snapshot.get("ownFoodParts", []).size())
+	lines.append("Own food groups: %s" % snapshot.get("ownFoodPartGroups", []))
+	lines.append("Viewer public held food: %s" % _debug_viewer_held_food_count(snapshot))
 	lines.append("Last tx: %s" % _debug_last_transaction(snapshot))
 	lines.append("")
 	lines.append("Visual")
@@ -3070,6 +3074,16 @@ func _debug_last_transaction(snapshot: Dictionary) -> String:
 		str(tx.get("itemOut", "-")),
 		str(tx.get("itemBack", "-"))
 	]
+
+
+func _debug_viewer_held_food_count(snapshot: Dictionary) -> String:
+	var viewer_id := str(snapshot.get("viewerParticipantId", ""))
+	if viewer_id == "":
+		return "?"
+	var participant := _participant_by_id(snapshot, viewer_id)
+	if participant.is_empty():
+		return "?"
+	return str(participant.get("heldFoodPartCount", "?"))
 
 
 func _open_history_popup() -> void:
