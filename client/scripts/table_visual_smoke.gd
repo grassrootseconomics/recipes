@@ -939,14 +939,19 @@ func _initialize() -> void:
 	_require(int(visual.debug_stats.get("completeFoodOrbitCount", 0)) >= 2, "complete phase orbits completed food bundles without duplicating individual bites")
 	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "complete phase shows the whole food orbit")
 	var orbit_margin := float(complete_orbit.get_meta("orbit_margin", 0.0)) if complete_orbit != null else 0.0
+	var orbit_top_margin := float(complete_orbit.get_meta("orbit_top_margin", -1.0)) if complete_orbit != null else -1.0
+	var orbit_left_margin := float(complete_orbit.get_meta("orbit_left_margin", -1.0)) if complete_orbit != null else -1.0
+	var orbit_right_margin := float(complete_orbit.get_meta("orbit_right_margin", -1.0)) if complete_orbit != null else -1.0
+	var orbit_bottom_margin := float(complete_orbit.get_meta("orbit_bottom_margin", 0.0)) if complete_orbit != null else 0.0
 	_require(orbit_margin > 0.0 and orbit_margin <= 22.5, "complete food orbit follows the main table edge while staying visible")
+	_require(orbit_top_margin > 0.0 and orbit_top_margin <= 4.5 and orbit_left_margin > 0.0 and orbit_left_margin <= 4.5 and orbit_right_margin > 0.0 and orbit_right_margin <= 4.5, "complete food orbit reaches close to the top, left, and right table edges without using origin points")
+	_require(orbit_bottom_margin > 0.0 and orbit_bottom_margin <= 22.5, "complete food orbit keeps the bottom edge at the prior visible inset")
 	_require(complete_orbit != null and complete_orbit.find_child("OrbitFoodQuantity", true, false) == null, "complete food orbit hides quantity text on orbiting bunches")
 	_require(int(visual.debug_stats.get("completeAvatarDanceCount", 0)) >= 4, "complete phase makes cook avatars dance")
 	var dancing_avatar := visual.find_child("CookAvatar", true, false) as TextureRect
 	_require(dancing_avatar != null and bool(dancing_avatar.get_meta("complete_dance", false)), "complete phase marks avatar sprites with the dance animation")
 	_require(not _has_text_containing(visual, "Party fireworks"), "complete phase removes static Party fireworks text")
-	_require(_has_text_containing(visual, "Rice: 10"), "complete phase summarizes raw ingredient stock")
-	_require(_has_text_containing(visual, "Shared: 4"), "complete phase summarizes shared food with label")
+	_require(_has_text_containing(visual, "Rice: 10 Shared: 4"), "complete phase summarizes raw ingredient stock and shared food inline")
 	_require(int(visual.debug_stats.get("completeBiteSummaryCount", 0)) == 4, "complete phase summarizes bites for active players")
 	_require(visual.preferred_visual_size() == Vector2(700, 960), "complete phase keeps the same preferred table size")
 	visual.call("_open_game_stats_popup")
@@ -1063,6 +1068,7 @@ func _assert_eat_animation_starts_at_held_food_part(visual: Node) -> void:
 	_require(not event.is_empty(), "eat animation event is queued")
 	_require(str(event.get("dishId", "")) == "dish_3", "eat animation records the held dish id")
 	_require(bool(event.get("completeOrbit", false)), "share-food animation sends the held dish piece into the orbit")
+	_require(_event_has_randomized_orbit_phase(event), "share-food launch chooses a randomized orbit entry point")
 	_require(typeof(event.get("startPoint", null)) == TYPE_VECTOR2, "eat animation records the concrete held food-piece anchor")
 	var points: Dictionary = visual.debug_animation_path_points(event)
 	var held_piece_center := _node_center(visual.find_child("HandFood_dish_3", true, false))
@@ -1101,6 +1107,8 @@ func _assert_eat_animation_reanchors_after_food_group_reflow(visual: Node) -> vo
 			bean_event = event
 	_require(not cheese_event.is_empty() and int(cheese_event.get("quantity", 0)) == 2, "share-food groups matching dish pieces into one Cheese Frittata x2 launch")
 	_require(not bean_event.is_empty() and int(bean_event.get("quantity", 0)) == 1, "share-food keeps the Bean Dip stack as one launch")
+	_require(_event_has_randomized_orbit_phase(cheese_event), "grouped Cheese Frittata launch chooses a randomized orbit entry point")
+	_require(_event_has_randomized_orbit_phase(bean_event), "grouped Bean Dip launch chooses a randomized orbit entry point")
 	var points: Dictionary = visual.debug_animation_path_points(cheese_event)
 	_require(_points_close(points.get("start", Vector2.INF), cheese_piece_center), "grouped Cheese Frittata launch starts at its current hand tile")
 	points = visual.debug_animation_path_points(bean_event)
@@ -1117,6 +1125,7 @@ func _assert_final_eat_starts_orbit_before_congratulations(visual: Node) -> void
 	var event := _first_animation_event_of_type(visual, "eat")
 	_require(not event.is_empty(), "final bite queues an eat animation")
 	_require(bool(event.get("completeOrbit", false)), "final bite is marked as the orbit transition")
+	_require(_event_has_randomized_orbit_phase(event), "final bite chooses a randomized orbit entry point")
 	_require(not visual.debug_stats.get("lastAnimationTypes", []).has("complete"), "final bite transition suppresses the separate complete animation")
 	_require(visual.find_child("CompleteFoodOrbit", true, false) != null, "final bite starts the table food orbit before the complete snapshot")
 	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "final bite flies the dish piece into the orbit")
@@ -1136,6 +1145,7 @@ func _assert_public_final_eat_uses_avatar_source(visual: Node) -> void:
 	_require(not event.is_empty(), "public final bite queues an eat animation")
 	_require(str(event.get("participantId", "")) == "p2", "public final bite records the eating cook")
 	_require(bool(event.get("completeOrbit", false)), "public final bite is also marked as the orbit transition")
+	_require(_event_has_randomized_orbit_phase(event), "public final bite chooses a randomized orbit entry point")
 	var participant := visual.find_child("Participant_p2", true, false) as Control
 	var avatar_center := _node_center(participant.find_child("CookAvatar", true, false) if participant != null else null)
 	var points: Dictionary = visual.debug_animation_path_points(event)
@@ -1220,11 +1230,12 @@ func _assert_swap_paths_are_specific(visual: Node) -> void:
 		var give_ingredient := str(event.get("giveIngredientId", ""))
 		var take_ingredient := str(event.get("takeIngredientId", ""))
 		var points: Dictionary = visual.debug_animation_path_points(event)
-		var actor_center := _node_center(visual.find_child("Participant_%s" % actor_id, true, false))
-		_require(_points_close(points.get("giveStart", Vector2.INF), actor_center), "public swap give leg starts at acting cook %s" % actor_id)
+		var actor_give_anchor := _participant_child_center(visual, actor_id, "CookIngredientIcon")
+		var actor_take_anchor := _participant_child_center(visual, actor_id, "CookAvatar")
+		_require(_points_close(points.get("giveStart", Vector2.INF), actor_give_anchor), "public swap give leg starts at acting cook's ingredient icon %s" % actor_id)
 		_require(_points_close(points.get("giveEnd", Vector2.INF), _node_center(visual.find_child("BasketSlot_%s" % give_ingredient, true, false))), "public swap give leg ends at %s basket slot" % give_ingredient)
 		_require(_points_close(points.get("takeStart", Vector2.INF), _node_center(visual.find_child("PlatterVoucher_%s" % take_ingredient, true, false))), "public swap take leg starts at %s basket card" % take_ingredient)
-		_require(_points_close(points.get("takeEnd", Vector2.INF), actor_center), "public swap take leg returns to acting cook %s" % actor_id)
+		_require(_points_close(points.get("takeEnd", Vector2.INF), actor_take_anchor), "public swap take leg returns to acting cook's avatar %s" % actor_id)
 	visual.debug_flush_animations()
 
 
@@ -1236,12 +1247,13 @@ func _assert_public_settlement_food_part_uses_future_basket_slot(visual: Node) -
 	_require(not event.is_empty(), "public settlement food-part swap queues an animation")
 	var points: Dictionary = visual.debug_animation_path_points(event)
 	_require(_all_points_valid(points), "public settlement food-part swap has visible endpoints")
-	var actor_center := _node_center(visual.find_child("Participant_p2", true, false))
+	var actor_avatar := _participant_child_center(visual, "p2", "CookAvatar")
+	var actor_ingredient := _participant_child_center(visual, "p2", "CookIngredientIcon")
 	var basket_center := _node_center(visual.find_child("BasketSlot_beans", true, false))
-	_require(_points_close(points.get("giveStart", Vector2.INF), actor_center), "public settlement food part starts at the acting cook")
+	_require(_points_close(points.get("giveStart", Vector2.INF), actor_avatar), "public settlement food part starts at the acting cook avatar")
 	_require(not _points_close(points.get("giveEnd", Vector2.INF), basket_center), "public settlement food part does not fall back to a voucher slot or broad basket center")
 	_require(_points_close(points.get("takeStart", Vector2.INF), _node_center(visual.find_child("PlatterVoucher_beans", true, false))), "public settlement return starts at the basket voucher")
-	_require(_points_close(points.get("takeEnd", Vector2.INF), actor_center), "public settlement return lands on the acting cook")
+	_require(_points_close(points.get("takeEnd", Vector2.INF), actor_ingredient), "public settlement return lands on the acting cook ingredient icon")
 	visual.debug_flush_animations()
 	visual.debug_apply_snapshot(_public_settlement_food_part_after())
 	await process_frame
@@ -1262,10 +1274,10 @@ func _assert_exchange_paths_are_specific(visual: Node) -> void:
 	var exchange := _first_animation_event_of_type(visual, "exchange")
 	var points: Dictionary = visual.debug_animation_path_points(exchange)
 	_require(_all_points_valid(points), "viewer exchange has explicit endpoints")
-	_require(_points_close(points.get("offeredStart", Vector2.INF), _node_center(visual.find_child("Participant_p2", true, false))), "exchange offered card starts at the offering cook")
+	_require(_points_close(points.get("offeredStart", Vector2.INF), _participant_child_center(visual, "p2", "CookIngredientIcon")), "exchange offered card starts at the offering cook ingredient icon")
 	_require(_points_close(points.get("offeredEnd", Vector2.INF), _node_center(visual.find_child("HandRow", true, false))), "exchange offered card lands in the viewer hand tray when no grouped card exists yet")
 	_require(_points_close(points.get("requestedStart", Vector2.INF), _node_center(visual.find_child("HandCard_rice", true, false))), "exchange requested card starts at viewer hand card")
-	_require(_points_close(points.get("requestedEnd", Vector2.INF), _node_center(visual.find_child("Participant_p2", true, false))), "exchange requested card returns to offering cook")
+	_require(_points_close(points.get("requestedEnd", Vector2.INF), _participant_child_center(visual, "p2", "CookAvatar")), "exchange requested card returns to offering cook avatar")
 	visual.debug_flush_animations()
 
 	visual.debug_apply_snapshot(_snapshot_fixture())
@@ -1273,10 +1285,23 @@ func _assert_exchange_paths_are_specific(visual: Node) -> void:
 	exchange = _first_animation_event_of_type(visual, "exchange")
 	points = visual.debug_animation_path_points(exchange)
 	_require(_all_points_valid(points), "public exchange has explicit cook endpoints")
-	_require(_points_close(points.get("offeredStart", Vector2.INF), _node_center(visual.find_child("Participant_p2", true, false))), "public exchange offered card starts at source cook")
-	_require(_points_close(points.get("offeredEnd", Vector2.INF), _node_center(visual.find_child("Participant_p4", true, false))), "public exchange offered card goes to target cook")
-	_require(_points_close(points.get("requestedStart", Vector2.INF), _node_center(visual.find_child("Participant_p4", true, false))), "public exchange requested card starts at counterparty cook")
-	_require(_points_close(points.get("requestedEnd", Vector2.INF), _node_center(visual.find_child("Participant_p2", true, false))), "public exchange requested card returns to source cook")
+	_require(_points_close(points.get("offeredStart", Vector2.INF), _participant_child_center(visual, "p2", "CookIngredientIcon")), "public exchange offered card starts at source cook ingredient icon")
+	_require(_points_close(points.get("offeredEnd", Vector2.INF), _participant_child_center(visual, "p4", "CookAvatar")), "public exchange offered card goes to target cook avatar")
+	_require(_points_close(points.get("requestedStart", Vector2.INF), _participant_child_center(visual, "p4", "CookIngredientIcon")), "public exchange requested card starts at counterparty cook ingredient icon")
+	_require(_points_close(points.get("requestedEnd", Vector2.INF), _participant_child_center(visual, "p2", "CookAvatar")), "public exchange requested card returns to source cook avatar")
+	visual.debug_flush_animations()
+
+	var first_player_before := _snapshot_fixture()
+	first_player_before["viewerParticipantId"] = "p3"
+	first_player_before["connectionParticipantId"] = "p3"
+	first_player_before["controlledParticipantIds"] = ["p3"]
+	visual.debug_apply_snapshot(first_player_before)
+	visual.render(_public_exchange_to_first_player_after())
+	exchange = _first_animation_event_of_type(visual, "exchange")
+	points = visual.debug_animation_path_points(exchange)
+	_require(_all_points_valid(points), "public exchange to first player has explicit endpoints")
+	_require(_points_close(points.get("offeredEnd", Vector2.INF), _participant_child_center(visual, "p1", "CookAvatar")), "public exchange to first player lands on avatar instead of broad top-left tile")
+	_require(_points_differ(points.get("offeredEnd", Vector2.INF), _node_center(visual.find_child("Participant_p1", true, false))), "public exchange to first player avoids the broad participant tile center")
 	visual.debug_flush_animations()
 
 
@@ -1375,8 +1400,8 @@ func _assert_public_swap_return_uses_recorded_actor_after_staged_layout(visual: 
 	var event := _first_animation_event_of_type(visual, "swap")
 	_require(not event.is_empty(), "public swap event is available for staged return path check")
 	var actor_id := str(event.get("actorParticipantId", ""))
-	var actor_center := _node_center(visual.find_child("Participant_%s" % actor_id, true, false))
-	_require(actor_center != Vector2.INF, "public swap actor tile is visible before staged playback")
+	var actor_target := _participant_child_center(visual, actor_id, "CookAvatar")
+	_require(actor_target != Vector2.INF, "public swap actor avatar is visible before staged playback")
 	var start: String = visual.debug_apply_current_animation_start()
 	_require(start == "swap", "public swap source-start stage is available")
 	var mid: String = visual.debug_apply_current_animation_midpoint()
@@ -1384,7 +1409,7 @@ func _assert_public_swap_return_uses_recorded_actor_after_staged_layout(visual: 
 	var take_start: String = visual.debug_apply_current_animation_take_start()
 	_require(take_start == "swap", "public swap take-start stage is available")
 	var target: Vector2 = visual.debug_current_swap_take_end_point()
-	_require(_points_close(target, actor_center), "public swap return keeps the recorded acting cook target after staged basket layout changes")
+	_require(_points_close(target, actor_target), "public swap return keeps the recorded acting cook avatar target after staged basket layout changes")
 	visual.debug_flush_animations()
 
 
@@ -1590,9 +1615,27 @@ func _points_close(left: Vector2, right: Vector2) -> bool:
 	return left != Vector2.INF and right != Vector2.INF and left.distance_to(right) <= 2.0
 
 
+func _event_has_randomized_orbit_phase(event: Dictionary) -> bool:
+	if not event.has("completeOrbitPhase"):
+		return false
+	var phase := float(event.get("completeOrbitPhase", -1.0))
+	if phase < 0.0 or phase >= 1.0:
+		return false
+	var total := maxi(1, int(event.get("completeOrbitTotal", 1)))
+	var sequential_phase := float(posmod(int(event.get("completeOrbitIndex", 0)), total)) / float(total)
+	return absf(phase - sequential_phase) > 0.01
+
+
 func _node_center(node: Node) -> Vector2:
 	var control := node as Control
 	return control.get_global_rect().get_center() if control != null else Vector2.INF
+
+
+func _participant_child_center(visual: Node, participant_id: String, child_name: String) -> Vector2:
+	var participant := visual.find_child("Participant_%s" % participant_id, true, false)
+	if participant == null:
+		return Vector2.INF
+	return _node_center(participant.find_child(child_name, true, false))
 
 
 func _assert_turn_update_waits_for_animation(visual: Node) -> void:
@@ -2129,6 +2172,17 @@ func _public_exchange_after() -> Dictionary:
 	var snapshot := _snapshot_fixture()
 	snapshot["transactionHistory"] = [
 		{"id": "tx_9", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Exchange", "counterpartyParticipantId": "p4", "counterparty": "Diego", "itemOut": "Beans", "itemBack": "Veggies"}
+	]
+	return snapshot
+
+
+func _public_exchange_to_first_player_after() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	snapshot["viewerParticipantId"] = "p3"
+	snapshot["connectionParticipantId"] = "p3"
+	snapshot["controlledParticipantIds"] = ["p3"]
+	snapshot["transactionHistory"] = [
+		{"id": "tx_first_player_exchange", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Exchange", "counterpartyParticipantId": "p1", "counterparty": "Amina", "itemOut": "Beans", "itemBack": "Rice"}
 	]
 	return snapshot
 

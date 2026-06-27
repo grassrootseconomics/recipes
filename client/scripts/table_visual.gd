@@ -393,7 +393,12 @@ class CompleteFoodOrbit:
 	extends Control
 
 	const ITEM_SIZE := Vector2(44, 44)
-	const ORBIT_INSET := ITEM_SIZE.x * 0.5
+	const ORBIT_EDGE_INSET := 4.0
+	const ORBIT_LEFT_INSET := ORBIT_EDGE_INSET
+	const ORBIT_TOP_INSET := ORBIT_EDGE_INSET
+	const ORBIT_RIGHT_INSET := ORBIT_EDGE_INSET
+	const ORBIT_BOTTOM_INSET := ITEM_SIZE.y * 0.5
+	const ORBIT_INSET := ORBIT_BOTTOM_INSET
 	const SECONDS_PER_LAP := 18.0
 	const BOB_PIXELS := 4.0
 
@@ -426,14 +431,21 @@ class CompleteFoodOrbit:
 			icon.visible = visible_count < 0 or index < visible_count
 			icon.modulate = Color(1.0, 1.0, 1.0, 0.94 if icon.visible else 0.0)
 			add_child(icon)
+			var phase := float(item.get("orbitPhase", -1.0))
+			if phase < 0.0 or phase >= 1.0:
+				phase = float(index) / maxf(1.0, float(food_items.size()))
 			_items.append({
 				"node": icon,
-				"phase": float(index) / maxf(1.0, float(food_items.size()))
+				"phase": phase
 			})
 			index += 1
 		set_meta("orbit_item_count", _items.size())
 		set_visible_item_count(visible_count)
-		set_meta("orbit_margin", ORBIT_INSET)
+		set_meta("orbit_margin", ORBIT_BOTTOM_INSET)
+		set_meta("orbit_left_margin", ORBIT_LEFT_INSET)
+		set_meta("orbit_top_margin", ORBIT_TOP_INSET)
+		set_meta("orbit_right_margin", ORBIT_RIGHT_INSET)
+		set_meta("orbit_bottom_margin", ORBIT_BOTTOM_INSET)
 		set_process(_items.size() > 0)
 		_position_items()
 
@@ -463,11 +475,7 @@ class CompleteFoodOrbit:
 	func _position_items() -> void:
 		if size.x <= 1.0 or size.y <= 1.0:
 			return
-		var inset := minf(ORBIT_INSET, minf(size.x, size.y) * 0.22)
-		var rect := Rect2(
-			Vector2(inset, inset),
-			Vector2(maxf(1.0, size.x - inset * 2.0), maxf(1.0, size.y - inset * 2.0))
-		)
+		var rect := _orbit_rect_for_size(size)
 		var perimeter := maxf(1.0, (rect.size.x + rect.size.y) * 2.0)
 		for raw_item in _items:
 			var item: Dictionary = raw_item
@@ -479,6 +487,17 @@ class CompleteFoodOrbit:
 			var bob := Vector2(0.0, sin(_elapsed * TAU * 1.2 + phase * TAU) * BOB_PIXELS)
 			icon.position = point - ITEM_SIZE * 0.5 + bob
 			icon.rotation_degrees = sin(_elapsed * TAU * 0.9 + phase * TAU) * 7.0
+
+	func _orbit_rect_for_size(container_size: Vector2) -> Rect2:
+		var max_inset := minf(container_size.x, container_size.y) * 0.22
+		var left := minf(ORBIT_LEFT_INSET, max_inset)
+		var top := minf(ORBIT_TOP_INSET, max_inset)
+		var right := minf(ORBIT_RIGHT_INSET, max_inset)
+		var bottom := minf(ORBIT_BOTTOM_INSET, max_inset)
+		return Rect2(
+			Vector2(left, top),
+			Vector2(maxf(1.0, container_size.x - left - right), maxf(1.0, container_size.y - top - bottom))
+		)
 
 	func _point_on_perimeter(rect: Rect2, distance: float) -> Vector2:
 		var width := maxf(1.0, rect.size.x)
@@ -1062,9 +1081,10 @@ func debug_animation_path_points(event: Dictionary) -> Dictionary:
 				"ingredientEnd": _redeem_point(event, "recipeSlotPoint", _redeem_recipe_slot_center(str(event.get("ingredientId", "")), int(event.get("slotIndex", 0))))
 			}
 		"eat":
+			var eat_total := maxi(1, int(event.get("completeOrbitTotal", 1)))
 			return {
 				"start": _eat_start_center(event),
-				"end": _complete_orbit_global_point(int(event.get("completeOrbitIndex", 0)), maxi(1, int(event.get("completeOrbitTotal", 1))))
+				"end": _complete_orbit_global_point_for_event(event, eat_total)
 			}
 		"exchange":
 			return _exchange_debug_path_points(event)
@@ -2234,7 +2254,7 @@ func _render_complete_summary() -> void:
 		var shared := int(bite_totals.get(participant_id, 0))
 		var ingredient_id := str(participant.get("ingredientId", ""))
 		var stock := int(participant.get("realIngredientStock", 0))
-		_recipe_grid.add_child(_complete_summary_cell("%s\n%s: %s\nShared: %s" % [
+		_recipe_grid.add_child(_complete_summary_cell("%s\n%s: %s Shared: %s" % [
 			str(participant.get("name", "Player")),
 			_ingredient_display(ingredient_id),
 			stock,
@@ -2442,11 +2462,12 @@ func _complete_food_orbit_key_for_items(items: Array) -> String:
 	var parts: Array[String] = []
 	for raw_item in items:
 		var item: Dictionary = raw_item
-		parts.append("%s:%s:%s:%s" % [
+		parts.append("%s:%s:%s:%s:%.6f" % [
 			str(item.get("sourceParticipantId", "")),
 			str(item.get("name", "")),
 			str(item.get("unit", "")),
-			int(item.get("quantity", 1))
+			int(item.get("quantity", 1)),
+			float(item.get("orbitPhase", -1.0))
 		])
 	return "|".join(parts)
 
@@ -2470,6 +2491,28 @@ func _complete_orbit_item_for_eat_event(event: Dictionary) -> Dictionary:
 		"dishId": str(event.get("dishId", "")),
 		"texture": texture
 	}
+
+
+func _complete_orbit_phase_for_eat_event(event: Dictionary, reveal_index: int) -> float:
+	var key := "%s|%s|%s|%s|%s|%s|%s" % [
+		str(event.get("_transactionId", "")),
+		str(event.get("participantId", "")),
+		str(event.get("dishId", "")),
+		str(event.get("dishName", "")),
+		str(event.get("unit", "")),
+		int(event.get("quantity", 1)),
+		int(event.get("eatSequence", reveal_index))
+	]
+	var base := float(_stable_visual_hash(key) % 1000000) / 1000000.0
+	return fposmod(base + float(maxi(0, reveal_index)) * 0.38196601125, 1.0)
+
+
+func _stable_visual_hash(value: String) -> int:
+	var result := 2166136261
+	for index in range(value.length()):
+		result = result ^ value.unicode_at(index)
+		result = (result * 16777619) & 0xFFFFFFFF
+	return result
 
 
 func _shared_food_orbit_visible_count_for_snapshot(snapshot: Dictionary, items: Array) -> int:
@@ -3024,7 +3067,7 @@ func _food_summary_cell(text: String) -> Label:
 
 func _complete_summary_cell(text: String) -> Label:
 	var label := _dish_summary_cell(text)
-	label.custom_minimum_size = Vector2(132, 42)
+	label.custom_minimum_size = Vector2(170, 34)
 	label.add_theme_font_size_override("font_size", 11)
 	return label
 
@@ -4988,10 +5031,14 @@ func _events_with_visual_milestones(previous_snapshot: Dictionary, current_snaps
 		elif event_type == "eat":
 			var bundle_item := _complete_orbit_item_for_eat_event(event)
 			if not bundle_item.is_empty():
+				var reveal_index := orbit_items.size()
+				var orbit_phase := _complete_orbit_phase_for_eat_event(event, reveal_index)
+				bundle_item["orbitPhase"] = orbit_phase
 				orbit_items.append(bundle_item)
 				milestone["completeOrbit"] = true
 				milestone["completeOrbitItems"] = orbit_items.duplicate(true)
-				milestone["completeOrbitIndex"] = orbit_items.size() - 1
+				milestone["completeOrbitIndex"] = reveal_index
+				milestone["completeOrbitPhase"] = orbit_phase
 				milestone["completeOrbitTotal"] = orbit_items.size()
 				milestone["completeOrbitRevealCount"] = orbit_items.size()
 			working = _snapshot_after_eat_step(working, current_snapshot, event)
@@ -6094,7 +6141,8 @@ func _share_food_bundle_start_point(participant_id: String, food: Dictionary, vi
 	start_point = _hand_food_center_by_name(str(food.get("dishName", "")))
 	if start_point != Vector2.INF:
 		return start_point
-	return _control_global_center(_hand_row)
+	start_point = _control_global_center(_hand_row)
+	return start_point if _is_usable_animation_point(start_point) else Vector2.INF
 
 
 func _grouped_share_events_from_transactions(previous_snapshot: Dictionary, current_snapshot: Dictionary, viewer_id: String, sequence_start: int) -> Array:
@@ -6758,7 +6806,16 @@ func _animate_eat_event(event: Dictionary) -> float:
 		_append_complete_orbit_item(items, str(event.get("dishName", "Dish")), str(event.get("unit", "part")), int(event.get("quantity", 1)))
 	orbit_event["completeOrbit"] = true
 	orbit_event["completeOrbitItems"] = items
-	orbit_event["completeOrbitIndex"] = clampi(_shared_food_orbit_visible_count_for_snapshot(_snapshot, items), 0, maxi(0, items.size() - 1))
+	var reveal_index := clampi(_shared_food_orbit_visible_count_for_snapshot(_snapshot, items), 0, maxi(0, items.size() - 1))
+	orbit_event["completeOrbitIndex"] = reveal_index
+	if not orbit_event.has("completeOrbitPhase"):
+		var orbit_phase := _complete_orbit_phase_for_eat_event(orbit_event, reveal_index)
+		orbit_event["completeOrbitPhase"] = orbit_phase
+		if reveal_index >= 0 and reveal_index < items.size():
+			var orbit_item: Dictionary = items[reveal_index]
+			if not orbit_item.has("orbitPhase"):
+				orbit_item["orbitPhase"] = orbit_phase
+				items[reveal_index] = orbit_item
 	orbit_event["completeOrbitTotal"] = maxi(1, items.size())
 	orbit_event["completeOrbitRevealCount"] = clampi(int(orbit_event.get("completeOrbitIndex", 0)) + 1, 0, items.size())
 	return _animate_eat_to_complete_orbit(orbit_event)
@@ -6786,10 +6843,11 @@ func _animate_eat_to_complete_orbit(event: Dictionary) -> float:
 		texture = fallback_item.get("texture", null)
 	var start := _eat_start_center(event)
 	var total := maxi(1, int(event.get("completeOrbitTotal", items.size())))
-	var target := _complete_orbit_global_point(int(event.get("completeOrbitIndex", 0)), total)
+	var target := _complete_orbit_global_point_for_event(event, total)
 	debug_stats["lastEatAnimationStartPoint"] = start
 	debug_stats["lastCompleteOrbitStartPoint"] = start
 	debug_stats["lastCompleteOrbitTargetPoint"] = target
+	debug_stats["lastCompleteOrbitPhase"] = float(event.get("completeOrbitPhase", -1.0))
 	debug_stats["completeFoodOrbitTransition"] = true
 	_animate_texture_to_complete_orbit(texture, start, target, int(event.get("completeOrbitRevealCount", items.size())), items)
 	if _is_usable_animation_point(start):
@@ -6854,17 +6912,31 @@ func _remember_shared_food_orbit_items(orbit_items: Array, visible_count: int) -
 
 
 func _complete_orbit_global_point(index: int, total: int) -> Vector2:
+	return _complete_orbit_global_point_for_phase(float(posmod(index, maxi(1, total))) / float(maxi(1, total)))
+
+
+func _complete_orbit_global_point_for_event(event: Dictionary, total: int) -> Vector2:
+	var phase := float(event.get("completeOrbitPhase", -1.0))
+	if phase < 0.0 or phase >= 1.0:
+		phase = float(posmod(int(event.get("completeOrbitIndex", 0)), maxi(1, total))) / float(maxi(1, total))
+	return _complete_orbit_global_point_for_phase(phase)
+
+
+func _complete_orbit_global_point_for_phase(phase: float) -> Vector2:
 	var rect := get_global_rect()
 	if rect.size.x <= 1.0 or rect.size.y <= 1.0:
 		return Vector2.INF
-	var inset := CompleteFoodOrbit.ORBIT_INSET
-	inset = minf(inset, minf(rect.size.x, rect.size.y) * 0.22)
+	var max_inset := minf(rect.size.x, rect.size.y) * 0.22
+	var left := minf(CompleteFoodOrbit.ORBIT_LEFT_INSET, max_inset)
+	var top := minf(CompleteFoodOrbit.ORBIT_TOP_INSET, max_inset)
+	var right := minf(CompleteFoodOrbit.ORBIT_RIGHT_INSET, max_inset)
+	var bottom := minf(CompleteFoodOrbit.ORBIT_BOTTOM_INSET, max_inset)
 	var orbit_rect := Rect2(
-		rect.position + Vector2(inset, inset),
-		Vector2(maxf(1.0, rect.size.x - inset * 2.0), maxf(1.0, rect.size.y - inset * 2.0))
+		rect.position + Vector2(left, top),
+		Vector2(maxf(1.0, rect.size.x - left - right), maxf(1.0, rect.size.y - top - bottom))
 	)
 	var perimeter := maxf(1.0, (orbit_rect.size.x + orbit_rect.size.y) * 2.0)
-	return _point_on_rect_perimeter(orbit_rect, float(posmod(index, maxi(1, total))) / float(maxi(1, total)) * perimeter)
+	return _point_on_rect_perimeter(orbit_rect, fposmod(phase, 1.0) * perimeter)
 
 
 func _point_on_rect_perimeter(rect: Rect2, distance: float) -> Vector2:
@@ -6928,7 +7000,7 @@ func _exchange_endpoint(participant_id: String, ingredient_id: String, is_source
 		if is_source:
 			return _hand_card_or_row_center(ingredient_id)
 		return _hand_card_or_row_center(ingredient_id)
-	return _participant_tile_center(participant_id)
+	return _participant_trade_anchor_center(participant_id, ingredient_id)
 
 
 func _control_for_participant_or_viewer(participant_id: String) -> Control:
@@ -6958,6 +7030,26 @@ func _participant_avatar_center(participant_id: String) -> Vector2:
 		var avatar_center := _control_global_center(avatar)
 		if avatar_center != Vector2.INF:
 			return avatar_center
+	return _participant_tile_center(participant_id)
+
+
+func _participant_trade_anchor_center(participant_id: String, ingredient_id := "") -> Vector2:
+	var participant_node := _control_for_participant_or_viewer(participant_id)
+	if is_instance_valid(participant_node):
+		var participant := _participant_from_snapshot(_snapshot, participant_id)
+		if ingredient_id != "" and str(participant.get("ingredientId", "")) == ingredient_id:
+			var ingredient_icon := participant_node.find_child("CookIngredientIcon", true, false) as Control
+			var ingredient_center := _control_global_center(ingredient_icon)
+			if ingredient_center != Vector2.INF:
+				return ingredient_center
+		var avatar := participant_node.find_child("CookAvatar", true, false) as Control
+		var avatar_center := _control_global_center(avatar)
+		if avatar_center != Vector2.INF:
+			return avatar_center
+		var fallback_icon := participant_node.find_child("CookIngredientIcon", true, false) as Control
+		var fallback_icon_center := _control_global_center(fallback_icon)
+		if fallback_icon_center != Vector2.INF:
+			return fallback_icon_center
 	return _participant_tile_center(participant_id)
 
 
@@ -7022,14 +7114,14 @@ func _asset_start_center(event: Dictionary, prefix: String) -> Vector2:
 		var ingredient_id := str(event.get("%sIngredientId" % prefix, ""))
 		if prefix == "give":
 			if actor_id != "" and actor_id != _viewer_id():
-				return _participant_tile_center(actor_id)
+				return _participant_trade_anchor_center(actor_id, ingredient_id)
 			return _hand_card_or_row_center(ingredient_id)
 		return _platter_voucher_center(ingredient_id)
 	if kind == "dish_part":
 		var dish_name := str(event.get("%sDishName" % prefix, "Dish"))
 		if prefix == "give":
 			if actor_id != "" and actor_id != _viewer_id():
-				return _participant_tile_center(actor_id)
+				return _participant_trade_anchor_center(actor_id)
 			var hand_food_center := _hand_food_center_by_name(dish_name)
 			return hand_food_center if hand_food_center != Vector2.INF else _control_global_center(_hand_row)
 		return _platter_food_center_by_name(dish_name)
@@ -7046,9 +7138,11 @@ func _asset_platter_target_center(event: Dictionary, prefix: String) -> Vector2:
 
 
 func _asset_inventory_target_center(event: Dictionary, prefix: String, participant_id: String) -> Vector2:
-	if participant_id != "" and participant_id != _viewer_id():
-		return _participant_tile_center(participant_id)
 	var kind := str(event.get("%sKind" % prefix, ""))
+	if participant_id != "" and participant_id != _viewer_id():
+		if kind == "voucher":
+			return _participant_trade_anchor_center(participant_id, str(event.get("%sIngredientId" % prefix, "")))
+		return _participant_trade_anchor_center(participant_id)
 	if kind == "voucher":
 		return _hand_card_or_row_center(str(event.get("%sIngredientId" % prefix, "")))
 	if kind == "dish_part":
@@ -7176,7 +7270,8 @@ func _eat_start_center(event: Dictionary) -> Vector2:
 	var recorded_start := _event_point_or_fallback(event.get("startPoint", Vector2.INF), Vector2.INF)
 	if recorded_start != Vector2.INF:
 		return recorded_start
-	return _control_global_center(_hand_row)
+	var hand_row_center := _control_global_center(_hand_row)
+	return hand_row_center if _is_usable_animation_point(hand_row_center) else Vector2.INF
 
 
 func _event_asset_texture(event: Dictionary, prefix: String) -> Texture2D:
