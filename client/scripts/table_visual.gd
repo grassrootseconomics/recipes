@@ -99,6 +99,7 @@ const FAST_BOT_ANIMATION_SCALE := 0.25
 const VIEWER_ANIMATION_SCALE := 1.35
 const BASKET_SWAP_QUEUE_TIMEOUT_MS := 5000
 const VISUAL_TURN_LAG_FLUSH_MS := 7000
+const PREPARE_ANNOUNCEMENT_HOLD_SECONDS := 2.05
 const COMPLETE_FOOD_ORBIT_MIN_ITEMS := 8
 const COMPLETE_FOOD_ORBIT_MAX_ITEMS := 16
 const ANIMATION_POINT_BOUNDS_PADDING := 96.0
@@ -7473,9 +7474,7 @@ func _animate_prepare_announcement(participant_name: String, dish_name: String, 
 		clean_name = "Someone"
 	var clean_dish := dish_name.strip_edges()
 	if clean_dish == "":
-		clean_dish = "a dish"
-	else:
-		clean_dish = _dish_name_with_article(clean_dish)
+		clean_dish = "dish"
 	var text := "%s prepared %s!" % [clean_name, clean_dish]
 	debug_stats["lastPrepareAnnouncement"] = text
 
@@ -7495,6 +7494,7 @@ func _animate_prepare_announcement(participant_name: String, dish_name: String, 
 	debug_stats["lastPrepareAnnouncementTableCenter"] = table_rect.get_center()
 	debug_stats["lastPrepareAnnouncementSize"] = Vector2(width, height)
 	debug_stats["lastPrepareAnnouncementCharacterCount"] = text.length()
+	debug_stats["lastPrepareAnnouncementHoldSeconds"] = PREPARE_ANNOUNCEMENT_HOLD_SECONDS
 
 	var card := PanelContainer.new()
 	card.name = "PrepareAnnouncement"
@@ -7526,23 +7526,10 @@ func _animate_prepare_announcement(participant_name: String, dish_name: String, 
 		tween.tween_interval(delay)
 	tween.tween_property(card, "modulate", Color(1, 1, 1, 1), 0.12)
 	tween.parallel().tween_property(card, "scale", Vector2(1.0, 1.0), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tween.tween_interval(1.05)
+	tween.tween_interval(PREPARE_ANNOUNCEMENT_HOLD_SECONDS)
 	tween.tween_property(card, "position", card.position + Vector2(0, -12), 0.22).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tween.parallel().tween_property(card, "modulate", Color(1, 1, 1, 0), 0.22)
 	tween.tween_callback(card.queue_free)
-
-
-func _dish_name_with_article(dish_name: String) -> String:
-	var clean := dish_name.strip_edges()
-	if clean == "":
-		return "a dish"
-	var words := clean.split(" ", false)
-	var last_word := str(words[words.size() - 1]).strip_edges().to_lower() if words.size() > 0 else ""
-	if last_word.ends_with("s") and not last_word.ends_with("ss"):
-		return clean
-	var first_letter := clean.substr(0, 1).to_lower()
-	var article := "an" if ["a", "e", "i", "o", "u"].has(first_letter) else "a"
-	return "%s %s" % [article, clean]
 
 
 func _animate_prepare_ingredient_swirl(global_center: Vector2) -> void:
