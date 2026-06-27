@@ -356,8 +356,8 @@ func _initialize() -> void:
 		_require(not str(action).begins_with("Swap"), "Actions panel does not show a Swap button after selecting a card")
 	visual.debug_press_platter_ingredient("beans")
 	await process_frame
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "basket click immediately emits a platter swap")
-	_require(str(_intents[0].get("giveVoucherId", "")) == "rice_1" and str(_intents[0].get("takeVoucherId", "")) == "beans_1", "immediate swap uses selected hand card and clicked basket card")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap_ingredient", "basket click immediately emits an aggregate platter swap")
+	_require(str(_intents[0].get("giveIngredientId", "")) == "rice" and str(_intents[0].get("takeIngredientId", "")) == "beans", "immediate swap uses selected hand ingredient and clicked basket ingredient")
 	_intents.clear()
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
@@ -388,7 +388,9 @@ func _initialize() -> void:
 	_assert_turn_handoff_does_not_preempt_animation_actor(visual)
 	_assert_batch_redeem_updates_counts_one_by_one(visual)
 	_assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual)
+	_assert_multi_redeem_pass_auto_prepare_waits_for_prepare_animation(visual)
 	_assert_stale_visual_turn_watchdog_flushes(visual)
+	_assert_pending_visual_backlog_compacts_to_latest_turn(visual)
 	_assert_in_place_delta_redeem_pass_waits_for_animation(visual)
 	_assert_redeem_pass_and_public_turns_apply_in_order(visual)
 	_assert_deposits_update_basket_one_by_one(visual)
@@ -417,6 +419,7 @@ func _initialize() -> void:
 	_assert_prepare_event_uses_actual_recipe_name(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _public_prepare_after(), "public_prepare", "off-turn public prepare queues animation")
 	_assert_public_prepare_event_falls_back_to_new_dish(visual)
+	_assert_public_prepare_transaction_fallback_queues_animation(visual)
 	_require(str(visual.debug_animation_actor_for_event({"type": "public_prepare", "participantId": "p2", "dishName": "Bean Tacos", "unit": "taco"})) == "p2", "public prepare animation anchors to the preparing cook")
 	_assert_animation_event(visual, _offer_before(), _snapshot_fixture(), "offer", "offer badge change queues animation")
 	_assert_animation_event(visual, _settlement_before(), _settlement_after(), "settlement_swap", "settlement swap queues animation")
@@ -499,14 +502,14 @@ func _initialize() -> void:
 	_require(not selected_actions.has("Clear"), "selected-card Actions panel still does not show a Clear button")
 	for action in selected_actions:
 		_require(not str(action).begins_with("Swap"), "selected-card Actions panel does not show a Swap button")
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "selected hand and platter cards emit swap intent immediately")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap_ingredient", "selected hand and platter cards emit aggregate swap intent immediately")
 
 	_intents.clear()
 	var auto_swap := _snapshot_fixture()
 	visual.debug_apply_snapshot(auto_swap)
 	visual.debug_press_platter_ingredient("beans")
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "auto-selected basket swap emits swap intent")
-	_require(str(_intents[0].get("giveVoucherId", "")) == "rice_1", "auto-selected swap gives viewer main card")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap_ingredient", "auto-selected basket swap emits aggregate swap intent")
+	_require(str(_intents[0].get("giveIngredientId", "")) == "rice", "auto-selected swap gives viewer main ingredient")
 
 	_intents.clear()
 	var queued_swap := _snapshot_fixture()
@@ -521,8 +524,8 @@ func _initialize() -> void:
 	visual.render(queued_swap_confirmed)
 	visual.debug_flush_animations()
 	await process_frame
-	_require(_intents.size() == 2 and str(_intents[1].get("type", "")) == "platter_swap", "queued basket click emits after confirmed swap animation; state=%s intents=%s" % [JSON.stringify(visual.debug_basket_swap_queue_state()), JSON.stringify(_intents)])
-	_require(str(_intents[1].get("giveVoucherId", "")) == "rice_2" and str(_intents[1].get("takeVoucherId", "")) == "vegetables_1", "queued swap uses the latest legal hand and basket cards")
+	_require(_intents.size() == 2 and str(_intents[1].get("type", "")) == "platter_swap_ingredient", "queued basket click emits after confirmed swap animation; state=%s intents=%s" % [JSON.stringify(visual.debug_basket_swap_queue_state()), JSON.stringify(_intents)])
+	_require(str(_intents[1].get("giveIngredientId", "")) == "rice" and str(_intents[1].get("takeIngredientId", "")) == "vegetables", "queued swap uses the latest legal hand and basket ingredients")
 
 	_intents.clear()
 	var queued_turn_change := _snapshot_fixture()
@@ -544,7 +547,8 @@ func _initialize() -> void:
 	same_resource_swap["platter"].append({"id": "rice_9", "ingredientId": "rice", "ownerParticipantId": "p1", "location": {"type": "platter"}})
 	visual.debug_apply_snapshot(same_resource_swap)
 	visual.debug_press_platter_ingredient("rice")
-	_require(_intents.size() == 1 and str(_intents[0].get("giveVoucherId", "")) == "cheese_1", "same-resource basket tap swaps another held card by default")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap_ingredient", "same-resource basket tap swaps another held card by default")
+	_require(str(_intents[0].get("giveIngredientId", "")) == "cheese" and str(_intents[0].get("takeIngredientId", "")) == "rice", "same-resource basket tap emits aggregate ingredients for another held card")
 
 	_intents.clear()
 	var no_main_card_swap := _snapshot_fixture()
@@ -568,8 +572,8 @@ func _initialize() -> void:
 	_require(visual.debug_selected_hand_ingredient() == "beans", "non-main hand cards remain selectable when the viewer has no main card")
 	visual.debug_press_platter_ingredient("eggs")
 	await process_frame
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap", "selected non-main card can swap with a different basket card")
-	_require(str(_intents[0].get("giveVoucherId", "")) == "beans_3" and str(_intents[0].get("takeVoucherId", "")) == "eggs_1", "beans-for-eggs swap uses the selected non-main card")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_swap_ingredient", "selected non-main card can swap with a different basket card")
+	_require(str(_intents[0].get("giveIngredientId", "")) == "beans" and str(_intents[0].get("takeIngredientId", "")) == "eggs", "beans-for-eggs swap uses the selected non-main ingredient")
 
 	_intents.clear()
 	visual.debug_clear_selections()
@@ -763,7 +767,9 @@ func _initialize() -> void:
 	visual.debug_press_own_food_part("Bean Dip")
 	visual.debug_press_platter_ingredient("beans")
 	visual.debug_press_swap_selected()
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_asset_swap", "held food part can swap with basket asset during play")
+	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "platter_asset_swap_aggregate", "held food part can swap with basket asset during play using aggregate refs")
+	_require(str(_intents[0].get("give", {}).get("kind", "")) == "dish_part" and str(_intents[0].get("give", {}).get("dishId", "")) == "dish_2", "held food swap gives the selected dish group")
+	_require(str(_intents[0].get("take", {}).get("kind", "")) == "voucher" and str(_intents[0].get("take", {}).get("ingredientId", "")) == "beans", "held food swap takes the clicked basket ingredient group")
 
 	_intents.clear()
 	var eating := _snapshot_fixture()
@@ -1034,6 +1040,28 @@ func _assert_public_prepare_event_falls_back_to_new_dish(visual: Node) -> void:
 			break
 	_require(not prepare_event.is_empty(), "generic public prepare regression queues public prepare event")
 	_require(str(prepare_event.get("dishName", "")) == "Cheese Bowl", "public prepare event falls back to new public dish name")
+	visual.debug_flush_animations()
+
+
+func _assert_public_prepare_transaction_fallback_queues_animation(visual: Node) -> void:
+	var before := _snapshot_fixture()
+	var after := before.duplicate(true)
+	after["transactionHistory"] = [
+		{"id": "tx_public_prepare_transaction_only", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Prepare", "counterparty": "Table", "itemOut": "Recipe ingredients", "itemBack": "10 tacos of Bean Tacos"}
+	]
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	var prepare_event := {}
+	for raw_event in visual.debug_stats.get("lastAnimationEvents", []):
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) == "public_prepare":
+			prepare_event = event
+			break
+	_require(not prepare_event.is_empty(), "public prepare transaction queues animation even without a visible dish-count delta")
+	_require(str(prepare_event.get("dishName", "")) == "Bean Tacos", "public prepare transaction parses real server dish name")
+	_require(str(prepare_event.get("unit", "")) == "piece" or str(prepare_event.get("unit", "")) == "taco", "public prepare transaction keeps a usable unit")
+	visual.debug_play_animation_event(prepare_event)
+	_require(str(visual.debug_stats.get("lastPrepareAnnouncement", "")) == "Ben prepared Bean Tacos!", "public prepare transaction announcement uses only cook and dish name")
 	visual.debug_flush_animations()
 
 
@@ -1719,6 +1747,33 @@ func _assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual: Node) 
 	visual.debug_flush_animations()
 
 
+func _assert_multi_redeem_pass_auto_prepare_waits_for_prepare_animation(visual: Node) -> void:
+	var before := _multi_redeem_pass_auto_prepare_before()
+	var after := _multi_redeem_pass_auto_prepare_after()
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+	var types: Array = visual.debug_stats.get("lastAnimationTypes", [])
+	_require(types.size() >= 4 and types[0] == "redeem" and types[1] == "redeem" and types[2] == "prepare" and types[3] == "turn", "multi-redeem auto-prepare queues both redemptions, prepare, then turn: %s" % JSON.stringify(types))
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "multi-redeem auto-prepare keeps old recipe visible before animations")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "multi-redeem auto-prepare keeps turn on actor before animations")
+	var first: String = visual.debug_apply_next_animation_milestone()
+	_require(first == "redeem", "multi-redeem first milestone is a redemption")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "multi-redeem first redemption keeps turn on actor")
+	var second: String = visual.debug_apply_next_animation_milestone()
+	_require(second == "redeem", "multi-redeem second milestone is a redemption")
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "multi-redeem keeps old recipe through all redemptions")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "multi-redeem second redemption keeps turn on actor")
+	var third: String = visual.debug_apply_next_animation_milestone()
+	_require(third == "prepare", "multi-redeem third milestone is dish preparation")
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Cheese Frittata", "multi-redeem shows the new recipe only after preparation")
+	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "multi-redeem shows prepared dish pieces after preparation")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "multi-redeem keeps turn until pass-turn milestone")
+	var fourth: String = visual.debug_apply_next_animation_milestone()
+	_require(fourth == "turn", "multi-redeem fourth milestone is pass turn")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "multi-redeem passes turn only after prepare animation")
+	visual.debug_flush_animations()
+
+
 func _assert_stale_visual_turn_watchdog_flushes(visual: Node) -> void:
 	var before := _redeem_pass_auto_prepare_before()
 	var after := _redeem_pass_auto_prepare_after()
@@ -1731,6 +1786,35 @@ func _assert_stale_visual_turn_watchdog_flushes(visual: Node) -> void:
 	var pending_after: Dictionary = visual.pending_visual_debug_state()
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "stale visual turn watchdog applies the newest turn")
 	_require(int(pending_after.get("pendingCount", 0)) == 0, "stale visual turn watchdog clears pending snapshots")
+	visual.debug_flush_animations()
+
+
+func _assert_pending_visual_backlog_compacts_to_latest_turn(visual: Node) -> void:
+	var before := _redeem_pass_auto_prepare_before()
+	var after := _redeem_pass_auto_prepare_after()
+	visual.debug_apply_snapshot(before)
+	visual.render(after)
+
+	var p3_turn := after.duplicate(true)
+	p3_turn["version"] = int(after.get("version", 0)) + 1
+	p3_turn["turn"] = int(after.get("turn", 0)) + 1
+	p3_turn["currentTurnParticipantId"] = "p3"
+	p3_turn["transactionTotal"] = int(after.get("transactionTotal", 0)) + 1
+	visual.render(p3_turn)
+
+	var p4_turn := p3_turn.duplicate(true)
+	p4_turn["version"] = int(p3_turn.get("version", 0)) + 1
+	p4_turn["turn"] = int(p3_turn.get("turn", 0)) + 1
+	p4_turn["currentTurnParticipantId"] = "p4"
+	p4_turn["transactionTotal"] = int(p3_turn.get("transactionTotal", 0)) + 1
+	visual.render(p4_turn)
+
+	var pending: Dictionary = visual.pending_visual_debug_state()
+	_require(str(pending.get("latestPendingTurn", "")) == "p4", "pending visual backlog tracks the latest authoritative turn")
+	_require(int(pending.get("pendingCount", 0)) <= 1, "pending visual backlog compacts intermediate stale turns")
+	_require(int(pending.get("pendingCompactions", 0)) > 0, "pending visual backlog records compaction")
+	visual.debug_force_visual_turn_lag_flush()
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p4", "visual backlog flush lands on the latest turn")
 	visual.debug_flush_animations()
 
 
@@ -2280,8 +2364,41 @@ func _redeem_pass_auto_prepare_after() -> Dictionary:
 	snapshot["turn"] = 15
 	snapshot["transactionHistory"] = [
 		{"id": "tx_auto_redeem", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Redeem", "counterpartyParticipantId": "p3", "counterparty": "Clara", "itemOut": "Cheese", "itemBack": "Real Cheese"},
-		{"id": "tx_auto_prepare", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Prepare", "counterparty": "Table", "itemOut": "Rice Bean Bowl", "itemBack": "Rice Bean Bowl bowl"},
+		{"id": "tx_auto_prepare", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Prepare", "counterparty": "Table", "itemOut": "Recipe ingredients", "itemBack": "10 bowls of Rice Bean Bowl"},
 		{"id": "tx_auto_pass", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Pass Turn", "counterpartyParticipantId": "p2", "counterparty": "Ben", "itemOut": "None", "itemBack": "None"}
+	]
+	return snapshot
+
+
+func _multi_redeem_pass_auto_prepare_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	var requirements: Array = snapshot["ownRecipe"]["requirements"]
+	for index in range(requirements.size()):
+		var requirement: Dictionary = requirements[index]
+		var ingredient_id := str(requirement.get("ingredientId", ""))
+		if ingredient_id == "rice":
+			requirement["redeemedQty"] = 1
+		elif ingredient_id == "cheese":
+			requirement["redeemedQty"] = 0
+		else:
+			requirement["redeemedQty"] = int(requirement.get("requiredQty", 0))
+		requirements[index] = requirement
+	snapshot["ownRecipe"]["requirements"] = requirements
+	snapshot["transactionHistory"] = []
+	return snapshot
+
+
+func _multi_redeem_pass_auto_prepare_after() -> Dictionary:
+	var snapshot := _prepare_after()
+	_remove_voucher(snapshot, "rice_1", "ownHand")
+	_remove_voucher(snapshot, "cheese_1", "ownHand")
+	snapshot["currentTurnParticipantId"] = "p2"
+	snapshot["turn"] = 15
+	snapshot["transactionHistory"] = [
+		{"id": "tx_auto_redeem_rice", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Redeem", "counterpartyParticipantId": "p1", "counterparty": "Amina", "itemOut": "Rice", "itemBack": "Real Rice"},
+		{"id": "tx_auto_redeem_cheese", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Redeem", "counterpartyParticipantId": "p3", "counterparty": "Clara", "itemOut": "Cheese", "itemBack": "Real Cheese"},
+		{"id": "tx_auto_prepare_multi", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Prepare", "counterparty": "Table", "itemOut": "Recipe ingredients", "itemBack": "10 bowls of Rice Bean Bowl"},
+		{"id": "tx_auto_pass_multi", "turn": 15, "participantId": "p1", "name": "Amina", "action": "Pass Turn", "counterpartyParticipantId": "p2", "counterparty": "Ben", "itemOut": "None", "itemBack": "None"}
 	]
 	return snapshot
 

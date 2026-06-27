@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.31"
+const APP_VERSION := "0.0.34"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -2616,6 +2616,11 @@ func _on_error_received(error: Dictionary) -> void:
 		RecipesClient.disconnect_local()
 		description = "Your saved seat is already open in another client. You can join this table as another player."
 		show_plain_message = true
+	elif ["dish_part_not_in_platter", "voucher_not_in_platter", "dish_part_not_held", "voucher_not_in_hand"].has(error_code):
+		description = "The basket changed before that swap completed. Refreshed the table; please choose again."
+		show_plain_message = true
+		if not RecipesClient.offline_mode:
+			RecipesClient.connect_socket()
 	_status_label.text = description if show_plain_message or description.begins_with("The server") else "Error: %s" % description
 	_status_label.visible = true
 	_summary_label.text = "Last error: %s" % description
@@ -2959,6 +2964,7 @@ func _debug_sync_report() -> String:
 	lines.append("Socket connected: %s" % str(RecipesClient.is_socket_connected()))
 	lines.append("Reconnect attempt: %s" % RecipesClient.reconnect_attempt())
 	lines.append("Last close: %s" % RecipesClient.last_close_description)
+	lines.append("Ignored stale snapshots: %s" % RecipesClient.ignored_stale_snapshot_count)
 	lines.append("")
 	lines.append("Snapshot")
 	lines.append("Table: %s" % str(snapshot.get("tableCode", RecipesClient.table_code)))
@@ -2987,6 +2993,7 @@ func _debug_sync_report() -> String:
 	lines.append("Animation event count: %s" % str(visual_stats.get("animationEventCount", 0)))
 	lines.append("Pending visual turn: %s" % _debug_participant_label(snapshot, str(pending_visual.get("latestPendingTurn", ""))))
 	lines.append("Pending visual snapshots: %s" % str(pending_visual.get("pendingCount", 0)))
+	lines.append("Pending visual compactions: %s" % str(pending_visual.get("pendingCompactions", 0)))
 	lines.append("Visual turn lag ms: %s" % str(pending_visual.get("visualTurnLagMs", 0)))
 	lines.append("Last visual turn flush: %s" % str(pending_visual.get("lastVisualTurnLagFlush", "")))
 	lines.append("Basket queue: %s, in flight: %s" % [str(visual_stats.get("basketSwapQueueSize", 0)), str(visual_stats.get("basketSwapInFlight", false))])
@@ -4258,19 +4265,21 @@ func _add_platter_swap_controls(snapshot: Dictionary) -> void:
 		var latest := RecipesClient.latest_snapshot
 		var latest_hand: Array = latest.get("ownHand", [])
 		var latest_platter: Array = latest.get("platter", [])
-		if not _contains_voucher_id(latest_hand, _selected_hand_voucher_id):
-			_on_error_received({"description": "The card selected to give is no longer in your hand. Choose again."})
+		var give_ingredient_id := _voucher_ingredient_for_id(latest_hand, _selected_hand_voucher_id)
+		if give_ingredient_id == "":
+			give_ingredient_id = _voucher_ingredient_for_id(hand, _selected_hand_voucher_id)
+		var take_ingredient_id := _voucher_ingredient_for_id(latest_platter, _selected_platter_voucher_id)
+		if take_ingredient_id == "":
+			take_ingredient_id = _voucher_ingredient_for_id(platter, _selected_platter_voucher_id)
+		if give_ingredient_id == "" or take_ingredient_id == "":
+			_on_error_received({"description": "The basket changed before that swap completed. Please choose again."})
 			_selected_hand_voucher_id = ""
-			_refresh_controls(latest)
-			return
-		if not _contains_voucher_id(latest_platter, _selected_platter_voucher_id):
-			_on_error_received({"description": "The card selected to take is no longer in the platter. Choose again."})
 			_selected_platter_voucher_id = ""
 			_refresh_controls(latest)
 			return
 		var give_label := _voucher_group_label_by_id(latest, latest_hand, _selected_hand_voucher_id, false)
 		var take_label := _voucher_resource_label_by_id(latest, latest_platter, _selected_platter_voucher_id)
-		if RecipesClient.send_intent({"type": "platter_swap", "giveVoucherId": _selected_hand_voucher_id, "takeVoucherId": _selected_platter_voucher_id}):
+		if RecipesClient.send_intent({"type": "platter_swap_ingredient", "giveIngredientId": give_ingredient_id, "takeIngredientId": take_ingredient_id}):
 			_status_label.text = "Swapping %s for %s..." % [give_label, take_label]
 	)
 	swap_button.disabled = _selected_hand_voucher_id == "" or _selected_platter_voucher_id == "" or not RecipesClient.is_socket_connected()
@@ -4304,12 +4313,17 @@ func _add_platter_asset_swap_controls(snapshot: Dictionary) -> void:
 	))
 
 	var swap_button := _button("Swap Selected", func() -> void:
-		var give_ref := _asset_ref_from_key(_selected_give_asset_key)
-		var take_ref := _asset_ref_from_key(_selected_take_asset_key)
+		var latest := RecipesClient.latest_snapshot
+		var give_ref := _aggregate_asset_ref_from_key(latest, _selected_give_asset_key)
+		if give_ref.is_empty():
+			give_ref = _aggregate_asset_ref_from_key(snapshot, _selected_give_asset_key)
+		var take_ref := _aggregate_asset_ref_from_key(latest, _selected_take_asset_key)
+		if take_ref.is_empty():
+			take_ref = _aggregate_asset_ref_from_key(snapshot, _selected_take_asset_key)
 		if give_ref.is_empty() or take_ref.is_empty():
 			_on_error_received({"description": "Select one held asset and one platter asset."})
 			return
-		if RecipesClient.send_intent({"type": "platter_asset_swap", "give": give_ref, "take": take_ref}):
+		if RecipesClient.send_intent({"type": "platter_asset_swap_aggregate", "give": give_ref, "take": take_ref}):
 			_status_label.text = "Swapping selected assets..."
 	)
 	swap_button.disabled = _selected_give_asset_key == "" or _selected_take_asset_key == "" or not RecipesClient.is_socket_connected()
@@ -5440,6 +5454,29 @@ func _asset_ref_from_key(key: String) -> Dictionary:
 	if separator <= 0:
 		return {}
 	return {"kind": key.substr(0, separator), "id": key.substr(separator + 1)}
+
+
+func _aggregate_asset_ref_from_key(snapshot: Dictionary, key: String) -> Dictionary:
+	var separator := key.find(":")
+	if separator <= 0:
+		return {}
+	var kind := key.substr(0, separator)
+	var asset_id := key.substr(separator + 1)
+	if kind == "voucher":
+		for raw_voucher in snapshot.get("ownHand", []) + snapshot.get("platter", []):
+			var voucher: Dictionary = raw_voucher
+			if str(voucher.get("id", "")) != asset_id:
+				continue
+			var ingredient_id := str(voucher.get("ingredientId", ""))
+			return {"kind": "voucher", "ingredientId": ingredient_id} if ingredient_id != "" else {}
+	if kind == "dish_part":
+		for raw_part in snapshot.get("ownFoodParts", []) + snapshot.get("platterFoodParts", []):
+			var part: Dictionary = raw_part
+			if str(part.get("id", "")) != asset_id:
+				continue
+			var dish_id := str(part.get("dishId", ""))
+			return {"kind": "dish_part", "dishId": dish_id} if dish_id != "" else {}
+	return {}
 
 
 func _asset_label_by_key(assets: Array, key: String) -> String:

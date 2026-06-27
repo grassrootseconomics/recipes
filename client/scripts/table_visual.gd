@@ -98,7 +98,8 @@ const TEXTURE_LAND_SCALE := Vector2(1.025, 1.025)
 const FAST_BOT_ANIMATION_SCALE := 0.25
 const VIEWER_ANIMATION_SCALE := 1.35
 const BASKET_SWAP_QUEUE_TIMEOUT_MS := 5000
-const VISUAL_TURN_LAG_FLUSH_MS := 7000
+const VISUAL_TURN_LAG_FLUSH_MS := 3000
+const MAX_PENDING_VISUAL_SNAPSHOTS := 2
 const PREPARE_ANNOUNCEMENT_HOLD_SECONDS := 2.05
 const COMPLETE_FOOD_ORBIT_MIN_ITEMS := 8
 const COMPLETE_FOOD_ORBIT_MAX_ITEMS := 16
@@ -531,6 +532,7 @@ var _last_animation_types: Array[String] = []
 var _pending_visual_snapshot: Dictionary = {}
 var _has_pending_visual_snapshot := false
 var _pending_visual_snapshots: Array = []
+var _pending_visual_compaction_count := 0
 var _visual_turn_lag_started_msec := 0
 var _visual_turn_lag_key := ""
 var _last_visual_turn_lag_flush := ""
@@ -3356,7 +3358,7 @@ func _swap_selected_platter_vouchers() -> void:
 		status_requested.emit("Choose a different ingredient to take.")
 		render(_snapshot)
 		return
-	_emit_basket_swap_intent({"type": "platter_swap", "giveVoucherId": _selected_hand_voucher_id, "takeVoucherId": take_id})
+	_emit_basket_swap_intent({"type": "platter_swap_ingredient", "giveIngredientId": _selected_hand_ingredient_id, "takeIngredientId": take_ingredient_id})
 	status_requested.emit("Swapping %s for %s." % [_ingredient_display(_selected_hand_ingredient_id), _ingredient_display(take_ingredient_id)])
 	_clear_selections()
 	render(_snapshot)
@@ -3412,10 +3414,17 @@ func _try_asset_swap(phase: String) -> void:
 		status_requested.emit("Select one held card or food part, then one basket asset.")
 		render(_snapshot)
 		return
+	var give_ref := _aggregate_asset_ref_from_key(_selected_inventory_asset_key)
+	var take_ref := _aggregate_asset_ref_from_key(_selected_platter_asset_key)
+	if give_ref.is_empty() or take_ref.is_empty():
+		status_requested.emit("The basket changed. Choose again.")
+		_clear_selections()
+		render(_snapshot)
+		return
 	_emit_basket_swap_intent({
-		"type": "platter_asset_swap",
-		"give": _asset_ref_from_key(_selected_inventory_asset_key),
-		"take": _asset_ref_from_key(_selected_platter_asset_key)
+		"type": "platter_asset_swap_aggregate",
+		"give": give_ref,
+		"take": take_ref
 	})
 	status_requested.emit("Swapping selected assets.")
 	_clear_selections()
@@ -4504,6 +4513,28 @@ func _asset_ref_from_key(key: String) -> Dictionary:
 	return {"kind": key.substr(0, separator), "id": key.substr(separator + 1)}
 
 
+func _aggregate_asset_ref_from_key(key: String) -> Dictionary:
+	if key.begins_with("voucher:"):
+		var voucher := _voucher_for_key(key)
+		var ingredient_id := str(voucher.get("ingredientId", ""))
+		if ingredient_id == "":
+			return {}
+		return {
+			"kind": "voucher",
+			"ingredientId": ingredient_id
+		}
+	if key.begins_with("dish_part:"):
+		var part := _dish_part_by_id(key.substr("dish_part:".length()))
+		var dish_id := str(part.get("dishId", ""))
+		if dish_id == "":
+			return {}
+		return {
+			"kind": "dish_part",
+			"dishId": dish_id
+		}
+	return {}
+
+
 func _asset_refs_from_selected_key(quantity: int) -> Array:
 	var refs: Array = []
 	var qty := maxi(1, quantity)
@@ -4691,6 +4722,7 @@ func pending_visual_debug_state() -> Dictionary:
 		"pendingTurn": str(_pending_visual_snapshot.get("currentTurnParticipantId", "")),
 		"latestPendingTurn": str(latest_pending.get("currentTurnParticipantId", "")),
 		"pendingViewer": str(_pending_visual_snapshot.get("viewerParticipantId", "")),
+		"pendingCompactions": _pending_visual_compaction_count,
 		"visualTurnLagMs": _visual_turn_lag_elapsed_msec(),
 		"lastVisualTurnLagFlush": _last_visual_turn_lag_flush
 	}
@@ -5897,11 +5929,16 @@ func _public_redeem_events_from_transactions(previous_snapshot: Dictionary, curr
 
 
 func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Array:
-	var events: Array = []
+	var events := _prepare_events_from_transactions(previous_snapshot, current_snapshot)
+	var event_keys := {}
+	for raw_event in events:
+		var event: Dictionary = raw_event
+		event_keys[str(event.get("type", "")) + ":" + str(event.get("participantId", ""))] = true
 	var viewer_id := str(current_snapshot.get("viewerParticipantId", ""))
 	var previous_viewer := _participant_from_snapshot(previous_snapshot, viewer_id)
 	var current_viewer := _participant_from_snapshot(current_snapshot, viewer_id)
 	if not previous_viewer.is_empty() and not current_viewer.is_empty() \
+			and not event_keys.has("prepare:%s" % viewer_id) \
 			and int(current_viewer.get("dishCount", 0)) > int(previous_viewer.get("dishCount", 0)):
 		var participant_name := str(current_viewer.get("name", "")).strip_edges()
 		if participant_name == "":
@@ -5921,10 +5958,13 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 			"dishName": dish_name,
 			"unit": str(food_info.get("unitSingular", "piece"))
 		})
+		event_keys["prepare:%s" % viewer_id] = true
 	for raw_participant in current_snapshot.get("participants", []):
 		var current_participant: Dictionary = raw_participant
 		var participant_id := str(current_participant.get("id", ""))
 		if participant_id == "" or participant_id == viewer_id:
+			continue
+		if event_keys.has("public_prepare:%s" % participant_id):
 			continue
 		var previous_participant := _participant_from_snapshot(previous_snapshot, participant_id)
 		if previous_participant.is_empty():
@@ -5942,6 +5982,59 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 			"dishName": str(prepare_info.get("dishName", "Dish")),
 			"unit": str(prepare_info.get("unit", "piece"))
 		})
+		event_keys["public_prepare:%s" % participant_id] = true
+	return events
+
+
+func _prepare_events_from_transactions(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Array:
+	var events: Array = []
+	var viewer_id := str(current_snapshot.get("viewerParticipantId", ""))
+	for raw_transaction in _new_transactions(previous_snapshot, current_snapshot):
+		var transaction: Dictionary = raw_transaction
+		if str(transaction.get("action", "")) != "Prepare":
+			continue
+		var participant_id := str(transaction.get("participantId", ""))
+		if participant_id == "":
+			continue
+		var participant := _participant_from_snapshot(current_snapshot, participant_id)
+		if participant.is_empty():
+			participant = _participant_from_snapshot(previous_snapshot, participant_id)
+		var participant_name := str(transaction.get("name", "")).strip_edges()
+		if participant_name == "":
+			participant_name = str(participant.get("name", "")).strip_edges()
+		if participant_name == "":
+			participant_name = _participant_name(participant_id)
+		var dish_name := _dish_name_from_prepare_transaction(transaction).strip_edges()
+		var unit := _unit_from_prepare_transaction(transaction).strip_edges()
+		if participant_id == viewer_id:
+			var food_info := _new_food_part_info(previous_snapshot.get("ownFoodParts", []), current_snapshot.get("ownFoodParts", []))
+			if dish_name == "":
+				dish_name = str(food_info.get("dishName", "")).strip_edges()
+			if dish_name == "":
+				dish_name = _recipe_dish_name(previous_snapshot.get("ownRecipe", {})).strip_edges()
+			if unit == "":
+				unit = str(food_info.get("unitSingular", "")).strip_edges()
+			events.append({
+				"type": "prepare",
+				"participantId": participant_id,
+				"participantName": participant_name,
+				"dishName": dish_name if dish_name != "" else "Dish",
+				"unit": unit if unit != "" else "piece",
+				"_transactionId": str(transaction.get("id", ""))
+			})
+		else:
+			if dish_name == "":
+				dish_name = _recipe_dish_name(_participant_from_snapshot(previous_snapshot, participant_id).get("currentRecipe", {})).strip_edges()
+			if dish_name == "":
+				dish_name = _new_public_dish_name_for_participant(previous_snapshot, current_snapshot, participant_id).strip_edges()
+			events.append({
+				"type": "public_prepare",
+				"participantId": participant_id,
+				"participantName": participant_name,
+				"dishName": dish_name if dish_name != "" else "Dish",
+				"unit": unit if unit != "" else "piece",
+				"_transactionId": str(transaction.get("id", ""))
+			})
 	return events
 
 
@@ -5978,6 +6071,11 @@ func _dish_name_from_prepare_transaction(transaction: Dictionary) -> String:
 	if item_out != "" and not _is_generic_recipe_label(item_out):
 		return item_out
 	var item_back := str(transaction.get("itemBack", "")).strip_edges()
+	var of_index := item_back.to_lower().find(" of ")
+	if of_index >= 0:
+		var dish_name_from_quantity := item_back.substr(of_index + 4).strip_edges()
+		if dish_name_from_quantity != "" and not _is_generic_recipe_label(dish_name_from_quantity):
+			return dish_name_from_quantity
 	for unit in ["slice", "slices", "cup", "cups", "scoop", "scoops", "piece", "pieces", "portion", "portions", "serving", "servings", "bowl", "bowls"]:
 		var suffix: String = " " + unit
 		if item_back.ends_with(suffix):
@@ -5990,10 +6088,39 @@ func _unit_from_prepare_transaction(transaction: Dictionary) -> String:
 	if transaction.is_empty():
 		return ""
 	var item_back := str(transaction.get("itemBack", "")).strip_edges()
+	var of_index := item_back.to_lower().find(" of ")
+	if of_index >= 0:
+		var prefix := item_back.substr(0, of_index).strip_edges()
+		var words := prefix.split(" ", false)
+		if words.size() > 0:
+			var parsed_unit := _singular_prepare_unit(str(words[words.size() - 1]))
+			if parsed_unit != "":
+				return parsed_unit
 	for unit in ["slice", "cup", "scoop", "piece", "portion", "serving", "bowl"]:
 		if item_back.ends_with(" " + unit) or item_back.ends_with(" " + unit + "s"):
 			return unit
 	return ""
+
+
+func _singular_prepare_unit(unit_text: String) -> String:
+	var normalized := unit_text.strip_edges().to_lower()
+	match normalized:
+		"slice", "slices":
+			return "slice"
+		"cup", "cups":
+			return "cup"
+		"scoop", "scoops":
+			return "scoop"
+		"piece", "pieces":
+			return "piece"
+		"portion", "portions":
+			return "portion"
+		"serving", "servings":
+			return "serving"
+		"bowl", "bowls":
+			return "bowl"
+		_:
+			return ""
 
 
 func _new_public_dish_name_for_participant(previous_snapshot: Dictionary, current_snapshot: Dictionary, participant_id: String) -> String:
@@ -6338,8 +6465,18 @@ func _queue_pending_visual_snapshot(snapshot: Dictionary) -> void:
 	elif _snapshot_identity_key(_snapshot) == next_key:
 		return
 	_pending_visual_snapshots.append(next_snapshot)
-	_pending_visual_snapshot = next_snapshot.duplicate(true)
-	_has_pending_visual_snapshot = true
+	_compact_pending_visual_snapshots()
+	var latest_pending := _latest_pending_visual_snapshot()
+	_pending_visual_snapshot = latest_pending.duplicate(true)
+	_has_pending_visual_snapshot = not latest_pending.is_empty()
+
+
+func _compact_pending_visual_snapshots() -> void:
+	if _pending_visual_snapshots.size() <= MAX_PENDING_VISUAL_SNAPSHOTS:
+		return
+	var latest_snapshot: Dictionary = _pending_visual_snapshots[_pending_visual_snapshots.size() - 1]
+	_pending_visual_snapshots = [latest_snapshot.duplicate(true)]
+	_pending_visual_compaction_count += 1
 
 
 func _apply_pending_visual_snapshot(defer_remaining := true) -> void:

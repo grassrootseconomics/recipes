@@ -15,6 +15,7 @@ var acting_participant_id := ""
 var latest_snapshot: Dictionary = {}
 var last_close_description := ""
 var offline_mode := false
+var ignored_stale_snapshot_count := 0
 
 var _http_request: HTTPRequest
 var _offline_store: Node
@@ -316,7 +317,11 @@ func _handle_socket_message(text: String) -> void:
 		error_received.emit({"description": "Invalid WebSocket JSON."})
 		return
 	if parsed.get("type", "") == "snapshot":
-		latest_snapshot = parsed.get("snapshot", {})
+		var incoming_snapshot: Dictionary = parsed.get("snapshot", {})
+		if not _should_accept_full_snapshot(incoming_snapshot):
+			ignored_stale_snapshot_count += 1
+			return
+		latest_snapshot = incoming_snapshot
 		snapshot_received.emit(latest_snapshot)
 	elif parsed.get("type", "") == "delta":
 		_handle_delta_message(parsed)
@@ -329,6 +334,33 @@ func _handle_socket_message(text: String) -> void:
 			_should_reconnect = false
 			_reconnect_delay = -1.0
 		error_received.emit(parsed)
+
+
+func _should_accept_full_snapshot(snapshot: Dictionary) -> bool:
+	if snapshot.is_empty() or latest_snapshot.is_empty():
+		return true
+	var incoming_table := str(snapshot.get("tableCode", ""))
+	var current_table := str(latest_snapshot.get("tableCode", ""))
+	if incoming_table == "" or current_table == "" or incoming_table != current_table:
+		return true
+	var incoming_version := int(snapshot.get("version", -1))
+	var current_version := int(latest_snapshot.get("version", -1))
+	if incoming_version >= 0 and current_version >= 0:
+		if incoming_version < current_version:
+			return false
+		if incoming_version > current_version:
+			return true
+	var incoming_cursor := _snapshot_cursor(snapshot)
+	var current_cursor := _snapshot_cursor(latest_snapshot)
+	if incoming_cursor >= 0 and current_cursor >= 0 and incoming_cursor < current_cursor:
+		return false
+	return true
+
+
+func _snapshot_cursor(snapshot: Dictionary) -> int:
+	if snapshot.has("transactionCursor"):
+		return int(snapshot.get("transactionCursor", -1))
+	return int(snapshot.get("transactionHistoryTotal", snapshot.get("transactionTotal", -1)))
 
 
 func _handle_delta_message(message: Dictionary) -> void:
