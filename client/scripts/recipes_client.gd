@@ -5,6 +5,9 @@ signal error_received(error: Dictionary)
 signal connection_changed(status: String)
 
 const RECONNECT_DELAY_SECONDS := 1.5
+const SOCKET_WATCHDOG_FRESH_SNAPSHOT_MS := 20000
+const SOCKET_WATCHDOG_RECONNECT_MS := 8000
+const SOCKET_WATCHDOG_CHECK_MS := 1000
 const OfflineStore := preload("res://scripts/offline_store.gd")
 
 var server_url := "http://127.0.0.1:3000"
@@ -17,6 +20,10 @@ var last_close_description := ""
 var offline_mode := false
 var ignored_stale_snapshot_count := 0
 var auto_fresh_snapshot_count := 0
+var manual_fresh_snapshot_count := 0
+var watchdog_fresh_snapshot_count := 0
+var watchdog_reconnect_count := 0
+var last_socket_message_type := ""
 
 var _http_request: HTTPRequest
 var _offline_store: Node
@@ -27,6 +34,10 @@ var _should_reconnect := false
 var _reconnect_delay := -1.0
 var _reconnect_attempt := 0
 var _next_client_intent_id := 1
+var _last_socket_message_msec := 0
+var _fresh_snapshot_request_started_msec := 0
+var _fresh_snapshot_request_in_flight := false
+var _next_socket_watchdog_check_msec := 0
 
 
 func _ready() -> void:
@@ -59,13 +70,16 @@ func _process(_delta: float) -> void:
 			_reported_open = true
 			_reconnect_attempt = 0
 			last_close_description = ""
+			_last_socket_message_msec = Time.get_ticks_msec()
 			connection_changed.emit("open")
 		while _websocket.get_available_packet_count() > 0:
 			var text := _websocket.get_packet().get_string_from_utf8()
 			_handle_socket_message(text)
+		_watch_socket_freshness()
 	elif state == WebSocketPeer.STATE_CLOSED:
 		_socket_open = false
 		_reported_open = false
+		_fresh_snapshot_request_in_flight = false
 		last_close_description = _close_description()
 		if _should_reconnect and table_code != "" and seat_token != "":
 			_reconnect_attempt += 1
@@ -176,6 +190,29 @@ func view_as(participant_id_to_view: String) -> bool:
 	return true
 
 
+func request_fresh_snapshot(count_as_manual := true) -> bool:
+	if offline_mode:
+		return false
+	if not _socket_open or _websocket.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		connect_socket()
+		return false
+	var viewer_id := acting_participant_id
+	if viewer_id == "":
+		viewer_id = participant_id
+	if viewer_id == "":
+		connect_socket()
+		return false
+	var err := _websocket.send_text(JSON.stringify({"type": "view", "participantId": viewer_id}))
+	if err != OK:
+		connect_socket()
+		return false
+	if count_as_manual:
+		manual_fresh_snapshot_count += 1
+	_fresh_snapshot_request_started_msec = Time.get_ticks_msec()
+	_fresh_snapshot_request_in_flight = true
+	return true
+
+
 func is_socket_connected() -> bool:
 	if offline_mode:
 		return bool(_offline_store.call("has_active_table"))
@@ -239,6 +276,9 @@ func connect_socket() -> void:
 	_reported_open = false
 	_should_reconnect = true
 	_reconnect_delay = -1.0
+	_last_socket_message_msec = Time.get_ticks_msec()
+	_fresh_snapshot_request_in_flight = false
+	_fresh_snapshot_request_started_msec = 0
 	var ws_url := server_url.replace("https://", "wss://").replace("http://", "ws://")
 	var err := _websocket.connect_to_url("%s/tables/%s/socket?seatToken=%s" % [ws_url, table_code, seat_token])
 	if err != OK:
@@ -315,14 +355,17 @@ func _on_offline_snapshot_received(snapshot: Dictionary) -> void:
 func _handle_socket_message(text: String) -> void:
 	var parsed = JSON.parse_string(text)
 	if typeof(parsed) != TYPE_DICTIONARY:
+		_mark_socket_message("invalid")
 		error_received.emit({"description": "Invalid WebSocket JSON."})
 		return
+	_mark_socket_message(str(parsed.get("type", "message")))
 	if parsed.get("type", "") == "snapshot":
 		var incoming_snapshot: Dictionary = parsed.get("snapshot", {})
 		if not _should_accept_full_snapshot(incoming_snapshot):
 			ignored_stale_snapshot_count += 1
 			return
 		latest_snapshot = incoming_snapshot
+		_fresh_snapshot_request_in_flight = false
 		snapshot_received.emit(latest_snapshot)
 	elif parsed.get("type", "") == "delta":
 		_handle_delta_message(parsed)
@@ -391,7 +434,53 @@ func _handle_delta_message(message: Dictionary) -> void:
 	if append.has("participants"):
 		_merge_participant_rows(append.get("participants", []))
 	latest_snapshot["version"] = int(message.get("version", latest_snapshot.get("version", 0)))
+	_fresh_snapshot_request_in_flight = false
 	snapshot_received.emit(latest_snapshot)
+
+
+func _mark_socket_message(message_type: String) -> void:
+	_last_socket_message_msec = Time.get_ticks_msec()
+	last_socket_message_type = message_type
+
+
+func _watch_socket_freshness() -> void:
+	if offline_mode or table_code == "" or seat_token == "":
+		return
+	var now_ms := Time.get_ticks_msec()
+	if now_ms < _next_socket_watchdog_check_msec:
+		return
+	_next_socket_watchdog_check_msec = now_ms + SOCKET_WATCHDOG_CHECK_MS
+	var action := _socket_watchdog_action_for_state(
+		latest_snapshot,
+		is_socket_connected(),
+		now_ms - _last_socket_message_msec,
+		_fresh_snapshot_request_in_flight,
+		now_ms - _fresh_snapshot_request_started_msec
+	)
+	if action == "fresh_snapshot":
+		watchdog_fresh_snapshot_count += 1
+		request_fresh_snapshot(false)
+	elif action == "reconnect":
+		watchdog_reconnect_count += 1
+		connect_socket()
+
+
+func _socket_watchdog_action_for_state(snapshot: Dictionary, socket_connected: bool, last_message_age_ms: int, request_in_flight: bool, request_age_ms: int) -> String:
+	if not socket_connected or snapshot.is_empty():
+		return "none"
+	if not _phase_needs_socket_watchdog(str(snapshot.get("phase", ""))):
+		return "none"
+	if request_in_flight:
+		return "reconnect" if request_age_ms >= SOCKET_WATCHDOG_RECONNECT_MS else "none"
+	return "fresh_snapshot" if last_message_age_ms >= SOCKET_WATCHDOG_FRESH_SNAPSHOT_MS else "none"
+
+
+func _phase_needs_socket_watchdog(phase: String) -> bool:
+	return phase == "playing" or phase == "settlement" or phase == "eating"
+
+
+func debug_socket_watchdog_action(snapshot: Dictionary, socket_connected: bool, last_message_age_ms: int, request_in_flight: bool, request_age_ms: int) -> String:
+	return _socket_watchdog_action_for_state(snapshot, socket_connected, last_message_age_ms, request_in_flight, request_age_ms)
 
 
 func debug_delta_missing_viewer_prepare_food_parts(previous_snapshot: Dictionary, patch: Dictionary, append: Dictionary) -> bool:

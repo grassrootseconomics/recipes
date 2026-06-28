@@ -39,6 +39,9 @@ const INVENTORY_SECTION_MARGIN_X := 6
 const INVENTORY_SECTION_MARGIN_Y := 3
 const INVENTORY_HAND_PANEL_WIDTH := TABLE_CONTENT_WIDTH - INVENTORY_SECTION_MARGIN_X * 2.0
 const INVENTORY_UPPER_PANEL_MIN_HEIGHT := 220
+# Promise Cards title plus the fixed hand scroller height.
+const INVENTORY_LOWER_PANEL_MIN_HEIGHT := 232
+const INVENTORY_SURFACE_MIN_HEIGHT := INVENTORY_UPPER_PANEL_MIN_HEIGHT + INVENTORY_LOWER_PANEL_MIN_HEIGHT + 6
 const ACTION_PANEL_MIN_WIDTH := 286
 const ACTION_PANEL_FIXED_HEIGHT := INVENTORY_UPPER_PANEL_MIN_HEIGHT - INVENTORY_SECTION_MARGIN_Y * 2
 const COMPLETE_ACTION_FIREWORKS_SIZE := Vector2(210, 68)
@@ -310,6 +313,15 @@ class FixedScrollContainer:
 
 class FixedPanelContainer:
 	extends PanelContainer
+
+	var fixed_minimum_size := Vector2.ZERO
+
+	func _get_minimum_size() -> Vector2:
+		return fixed_minimum_size
+
+
+class FixedVBoxContainer:
+	extends VBoxContainer
 
 	var fixed_minimum_size := Vector2.ZERO
 
@@ -604,6 +616,10 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	_clear_complete_celebration_effects()
 	VisualAssets.clear_cache()
+
+
+func _get_minimum_size() -> Vector2:
+	return _layout_minimum_size()
 
 
 func render(snapshot: Dictionary) -> void:
@@ -1008,9 +1024,19 @@ func preferred_visual_size_for_area(area: Vector2) -> Vector2:
 	return TABLE_PORTRAIT_SIZE
 
 
+func _layout_minimum_size() -> Vector2:
+	return TABLE_LANDSCAPE_SIZE if _layout_mode == "landscape" else TABLE_PORTRAIT_SIZE
+
+
 func set_visual_layout_area(area: Vector2) -> void:
 	var next_mode := "landscape" if _should_use_landscape_layout(area) else "portrait"
 	_apply_visual_layout_mode(next_mode)
+
+
+func _set_fixed_panel_minimum(panel: PanelContainer, minimum_size: Vector2) -> void:
+	if panel is FixedPanelContainer:
+		(panel as FixedPanelContainer).fixed_minimum_size = minimum_size
+	panel.custom_minimum_size = minimum_size
 
 
 func debug_layout_mode() -> String:
@@ -1157,11 +1183,14 @@ func _build() -> void:
 	_menu_canvas.add_child(_main_menu_overlay_button)
 	_position_menu_button()
 
-	_board_panel = PanelContainer.new()
+	var board_panel := FixedPanelContainer.new()
+	board_panel.fixed_minimum_size = BASKET_TABLE_AREA_SIZE
+	_board_panel = board_panel
 	_board_panel.name = "BoardPanel"
 	_board_panel.custom_minimum_size = BASKET_TABLE_AREA_SIZE
 	_board_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_board_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_board_panel.clip_contents = true
 	_board_panel.add_theme_stylebox_override("panel", _board_surface_style())
 	_root.add_child(_board_panel)
 
@@ -1213,9 +1242,11 @@ func _build() -> void:
 	_participant_row.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_basket_table_area.add_child(_participant_row)
 
-	_inventory_surface = PanelContainer.new()
+	var inventory_surface := FixedPanelContainer.new()
+	inventory_surface.fixed_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_SURFACE_MIN_HEIGHT)
+	_inventory_surface = inventory_surface
 	_inventory_surface.name = "InventorySurface"
-	_inventory_surface.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
+	_inventory_surface.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_SURFACE_MIN_HEIGHT)
 	_inventory_surface.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inventory_surface.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_inventory_surface.add_theme_stylebox_override("panel", _inventory_surface_style())
@@ -1226,20 +1257,25 @@ func _build() -> void:
 	_inventory_surface_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inventory_surface.add_child(_inventory_surface_content)
 
-	_inventory_upper_panel = PanelContainer.new()
+	var inventory_upper_panel := FixedPanelContainer.new()
+	inventory_upper_panel.fixed_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT)
+	_inventory_upper_panel = inventory_upper_panel
 	_inventory_upper_panel.name = "InventoryUpperPanel"
 	_inventory_upper_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT)
 	_inventory_upper_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inventory_upper_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_inventory_upper_panel.clip_contents = true
 	_inventory_upper_panel.add_theme_stylebox_override("panel", _inventory_upper_panel_style())
 	_inventory_surface_content.add_child(_inventory_upper_panel)
 
 	_middle_row = HBoxContainer.new()
 	_middle_row.name = "MiddleRow"
 	_middle_row.add_theme_constant_override("separation", 10)
+	_middle_row.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, ACTION_PANEL_FIXED_HEIGHT)
 	_middle_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_middle_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_middle_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_middle_row.clip_contents = true
 	_inventory_upper_panel.add_child(_middle_row)
 
 	_redeem_box = VBoxContainer.new()
@@ -1256,12 +1292,14 @@ func _build() -> void:
 	action_panel.clip_contents = true
 	_middle_row.add_child(action_panel)
 
-	var recipe_panel := VBoxContainer.new()
+	var recipe_panel := FixedVBoxContainer.new()
 	recipe_panel.name = "RecipePanel"
 	recipe_panel.add_theme_constant_override("separation", 4)
-	recipe_panel.custom_minimum_size = Vector2(RECIPE_GRID_SIZE.x, 0)
+	recipe_panel.fixed_minimum_size = Vector2(RECIPE_GRID_SIZE.x, ACTION_PANEL_FIXED_HEIGHT)
+	recipe_panel.custom_minimum_size = recipe_panel.fixed_minimum_size
 	recipe_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	recipe_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	recipe_panel.clip_contents = true
 	_middle_row.add_child(recipe_panel)
 	var recipe_title_center := CenterContainer.new()
 	recipe_title_center.custom_minimum_size = Vector2(RECIPE_GRID_SIZE.x, 22)
@@ -1308,10 +1346,14 @@ func _build() -> void:
 	_recipe_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	recipe_panel.add_child(_recipe_grid)
 
-	_inventory_lower_panel = PanelContainer.new()
+	var inventory_lower_panel := FixedPanelContainer.new()
+	inventory_lower_panel.fixed_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_LOWER_PANEL_MIN_HEIGHT)
+	_inventory_lower_panel = inventory_lower_panel
 	_inventory_lower_panel.name = "InventoryLowerPanel"
+	_inventory_lower_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_LOWER_PANEL_MIN_HEIGHT)
 	_inventory_lower_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inventory_lower_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_inventory_lower_panel.clip_contents = true
 	_inventory_lower_panel.add_theme_stylebox_override("panel", _inventory_lower_panel_style())
 	_inventory_surface_content.add_child(_inventory_lower_panel)
 
@@ -1344,8 +1386,11 @@ func _build() -> void:
 	_hand_row.add_theme_constant_override("v_separation", 6)
 	_hand_scroll = _scroll_wrap(_hand_row, HAND_SCROLL_HEIGHT)
 	_hand_scroll.name = "HandScroll"
+	if _hand_scroll is FixedScrollContainer:
+		(_hand_scroll as FixedScrollContainer).fixed_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, HAND_SCROLL_HEIGHT)
+	_hand_scroll.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, HAND_SCROLL_HEIGHT)
 	_hand_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_hand_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_hand_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	_hand_panel.add_child(_hand_scroll)
 
 	_offer_popup = PopupPanel.new()
@@ -1406,11 +1451,11 @@ func _apply_visual_layout_mode(mode: String) -> void:
 		_move_control_to_parent(_board_panel, _landscape_left)
 		_move_control_to_parent(_inventory_surface, _landscape_right)
 		_basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
-		_board_panel.custom_minimum_size = BASKET_TABLE_AREA_SIZE
-		_inventory_surface.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
-		_inventory_upper_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT)
-		_inventory_lower_panel.custom_minimum_size = Vector2(0, 0)
-		_middle_row.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
+		_set_fixed_panel_minimum(_board_panel, BASKET_TABLE_AREA_SIZE)
+		_set_fixed_panel_minimum(_inventory_surface, Vector2(TABLE_CONTENT_WIDTH, INVENTORY_SURFACE_MIN_HEIGHT))
+		_set_fixed_panel_minimum(_inventory_upper_panel, Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT))
+		_set_fixed_panel_minimum(_inventory_lower_panel, Vector2(TABLE_CONTENT_WIDTH, INVENTORY_LOWER_PANEL_MIN_HEIGHT))
+		_middle_row.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, ACTION_PANEL_FIXED_HEIGHT)
 		_bottom_tray.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
 		if is_instance_valid(_hand_panel):
 			_hand_panel.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
@@ -1427,11 +1472,11 @@ func _apply_visual_layout_mode(mode: String) -> void:
 		if is_instance_valid(_landscape_row) and _landscape_row.get_parent() == _root:
 			_root.remove_child(_landscape_row)
 		_basket_table_area.custom_minimum_size = BASKET_TABLE_AREA_SIZE
-		_board_panel.custom_minimum_size = BASKET_TABLE_AREA_SIZE
-		_inventory_surface.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, 0)
-		_inventory_upper_panel.custom_minimum_size = Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT)
-		_inventory_lower_panel.custom_minimum_size = Vector2(0, 0)
-		_middle_row.custom_minimum_size = Vector2(0, 0)
+		_set_fixed_panel_minimum(_board_panel, BASKET_TABLE_AREA_SIZE)
+		_set_fixed_panel_minimum(_inventory_surface, Vector2(TABLE_CONTENT_WIDTH, INVENTORY_SURFACE_MIN_HEIGHT))
+		_set_fixed_panel_minimum(_inventory_upper_panel, Vector2(TABLE_CONTENT_WIDTH, INVENTORY_UPPER_PANEL_MIN_HEIGHT))
+		_set_fixed_panel_minimum(_inventory_lower_panel, Vector2(TABLE_CONTENT_WIDTH, INVENTORY_LOWER_PANEL_MIN_HEIGHT))
+		_middle_row.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, ACTION_PANEL_FIXED_HEIGHT)
 		_bottom_tray.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
 		if is_instance_valid(_hand_panel):
 			_hand_panel.custom_minimum_size = Vector2(INVENTORY_HAND_PANEL_WIDTH, 0)
@@ -3125,16 +3170,17 @@ func _render_hand() -> void:
 		_hand_row.add_child(_row_message("No cards in hand."))
 	_hand_row.columns = 6
 	if is_instance_valid(_hand_scroll):
-		_hand_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO if _hand_row.get_child_count() > 12 else ScrollContainer.SCROLL_MODE_DISABLED
+		_hand_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 		debug_stats["handScrollVerticalMode"] = _hand_scroll.vertical_scroll_mode
 	debug_stats["handGridColumns"] = _hand_row.columns
 
 
 func _record_layout_debug() -> void:
-	var preferred := preferred_visual_size()
+	var preferred := _layout_minimum_size()
 	var combined := get_combined_minimum_size()
 	debug_stats["layoutMode"] = _layout_mode
-	debug_stats["preferredVisualSize"] = preferred
+	debug_stats["preferredVisualSize"] = preferred_visual_size()
+	debug_stats["activePreferredVisualSize"] = preferred
 	debug_stats["preferredLandscapeSize"] = TABLE_LANDSCAPE_SIZE
 	debug_stats["combinedMinimumSize"] = combined
 	debug_stats["combinedMinimumOverflowY"] = maxf(0.0, combined.y - preferred.y)

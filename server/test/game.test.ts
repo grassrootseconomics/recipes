@@ -2713,16 +2713,17 @@ describe("winning and eating", () => {
     expect(table.timer?.pausedRemainingMs).toBeUndefined();
   });
 
-  it("prompts idle lobby tables after ten minutes and continues when a player answers yes", () => {
+  it("prompts idle lobby tables after thirty minutes and continues when a player answers yes", () => {
     const { store, table, hostToken } = makeHarness(8, "idle-lobby");
     table.idle.lastActivityAtMs = 1000;
 
-    expect(store.advanceIdle(table.code, 1000 + 10 * 60 * 1000 - 1)).toBe(false);
-    expect(store.advanceIdle(table.code, 1000 + 10 * 60 * 1000)).toBe(true);
+    expect(store.advanceIdle(table.code, 1000 + 30 * 60 * 1000 - 1)).toBe(false);
+    expect(store.advanceIdle(table.code, 1000 + 30 * 60 * 1000)).toBe(true);
     expect(table.idle.prompt).toMatchObject({
       message: "Are you still cooking?",
       phase: "lobby"
     });
+    expect(table.idle.prompt?.expiresAtMs).toBe(1000 + 60 * 60 * 1000);
     const promptId = table.idle.prompt?.id as string;
 
     store.handleIntent(table.code, hostToken, { type: "idle_response", promptId, response: "yes" }, false);
@@ -2732,23 +2733,24 @@ describe("winning and eating", () => {
     expect(table.idle.closure).toBeUndefined();
   });
 
-  it("prompts idle running games after five minutes", () => {
+  it("prompts idle running games after thirty minutes", () => {
     const { store, table } = startAndDeposit(8, "idle-running");
     table.idle.lastActivityAtMs = 2000;
 
-    expect(store.advanceIdle(table.code, 2000 + 5 * 60 * 1000 - 1)).toBe(false);
-    expect(store.advanceIdle(table.code, 2000 + 5 * 60 * 1000)).toBe(true);
+    expect(store.advanceIdle(table.code, 2000 + 30 * 60 * 1000 - 1)).toBe(false);
+    expect(store.advanceIdle(table.code, 2000 + 30 * 60 * 1000)).toBe(true);
 
     expect(table.idle.prompt).toMatchObject({
       message: "Are you still cooking?",
       phase: "running"
     });
+    expect(table.idle.prompt?.expiresAtMs).toBe(2000 + 60 * 60 * 1000);
   });
 
   it("closes an idle table when someone answers no", () => {
     const { store, table, hostToken } = startAndDeposit(8, "idle-no");
     table.idle.lastActivityAtMs = 3000;
-    store.advanceIdle(table.code, 3000 + 5 * 60 * 1000);
+    store.advanceIdle(table.code, 3000 + 30 * 60 * 1000);
     const promptId = table.idle.prompt?.id as string;
 
     store.handleIntent(table.code, hostToken, { type: "idle_response", promptId, response: "no" }, false);
@@ -2764,7 +2766,7 @@ describe("winning and eating", () => {
   it("closes an idle table when no one answers the prompt", () => {
     const { store, table } = startAndDeposit(8, "idle-timeout");
     table.idle.lastActivityAtMs = 4000;
-    store.advanceIdle(table.code, 4000 + 5 * 60 * 1000);
+    store.advanceIdle(table.code, 4000 + 30 * 60 * 1000);
     const expiresAtMs = table.idle.prompt?.expiresAtMs as number;
 
     expect(store.advanceIdle(table.code, expiresAtMs - 1)).toBe(false);
@@ -3442,7 +3444,7 @@ describe("HTTP app", () => {
       expect(publicTable.table.idle.prompt).toBeUndefined();
       expect(privateTable.table.idle.prompt).toBeUndefined();
 
-      vi.setSystemTime(10 * 60 * 1000);
+      vi.setSystemTime(30 * 60 * 1000);
       await vi.advanceTimersByTimeAsync(60 * 1000);
 
       expect(publicTable.table.idle.prompt).toMatchObject({ phase: "lobby" });

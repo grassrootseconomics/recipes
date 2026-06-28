@@ -36,6 +36,8 @@ func _initialize() -> void:
 	visual.debug_flush_animations()
 	await process_frame
 	_require(_popup_panels_have_expected_dismissal(visual), "visual table popups use expected dismissal behavior")
+	var portrait_minimum := visual.get_combined_minimum_size()
+	_require(_same_size(portrait_minimum, Vector2(720, 960)), "visual table reports a fixed portrait combined minimum: %s" % portrait_minimum)
 	_require(visual.get_combined_minimum_size().x <= 720.0, "visual table minimum width fits a 720px portrait window with app margins")
 	visual.debug_apply_snapshot(_eight_seat_snapshot())
 	visual.size = Vector2(720, 1100)
@@ -235,6 +237,8 @@ func _initialize() -> void:
 	visual.set_visual_layout_area(Vector2(1500, 720))
 	await process_frame
 	_require(visual.debug_layout_mode() == "landscape", "visual table switches to horizontal layout when the window is wide")
+	var landscape_minimum := visual.get_combined_minimum_size()
+	_require(_same_size(landscape_minimum, Vector2(1438, 560)), "visual table reports a fixed landscape combined minimum: %s" % landscape_minimum)
 	var landscape_row := visual.find_child("LandscapeRow", true, false) as Control
 	var basket_area := visual.find_child("BasketTableArea", true, false) as Control
 	var middle_row := visual.find_child("MiddleRow", true, false) as Control
@@ -1731,8 +1735,10 @@ func _assert_batch_redeem_updates_counts_one_by_one(visual: Node) -> void:
 	after["turn"] = 15
 	visual.debug_apply_snapshot(before)
 	visual.render(after)
+	var layout_signature := _layout_minimum_signature(visual)
 	var animation_state: Dictionary = visual.pending_visual_debug_state()
 	_require(bool(animation_state.get("animationRunning", false)), "batch redeem starts the first animation immediately after confirmation")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "batch redeem queued state does not change table or panel minimums")
 	_require(_visible_hand_count(visual, "rice") == 2, "batch redeem keeps initial rice count before first animation finishes")
 	_require(_visible_hand_count(visual, "cheese") == 1, "batch redeem keeps initial cheese count before first animation finishes")
 	_require(_visible_redeemed_count(visual, "rice") == 1, "batch redeem keeps initial recipe count before first animation finishes")
@@ -1741,6 +1747,7 @@ func _assert_batch_redeem_updates_counts_one_by_one(visual: Node) -> void:
 
 	var first: String = visual.debug_apply_next_animation_milestone()
 	_require(first == "redeem", "batch redeem first milestone is a redeem")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "batch redeem first milestone does not resize table or panels")
 	_require(_visible_hand_count(visual, "rice") == 1, "first redeem milestone removes one rice card visually")
 	_require(_visible_hand_count(visual, "cheese") == 1, "first redeem milestone leaves later cheese card in hand")
 	_require(_visible_redeemed_count(visual, "rice") == 2, "first redeem milestone fills one rice recipe slot")
@@ -1748,12 +1755,14 @@ func _assert_batch_redeem_updates_counts_one_by_one(visual: Node) -> void:
 
 	var second: String = visual.debug_apply_next_animation_milestone()
 	_require(second == "redeem", "batch redeem second milestone is a redeem")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "batch redeem second milestone does not resize table or panels")
 	_require(_visible_hand_count(visual, "cheese") == 0, "second redeem milestone removes one cheese card visually")
 	_require(_visible_redeemed_count(visual, "cheese") == 1, "second redeem milestone fills the cheese recipe slot")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "second redeem milestone still does not pass the turn")
 
 	var third: String = visual.debug_apply_next_animation_milestone()
 	_require(third == "turn", "batch redeem passes turn only after redeem milestones")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "batch redeem turn milestone does not resize table or panels")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "batch redeem updates turn after the turn milestone")
 	visual.debug_flush_animations()
 
@@ -1763,7 +1772,9 @@ func _assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual: Node) 
 	var after := _redeem_pass_auto_prepare_after()
 	visual.debug_apply_snapshot(before)
 	visual.render(after)
+	var layout_signature := _layout_minimum_signature(visual)
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "auto-prepare redeem/pass keeps the current recipe visible before animations")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "auto-prepare queued state does not change table or panel minimums")
 	_require(_visible_redeemed_count(visual, "cheese") == 0, "auto-prepare redeem/pass keeps final slot empty before the redeem animation")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "auto-prepare redeem/pass keeps turn on viewer before animations")
 	var types: Array = visual.debug_stats.get("lastAnimationTypes", [])
@@ -1776,18 +1787,21 @@ func _assert_redeem_pass_auto_prepare_waits_for_redeem_animations(visual: Node) 
 
 	var first: String = visual.debug_apply_next_animation_milestone()
 	_require(first == "redeem", "auto-prepare first milestone is the final redemption")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "auto-prepare redeem milestone does not resize table or panels")
 	_require(_visible_redeemed_count(visual, "cheese") == 1, "auto-prepare final redemption fills the old recipe slot")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "auto-prepare keeps old recipe through final redemption")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "auto-prepare keeps turn before prepare animation")
 
 	var second: String = visual.debug_apply_next_animation_milestone()
 	_require(second == "prepare", "auto-prepare second milestone is dish preparation")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "auto-prepare prepare milestone does not resize table or panels")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Cheese Frittata", "auto-prepare shows the new recipe after the prepare animation")
 	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "auto-prepare shows prepared dish pieces after prepare animation")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "auto-prepare keeps turn until the later pass-turn milestone")
 
 	var third: String = visual.debug_apply_next_animation_milestone()
 	_require(third == "turn", "auto-prepare third milestone is pass turn")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "auto-prepare turn milestone does not resize table or panels")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "auto-prepare passes turn only after redemption and preparation animations")
 	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "auto-prepare keeps prepared dish pieces visible after the turn milestone")
 	visual.debug_flush_animations()
@@ -1798,24 +1812,30 @@ func _assert_multi_redeem_pass_auto_prepare_waits_for_prepare_animation(visual: 
 	var after := _multi_redeem_pass_auto_prepare_after()
 	visual.debug_apply_snapshot(before)
 	visual.render(after)
+	var layout_signature := _layout_minimum_signature(visual)
 	var types: Array = visual.debug_stats.get("lastAnimationTypes", [])
 	_require(types.size() >= 4 and types[0] == "redeem" and types[1] == "redeem" and types[2] == "prepare" and types[3] == "turn", "multi-redeem auto-prepare queues both redemptions, prepare, then turn: %s" % JSON.stringify(types))
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "multi-redeem queued state does not change table or panel minimums")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "multi-redeem auto-prepare keeps old recipe visible before animations")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "multi-redeem auto-prepare keeps turn on actor before animations")
 	var first: String = visual.debug_apply_next_animation_milestone()
 	_require(first == "redeem", "multi-redeem first milestone is a redemption")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "multi-redeem first milestone does not resize table or panels")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "multi-redeem first redemption keeps turn on actor")
 	var second: String = visual.debug_apply_next_animation_milestone()
 	_require(second == "redeem", "multi-redeem second milestone is a redemption")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "multi-redeem second milestone does not resize table or panels")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Rice Bean Bowl", "multi-redeem keeps old recipe through all redemptions")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "multi-redeem second redemption keeps turn on actor")
 	var third: String = visual.debug_apply_next_animation_milestone()
 	_require(third == "prepare", "multi-redeem third milestone is dish preparation")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "multi-redeem prepare milestone does not resize table or panels")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Cheese Frittata", "multi-redeem shows the new recipe only after preparation")
 	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "multi-redeem shows prepared dish pieces after preparation")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "multi-redeem keeps turn until pass-turn milestone")
 	var fourth: String = visual.debug_apply_next_animation_milestone()
 	_require(fourth == "turn", "multi-redeem fourth milestone is pass turn")
+	_assert_layout_minimum_signature_stable(visual, layout_signature, "multi-redeem turn milestone does not resize table or panels")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "multi-redeem passes turn only after prepare animation")
 	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "multi-redeem keeps prepared dish pieces visible after the turn milestone")
 	visual.debug_flush_animations()
@@ -2068,6 +2088,29 @@ func _valid_unique_anchor_count(anchors: Array, key: String) -> int:
 
 func _same_size(left: Vector2, right: Vector2) -> bool:
 	return absf(left.x - right.x) <= 1.0 and absf(left.y - right.y) <= 1.0
+
+
+func _layout_minimum_signature(visual: Node) -> String:
+	var visual_control := visual as Control
+	var parts: Array[String] = ["Table:%s" % (visual_control.get_combined_minimum_size() if visual_control != null else Vector2.INF)]
+	for name in [
+		"BoardPanel",
+		"InventorySurface",
+		"InventoryUpperPanel",
+		"InventoryLowerPanel",
+		"MiddleRow",
+		"ActionPanel",
+		"RecipePanel",
+		"HandScroll"
+	]:
+		var control := visual.find_child(name, true, false) as Control
+		parts.append("%s:%s" % [name, control.get_combined_minimum_size() if control != null else Vector2.INF])
+	return "|".join(parts)
+
+
+func _assert_layout_minimum_signature_stable(visual: Node, signature: String, message: String) -> void:
+	var current := _layout_minimum_signature(visual)
+	_require(current == signature, "%s; before=%s after=%s" % [message, signature, current])
 
 
 func _visible_hand_count(visual: Node, ingredient_id: String) -> int:

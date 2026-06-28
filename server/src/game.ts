@@ -83,9 +83,9 @@ const GENERIC_BOT_NAMES = new Set(["", "bot", "pool bot", "barter bot", "mixed b
 
 type ResolvedPlatterAsset = { kind: "voucher"; value: Voucher } | { kind: "dish_part"; value: DishPart };
 
-export const ACTIVE_IDLE_PROMPT_MS = 5 * 60 * 1000;
-export const LOBBY_IDLE_PROMPT_MS = 10 * 60 * 1000;
-export const IDLE_RESPONSE_TIMEOUT_MS = 5 * 60 * 1000;
+export const ACTIVE_IDLE_PROMPT_MS = 30 * 60 * 1000;
+export const LOBBY_IDLE_PROMPT_MS = 30 * 60 * 1000;
+export const IDLE_RESPONSE_TIMEOUT_MS = 30 * 60 * 1000;
 export const TABLE_CLOSURE_NOTICE_MS = 2500;
 
 export class GameError extends Error {

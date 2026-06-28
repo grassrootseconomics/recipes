@@ -30,7 +30,7 @@ const TABLE_VISUAL_LANDSCAPE_WIDTH_INSET := 18.0
 const TABLE_VISUAL_MAX_UPSCALE_PORTRAIT := 1.24
 const TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE := 1.55
 const TABLE_VISUAL_MIN_SCALE := 0.45
-const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 1.25
+const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 0.5
 const PUBLIC_TABLES_POLL_SECONDS := 2.0
 const MAX_LOBBY_SEAT_NAME_LENGTH := 12
 
@@ -102,7 +102,7 @@ var _confirm_bot_dialog: ConfirmationDialog
 var _confirm_leave_dialog: ConfirmationDialog
 var _confirm_close_dialog: ConfirmationDialog
 var _confirm_offline_end_dialog: ConfirmationDialog
-var _idle_prompt_dialog: ConfirmationDialog
+var _idle_prompt_dialog: Control
 var _table_closure_dialog: AcceptDialog
 var _offline_end_popup: Control
 var _history_popup: PopupPanel
@@ -477,15 +477,8 @@ func _build_ui() -> void:
 	add_child(_confirm_close_dialog)
 	_configure_confirmation_dialog(_confirm_close_dialog)
 
-	_idle_prompt_dialog = ConfirmationDialog.new()
-	_idle_prompt_dialog.title = "Still cooking?"
-	_idle_prompt_dialog.dialog_text = "Are you still cooking?"
-	_idle_prompt_dialog.confirmed.connect(_on_idle_prompt_yes)
+	_idle_prompt_dialog = _build_idle_prompt_popup()
 	add_child(_idle_prompt_dialog)
-	_configure_confirmation_dialog(_idle_prompt_dialog)
-	_idle_prompt_dialog.get_ok_button().text = "Yes"
-	_idle_prompt_dialog.get_cancel_button().text = "No"
-	_idle_prompt_dialog.get_cancel_button().pressed.connect(_on_idle_prompt_no)
 
 	_table_closure_dialog = AcceptDialog.new()
 	_table_closure_dialog.title = "Table closed"
@@ -1924,6 +1917,84 @@ func _configure_persistent_popup(window: Window) -> void:
 	window.set("popup_window", false)
 
 
+func _build_idle_prompt_popup() -> Control:
+	var overlay := Control.new()
+	overlay.name = "IdlePromptOverlay"
+	overlay.visible = false
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 220
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0.10, 0.07, 0.04, 0.22)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(shade)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.name = "IdlePromptPanel"
+	panel.custom_minimum_size = Vector2(360, 190)
+	panel.add_theme_stylebox_override("panel", _confirmation_panel_style())
+	center.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(box)
+
+	var title := Label.new()
+	title.name = "IdlePromptTitle"
+	title.text = "Still cooking?"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(24))
+	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
+	box.add_child(title)
+
+	var message := Label.new()
+	message.name = "IdlePromptMessage"
+	message.text = "Are you still cooking?"
+	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	message.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	message.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	message.custom_minimum_size = Vector2(0, 48)
+	message.add_theme_font_size_override("font_size", _scaled_ui_font_size(21))
+	message.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	box.add_child(message)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(row)
+
+	var yes_button := _button("Yes", _on_idle_prompt_yes)
+	yes_button.name = "IdlePromptYesButton"
+	_style_confirmation_button(yes_button, true)
+	yes_button.custom_minimum_size = Vector2(132, 44)
+	row.add_child(yes_button)
+
+	var no_button := _button("No", _on_idle_prompt_no)
+	no_button.name = "IdlePromptNoButton"
+	_style_confirmation_button(no_button, false)
+	no_button.custom_minimum_size = Vector2(132, 44)
+	row.add_child(no_button)
+	return overlay
+
+
 func _build_offline_end_popup() -> Control:
 	var overlay := Control.new()
 	overlay.name = "OfflineEndOverlay"
@@ -2740,9 +2811,11 @@ func _handle_idle_prompt_snapshot(snapshot: Dictionary) -> void:
 		return
 	if not is_instance_valid(_idle_prompt_dialog):
 		return
-	_idle_prompt_dialog.dialog_text = str(prompt.get("message", "Are you still cooking?"))
+	var message_label := _idle_prompt_dialog.find_child("IdlePromptMessage", true, false) as Label
+	if is_instance_valid(message_label):
+		message_label.text = str(prompt.get("message", "Are you still cooking?"))
 	if not _idle_prompt_dialog.visible:
-		_idle_prompt_dialog.popup_centered()
+		_idle_prompt_dialog.show()
 
 
 func _on_idle_prompt_yes() -> void:
@@ -3153,7 +3226,7 @@ func _force_fresh_snapshot() -> void:
 		_status_label.text = "Offline mode already uses local state."
 		_status_label.visible = true
 		return
-	RecipesClient.connect_socket()
+	RecipesClient.request_fresh_snapshot()
 	_status_label.text = "Requested a fresh table snapshot."
 	_status_label.visible = true
 
@@ -3177,6 +3250,10 @@ func _debug_sync_report() -> String:
 	lines.append("Last close: %s" % RecipesClient.last_close_description)
 	lines.append("Ignored stale snapshots: %s" % RecipesClient.ignored_stale_snapshot_count)
 	lines.append("Auto fresh snapshots: %s" % RecipesClient.auto_fresh_snapshot_count)
+	lines.append("Manual fresh snapshots: %s" % RecipesClient.manual_fresh_snapshot_count)
+	lines.append("Watchdog fresh snapshots: %s" % RecipesClient.watchdog_fresh_snapshot_count)
+	lines.append("Watchdog reconnects: %s" % RecipesClient.watchdog_reconnect_count)
+	lines.append("Last socket message: %s" % RecipesClient.last_socket_message_type)
 	lines.append("")
 	lines.append("Snapshot")
 	lines.append("Table: %s" % str(snapshot.get("tableCode", RecipesClient.table_code)))
@@ -3193,7 +3270,7 @@ func _debug_sync_report() -> String:
 	lines.append("Transaction total: %s" % str(snapshot.get("transactionHistoryTotal", snapshot.get("transactionCursor", "?"))))
 	lines.append("Cached tx rows: %s" % snapshot.get("transactionHistory", []).size())
 	lines.append("Own food parts: %s" % snapshot.get("ownFoodParts", []).size())
-	lines.append("Own food groups: %s" % snapshot.get("ownFoodPartGroups", []))
+	lines.append("Own food groups: %s" % str(snapshot.get("ownFoodPartGroups", [])))
 	lines.append("Viewer public held food: %s" % _debug_viewer_held_food_count(snapshot))
 	lines.append("Last tx: %s" % _debug_last_transaction(snapshot))
 	lines.append("")
@@ -3922,14 +3999,17 @@ func _rename_lobby_seat(participant_id: String, input: LineEdit) -> void:
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
 	if name == "":
 		_lobby_pending_seat_names.erase(participant_id)
+		_stop_lobby_name_publish_if_idle()
 		if not participant.is_empty():
 			input.text = str(participant.get("name", "")).strip_edges()
 		return
 	if not participant.is_empty() and name == str(participant.get("name", "")).strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
+		_stop_lobby_name_publish_if_idle()
 		return
 	if _send_lobby_edit_intent({"type": "rename_participant", "participantId": participant_id, "name": name}):
 		_lobby_pending_seat_names.erase(participant_id)
+		_stop_lobby_name_publish_if_idle()
 
 
 func _should_use_native_lobby_name_editor(input: LineEdit) -> bool:
@@ -3977,11 +4057,14 @@ func _remember_lobby_seat_name_edit(participant_id: String, name: String) -> voi
 	var trimmed := _sanitize_lobby_seat_name(name)
 	if trimmed == "":
 		_lobby_pending_seat_names.erase(participant_id)
+		_stop_lobby_name_publish_if_idle()
 		return
 	if not participant.is_empty() and trimmed == str(participant.get("name", "")).strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
+		_stop_lobby_name_publish_if_idle()
 	else:
 		_lobby_pending_seat_names[participant_id] = trimmed
+		_schedule_lobby_name_publish()
 
 
 func _publish_lobby_seat_name_edit(participant_id: String, name: String) -> void:
@@ -3990,18 +4073,26 @@ func _publish_lobby_seat_name_edit(participant_id: String, name: String) -> void
 	var trimmed := _sanitize_lobby_seat_name(name)
 	if trimmed == "":
 		_lobby_pending_seat_names.erase(participant_id)
+		_stop_lobby_name_publish_if_idle()
 		return
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
 	if not participant.is_empty() and trimmed == str(participant.get("name", "")).strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
+		_stop_lobby_name_publish_if_idle()
 		return
 	if _send_lobby_edit_intent({"type": "rename_participant", "participantId": participant_id, "name": trimmed}):
 		_lobby_pending_seat_names.erase(participant_id)
+		_stop_lobby_name_publish_if_idle()
 
 
 func _schedule_lobby_name_publish() -> void:
 	if is_instance_valid(_lobby_name_publish_timer):
 		_lobby_name_publish_timer.start(LOBBY_NAME_PUBLISH_DELAY_SECONDS)
+
+
+func _stop_lobby_name_publish_if_idle() -> void:
+	if _lobby_pending_seat_names.is_empty() and is_instance_valid(_lobby_name_publish_timer):
+		_lobby_name_publish_timer.stop()
 
 
 func _sanitize_lobby_seat_name(name: String) -> String:
@@ -4038,6 +4129,7 @@ func _sync_lobby_pending_names_with_snapshot(snapshot: Dictionary) -> void:
 		var input := _lobby_seat_name_inputs.get(participant_id, null) as LineEdit
 		if input == null or not is_instance_valid(input) or not input.has_focus():
 			_lobby_pending_seat_names.erase(participant_id)
+	_stop_lobby_name_publish_if_idle()
 
 
 func _active_lobby_participants(snapshot: Dictionary) -> Array:

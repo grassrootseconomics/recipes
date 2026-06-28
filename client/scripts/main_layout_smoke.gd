@@ -44,9 +44,32 @@ func _initialize() -> void:
 	var online_ready_snapshot := _online_lobby_snapshot(true)
 	_require(str(main.call("_host_lobby_start_label", online_ready_snapshot)) == "Start Cooking", "online host lobby start label restores after another cook joins")
 	_require(bool(main.call("_host_lobby_start_enabled", online_ready_snapshot)), "online host lobby enables start after another cook joins")
+	var idle_overlay := _control_from_property(main, "_idle_prompt_dialog")
+	_require(idle_overlay != null and idle_overlay.name == "IdlePromptOverlay", "idle cooking prompt is a themed in-tree overlay")
+	var idle_prompt_snapshot := online_ready_snapshot.duplicate(true)
+	idle_prompt_snapshot["idlePrompt"] = {
+		"id": "idle_test",
+		"message": "Are you still cooking?"
+	}
+	main.call("_handle_idle_prompt_snapshot", idle_prompt_snapshot)
+	await process_frame
+	var idle_panel := idle_overlay.find_child("IdlePromptPanel", true, false) as Control
+	var idle_message := idle_overlay.find_child("IdlePromptMessage", true, false) as Label
+	var idle_yes := idle_overlay.find_child("IdlePromptYesButton", true, false) as Button
+	var idle_no := idle_overlay.find_child("IdlePromptNoButton", true, false) as Button
+	_require(idle_overlay.visible and idle_panel != null, "idle cooking prompt opens as a centered themed panel")
+	_require(idle_message != null and idle_message.text == "Are you still cooking?", "idle cooking prompt shows the server message")
+	_require(idle_yes != null and idle_yes.text == "Yes" and idle_yes.get_global_rect().size.x >= 120.0, "idle cooking prompt has a clear Yes button")
+	_require(idle_no != null and idle_no.text == "No" and idle_no.get_global_rect().size.x >= 120.0, "idle cooking prompt has a clear No button")
+	idle_overlay.hide()
 
 	var recipes_client := root.get_node("/root/RecipesClient")
 	recipes_client.latest_snapshot = online_waiting_snapshot.duplicate(true)
+	main.call("_remember_lobby_seat_name_edit", "p1", "FastHost")
+	var name_publish_timer := main.get("_lobby_name_publish_timer") as Timer
+	var pending_fast_names: Dictionary = main.get("_lobby_pending_seat_names")
+	_require(pending_fast_names.has("p1") and name_publish_timer != null and not name_publish_timer.is_stopped(), "typing a lobby name schedules a quick online publish")
+	main.call("_clear_lobby_edit_state")
 	main.call("_remember_lobby_seat_name_edit", "p1", "")
 	var pending_names: Dictionary = main.get("_lobby_pending_seat_names")
 	_require(not pending_names.has("p1"), "blank Android lobby name edits are not retained as pending renames")
@@ -60,6 +83,9 @@ func _initialize() -> void:
 	_require(bool(recipes_client.call("debug_delta_missing_viewer_prepare_food_parts", _prepare_delta_snapshot_fixture(), {}, missing_prepare_append)), "online client requests a fresh snapshot when a viewer prepare delta omits ownFoodParts")
 	_require(not bool(recipes_client.call("debug_delta_missing_viewer_prepare_food_parts", _prepare_delta_snapshot_fixture(), complete_prepare_patch, missing_prepare_append)), "online client accepts prepare deltas that include prepared food parts")
 	_require(not bool(recipes_client.call("debug_delta_missing_viewer_prepare_food_parts", _prepare_delta_snapshot_fixture(), {}, {"transactionHistory": [{"action": "Prepare", "participantId": "p2"}]})), "online client does not freshen for other cooks' prepare deltas")
+	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, false, 0)) == "fresh_snapshot", "online active table watchdog requests a full snapshot after a quiet socket")
+	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, true, 9000)) == "reconnect", "online active table watchdog reconnects when a full snapshot request gets no response")
+	_require(str(recipes_client.call("debug_socket_watchdog_action", online_waiting_snapshot, true, 21000, false, 0)) == "none", "online lobby watchdog does not poll active-game snapshots")
 	recipes_client.start_offline_table("", "")
 	await process_frame
 	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ben"})
@@ -320,6 +346,16 @@ func _prepare_delta_snapshot_fixture() -> Dictionary:
 		"viewerParticipantId": "p1",
 		"ownFoodParts": []
 	}
+
+
+func _online_playing_snapshot() -> Dictionary:
+	var snapshot := _online_lobby_snapshot(true)
+	snapshot["phase"] = "playing"
+	snapshot["version"] = 12
+	snapshot["currentTurnParticipantId"] = "p2"
+	snapshot["viewerParticipantId"] = "p1"
+	snapshot["connectionParticipantId"] = "p1"
+	return snapshot
 
 
 func _long_transaction_fixture(count: int) -> Dictionary:
