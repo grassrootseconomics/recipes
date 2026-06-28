@@ -49,6 +49,7 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("leave_table") }),
   z.object({ type: z.literal("close_table") }),
   z.object({ type: z.literal("reset_table") }),
+  z.object({ type: z.literal("idle_response"), promptId: z.string().min(1).max(120), response: z.enum(["yes", "no"]) }),
   z.object({ type: z.literal("set_table_visibility"), isPublic: z.boolean() }),
   z.object({ type: z.literal("set_role"), participantId: z.string(), role: z.enum(["active", "witness"]) }),
   z.object({ type: z.literal("rename_participant"), participantId: z.string(), name: z.string().max(40) }),
@@ -130,6 +131,8 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   const store = options.store ?? new TableStore();
   const hub = options.hub ?? new ConnectionHub();
   const timerHandles = new Map<string, ReturnType<typeof setTimeout>>();
+  const idleHandles = new Map<string, ReturnType<typeof setTimeout>>();
+  const closedTableCleanupHandles = new Map<string, ReturnType<typeof setTimeout>>();
 
   app.addHook("onRequest", (request, reply, done) => {
     const origin = request.headers.origin;
@@ -174,7 +177,8 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         "dish_part_settlement",
         "host_controlled_seats",
         "turn_modes",
-        "public_tables"
+        "public_tables",
+        "idle_table_cleanup"
       ]
     }
   }));
@@ -189,6 +193,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   app.post("/tables", async (request) => {
     const body = createTableSchema.parse(request.body ?? {});
     const result = store.createTable(body.hostName, body.seed, body.requestedCode, body.isPublic);
+    scheduleIdle(result.table.code);
     return {
       ok: true,
       result: {
@@ -205,6 +210,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     const body = joinTableSchema.parse(request.body ?? {});
     const result = store.joinTable(params.code, body.name, body.asWitness);
     hub.broadcastTable(result.table);
+    scheduleIdle(result.table.code);
     return {
       ok: true,
       result: {
@@ -255,6 +261,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       });
       connectionId = connection.id;
       hub.broadcastTable(store.requireTable(tableCode));
+      scheduleIdle(tableCode);
     } catch (error) {
       socket.send(JSON.stringify(errorPayload(error)));
       socket.close();
@@ -285,6 +292,8 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
           hub.broadcastTable(table);
         });
         scheduleTimer(tableCode);
+        scheduleIdle(tableCode);
+        scheduleClosedTableCleanup(tableCode);
         if (clientIntentId) {
           socket.send(JSON.stringify({ type: "ack", clientIntentId, ok: true, version: store.requireTable(tableCode).version }));
         }
@@ -327,6 +336,14 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       clearTimeout(handle);
     }
     timerHandles.clear();
+    for (const handle of idleHandles.values()) {
+      clearTimeout(handle);
+    }
+    idleHandles.clear();
+    for (const handle of closedTableCleanupHandles.values()) {
+      clearTimeout(handle);
+    }
+    closedTableCleanupHandles.clear();
   });
 
   function scheduleTimer(tableCode: string): void {
@@ -352,12 +369,76 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         const expired = store.expireTimer(normalizedCode);
         if (expired) {
           hub.broadcastTable(store.requireTable(normalizedCode));
+          scheduleIdle(normalizedCode);
+          scheduleClosedTableCleanup(normalizedCode);
         }
       } catch {
         // Timer callbacks cannot report to a specific client.
       }
     }, delayMs);
     timerHandles.set(normalizedCode, handle);
+  }
+
+  function scheduleIdle(tableCode: string): void {
+    const normalizedCode = tableCode.toUpperCase();
+    const existing = idleHandles.get(normalizedCode);
+    if (existing) {
+      clearTimeout(existing);
+      idleHandles.delete(normalizedCode);
+    }
+
+    let deadlineMs: number | undefined;
+    try {
+      deadlineMs = store.nextIdleDeadlineMs(normalizedCode);
+    } catch {
+      return;
+    }
+    if (deadlineMs === undefined) {
+      return;
+    }
+
+    const delayMs = Math.max(0, deadlineMs - Date.now());
+    const handle = setTimeout(() => {
+      idleHandles.delete(normalizedCode);
+      try {
+        const changed = store.advanceIdle(normalizedCode);
+        if (changed) {
+          hub.broadcastTable(store.requireTable(normalizedCode));
+        }
+        scheduleIdle(normalizedCode);
+        scheduleClosedTableCleanup(normalizedCode);
+      } catch {
+        // Idle callbacks cannot report to a specific client.
+      }
+    }, delayMs);
+    idleHandles.set(normalizedCode, handle);
+  }
+
+  function scheduleClosedTableCleanup(tableCode: string): void {
+    const normalizedCode = tableCode.toUpperCase();
+    const existing = closedTableCleanupHandles.get(normalizedCode);
+    if (existing) {
+      clearTimeout(existing);
+      closedTableCleanupHandles.delete(normalizedCode);
+    }
+
+    let returnToMenuAtMs = 0;
+    try {
+      const table = store.requireTable(normalizedCode);
+      returnToMenuAtMs = table.idle.closure?.returnToMenuAtMs ?? 0;
+    } catch {
+      return;
+    }
+    if (returnToMenuAtMs <= 0) {
+      return;
+    }
+
+    const delayMs = Math.max(5000, returnToMenuAtMs + 5000 - Date.now());
+    const handle = setTimeout(() => {
+      closedTableCleanupHandles.delete(normalizedCode);
+      store.deleteTable(normalizedCode);
+    }, delayMs);
+    closedTableCleanupHandles.set(normalizedCode, handle);
   }
 
   return app;

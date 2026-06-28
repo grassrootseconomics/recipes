@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.40"
+const APP_VERSION := "0.0.41"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -102,6 +102,8 @@ var _confirm_bot_dialog: ConfirmationDialog
 var _confirm_leave_dialog: ConfirmationDialog
 var _confirm_close_dialog: ConfirmationDialog
 var _confirm_offline_end_dialog: ConfirmationDialog
+var _idle_prompt_dialog: ConfirmationDialog
+var _table_closure_dialog: AcceptDialog
 var _offline_end_popup: Control
 var _history_popup: PopupPanel
 var _history_popup_controls: VBoxContainer
@@ -164,6 +166,10 @@ var _last_controlled_turn_participant_id := ""
 var _pending_controlled_follow_participant_id := ""
 var _last_popup_close_key := ""
 var _last_popup_close_ms := -1
+var _active_idle_prompt_id := ""
+var _answered_idle_prompt_ids := {}
+var _active_table_closure_key := ""
+var _table_closure_returning := false
 var _left_table_codes := {}
 var _active_select_key := ""
 var _collapsed_gameplay_for_table := ""
@@ -463,10 +469,26 @@ func _build_ui() -> void:
 
 	_confirm_close_dialog = ConfirmationDialog.new()
 	_confirm_close_dialog.title = "Close table?"
-	_confirm_close_dialog.dialog_text = "Are you sure you want to end this table?"
+	_confirm_close_dialog.dialog_text = "Stop cooking and send everyone back to the Main Menu?"
 	_confirm_close_dialog.confirmed.connect(_on_confirm_close_table)
 	add_child(_confirm_close_dialog)
 	_configure_confirmation_dialog(_confirm_close_dialog)
+
+	_idle_prompt_dialog = ConfirmationDialog.new()
+	_idle_prompt_dialog.title = "Still cooking?"
+	_idle_prompt_dialog.dialog_text = "Are you still cooking?"
+	_idle_prompt_dialog.confirmed.connect(_on_idle_prompt_yes)
+	add_child(_idle_prompt_dialog)
+	_configure_confirmation_dialog(_idle_prompt_dialog)
+	_idle_prompt_dialog.get_ok_button().text = "Yes"
+	_idle_prompt_dialog.get_cancel_button().text = "No"
+	_idle_prompt_dialog.get_cancel_button().pressed.connect(_on_idle_prompt_no)
+
+	_table_closure_dialog = AcceptDialog.new()
+	_table_closure_dialog.title = "Table closed"
+	_table_closure_dialog.dialog_text = "The table has closed."
+	add_child(_table_closure_dialog)
+	_configure_notice_dialog(_table_closure_dialog)
 
 	_confirm_offline_end_dialog = ConfirmationDialog.new()
 	_confirm_offline_end_dialog.title = "Stop cooking?"
@@ -1446,6 +1468,10 @@ func _return_to_main_menu() -> void:
 		RecipesClient.disconnect_local()
 	_home_choice = ""
 	_clear_lobby_edit_state()
+	_active_idle_prompt_id = ""
+	_answered_idle_prompt_ids.clear()
+	if not _table_closure_returning:
+		_active_table_closure_key = ""
 	_status_label.text = ""
 	_status_label.visible = false
 	_summary_label.visible = false
@@ -1463,6 +1489,8 @@ func _return_to_main_menu() -> void:
 		_offline_end_popup.hide()
 	if is_instance_valid(_history_popup):
 		_history_popup.hide()
+	if is_instance_valid(_idle_prompt_dialog):
+		_idle_prompt_dialog.hide()
 	_set_lobby_ui_visible(false)
 	_set_gameplay_ui_visible(false)
 	_refresh_connection_buttons({})
@@ -1822,6 +1850,21 @@ func _configure_confirmation_dialog(dialog: ConfirmationDialog) -> void:
 
 	_style_confirmation_button(dialog.get_ok_button(), true)
 	_style_confirmation_button(dialog.get_cancel_button(), false)
+
+
+func _configure_notice_dialog(dialog: AcceptDialog) -> void:
+	_configure_persistent_popup(dialog)
+	dialog.add_theme_stylebox_override("panel", _confirmation_panel_style())
+	dialog.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	dialog.add_theme_color_override("title_color", Color(0.24, 0.15, 0.07))
+	dialog.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
+	var label := dialog.call("get_label") as Label if dialog.has_method("get_label") else null
+	if is_instance_valid(label):
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
+		label.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	_style_confirmation_button(dialog.get_ok_button(), false)
 
 
 func _configure_persistent_popup(window: Window) -> void:
@@ -2581,6 +2624,8 @@ func _on_snapshot_received(snapshot: Dictionary) -> void:
 	_save_current_online_session(snapshot)
 	_sync_lobby_pending_names_with_snapshot(snapshot)
 	_render_snapshot(snapshot)
+	_handle_idle_prompt_snapshot(snapshot)
+	_handle_table_closure_snapshot(snapshot)
 	_maybe_advance_acting_as_after_deposit(snapshot)
 	_maybe_follow_controlled_turn(snapshot)
 	_track_last_controlled_turn(snapshot)
@@ -2627,6 +2672,86 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 	_refresh_post_table_controls(snapshot)
 	_refresh_history_popup_if_open(snapshot)
 	_refresh_active_select_popup(snapshot)
+
+
+func _handle_idle_prompt_snapshot(snapshot: Dictionary) -> void:
+	var prompt: Dictionary = snapshot.get("idlePrompt", {})
+	if prompt.is_empty() or not _table_exists(snapshot):
+		_active_idle_prompt_id = ""
+		if is_instance_valid(_idle_prompt_dialog):
+			_idle_prompt_dialog.hide()
+		return
+	var prompt_id := str(prompt.get("id", ""))
+	if prompt_id == "":
+		return
+	_active_idle_prompt_id = prompt_id
+	if bool(_answered_idle_prompt_ids.get(prompt_id, false)):
+		return
+	if not is_instance_valid(_idle_prompt_dialog):
+		return
+	_idle_prompt_dialog.dialog_text = str(prompt.get("message", "Are you still cooking?"))
+	if not _idle_prompt_dialog.visible:
+		_idle_prompt_dialog.popup_centered()
+
+
+func _on_idle_prompt_yes() -> void:
+	_respond_to_idle_prompt(true)
+
+
+func _on_idle_prompt_no() -> void:
+	_respond_to_idle_prompt(false)
+
+
+func _respond_to_idle_prompt(still_cooking: bool) -> void:
+	var prompt_id := _active_idle_prompt_id
+	if prompt_id == "":
+		return
+	_answered_idle_prompt_ids[prompt_id] = true
+	if is_instance_valid(_idle_prompt_dialog):
+		_idle_prompt_dialog.hide()
+	RecipesClient.send_intent({
+		"type": "idle_response",
+		"promptId": prompt_id,
+		"response": "yes" if still_cooking else "no"
+	})
+
+
+func _handle_table_closure_snapshot(snapshot: Dictionary) -> void:
+	var closure: Dictionary = snapshot.get("tableClosure", {})
+	if closure.is_empty():
+		return
+	var closure_key := "%s:%s" % [str(closure.get("reason", "")), str(closure.get("createdAtMs", ""))]
+	if closure_key == _active_table_closure_key:
+		return
+	_active_table_closure_key = closure_key
+	_table_closure_returning = true
+	var message := str(closure.get("message", "The table has closed."))
+	if is_instance_valid(_idle_prompt_dialog):
+		_idle_prompt_dialog.hide()
+	if is_instance_valid(_table_closure_dialog):
+		_table_closure_dialog.dialog_text = message
+		_table_closure_dialog.popup_centered()
+	_status_label.text = message
+	_status_label.visible = true
+	var delay_seconds := 2.0
+	var return_to_menu_at_ms := int(closure.get("returnToMenuAtMs", 0))
+	if return_to_menu_at_ms > 0:
+		var now_ms := int(Time.get_unix_time_from_system() * 1000.0)
+		delay_seconds = clampf(float(return_to_menu_at_ms - now_ms) / 1000.0, 0.75, 3.0)
+	get_tree().create_timer(delay_seconds).timeout.connect(func(key := closure_key, text := message) -> void:
+		_return_to_main_menu_after_table_closure(key, text)
+	)
+
+
+func _return_to_main_menu_after_table_closure(closure_key: String, message: String) -> void:
+	if closure_key != _active_table_closure_key:
+		return
+	if is_instance_valid(_table_closure_dialog):
+		_table_closure_dialog.hide()
+	_return_to_main_menu()
+	_table_closure_returning = false
+	_status_label.text = message
+	_status_label.visible = true
 
 
 func _update_platter_summary_label(snapshot: Dictionary) -> void:
@@ -2931,12 +3056,15 @@ func _on_table_visual_menu_requested(action: String) -> void:
 		"Debug Sync":
 			_open_debug_sync_popup()
 		"Main Menu":
-			_return_to_main_menu()
+			if not RecipesClient.offline_mode and _current_viewer_is_host() and _table_exists(RecipesClient.latest_snapshot):
+				_confirm_close_table()
+			else:
+				_return_to_main_menu()
 		"End Game":
 			if bool(RecipesClient.latest_snapshot.get("offline", false)) or RecipesClient.offline_mode:
 				_confirm_offline_end_game()
 			else:
-				RecipesClient.send_host_intent({"type": "stop"})
+				_confirm_close_table()
 
 
 func _open_debug_sync_popup() -> void:
@@ -3655,8 +3783,6 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 	_lobby_seat_kind_inputs[participant_id] = kind_toggle
 	name_input.text_changed.connect(func(text: String, target_id := participant_id) -> void:
 		_remember_lobby_seat_name_edit(target_id, text)
-		_save_lobby_seat_setup_from_inputs()
-		_schedule_lobby_name_publish()
 	)
 	name_input.text_submitted.connect(func(_submitted: String, target_id := participant_id, input := name_input) -> void:
 		_rename_lobby_seat(target_id, input)

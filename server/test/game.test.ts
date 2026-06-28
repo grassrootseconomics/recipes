@@ -2713,6 +2713,70 @@ describe("winning and eating", () => {
     expect(table.timer?.pausedRemainingMs).toBeUndefined();
   });
 
+  it("prompts idle lobby tables after ten minutes and continues when a player answers yes", () => {
+    const { store, table, hostToken } = makeHarness(8, "idle-lobby");
+    table.idle.lastActivityAtMs = 1000;
+
+    expect(store.advanceIdle(table.code, 1000 + 10 * 60 * 1000 - 1)).toBe(false);
+    expect(store.advanceIdle(table.code, 1000 + 10 * 60 * 1000)).toBe(true);
+    expect(table.idle.prompt).toMatchObject({
+      message: "Are you still cooking?",
+      phase: "lobby"
+    });
+    const promptId = table.idle.prompt?.id as string;
+
+    store.handleIntent(table.code, hostToken, { type: "idle_response", promptId, response: "yes" }, false);
+
+    expect(table.phase).toBe("lobby");
+    expect(table.idle.prompt).toBeUndefined();
+    expect(table.idle.closure).toBeUndefined();
+  });
+
+  it("prompts idle running games after five minutes", () => {
+    const { store, table } = startAndDeposit(8, "idle-running");
+    table.idle.lastActivityAtMs = 2000;
+
+    expect(store.advanceIdle(table.code, 2000 + 5 * 60 * 1000 - 1)).toBe(false);
+    expect(store.advanceIdle(table.code, 2000 + 5 * 60 * 1000)).toBe(true);
+
+    expect(table.idle.prompt).toMatchObject({
+      message: "Are you still cooking?",
+      phase: "running"
+    });
+  });
+
+  it("closes an idle table when someone answers no", () => {
+    const { store, table, hostToken } = startAndDeposit(8, "idle-no");
+    table.idle.lastActivityAtMs = 3000;
+    store.advanceIdle(table.code, 3000 + 5 * 60 * 1000);
+    const promptId = table.idle.prompt?.id as string;
+
+    store.handleIntent(table.code, hostToken, { type: "idle_response", promptId, response: "no" }, false);
+
+    expect(table.phase).toBe("complete");
+    expect(table.idle.closure).toMatchObject({
+      reason: "idle_declined",
+      message: "The table closed because someone stopped cooking."
+    });
+    expect(buildSnapshot(table, table.hostParticipantId).tableClosure?.reason).toBe("idle_declined");
+  });
+
+  it("closes an idle table when no one answers the prompt", () => {
+    const { store, table } = startAndDeposit(8, "idle-timeout");
+    table.idle.lastActivityAtMs = 4000;
+    store.advanceIdle(table.code, 4000 + 5 * 60 * 1000);
+    const expiresAtMs = table.idle.prompt?.expiresAtMs as number;
+
+    expect(store.advanceIdle(table.code, expiresAtMs - 1)).toBe(false);
+    expect(store.advanceIdle(table.code, expiresAtMs)).toBe(true);
+
+    expect(table.phase).toBe("complete");
+    expect(table.idle.closure).toMatchObject({
+      reason: "idle_timeout",
+      message: "The table closed because no one answered."
+    });
+  });
+
   it("only lets the host end the game for everyone", () => {
     const { table } = startAndDeposit(8);
     const nonHost = activeParticipants(table).find((participant) => participant.id !== table.hostParticipantId) as Participant;
@@ -3244,11 +3308,17 @@ describe("winning and eating", () => {
 
     store.handleIntent(table.code, hostToken, { type: "close_table" }, false);
     expect(table.phase).toBe("complete");
+    expect(table.idle.closure).toMatchObject({
+      reason: "host_stopped",
+      message: "Host has stopped cooking."
+    });
+    expect(buildSnapshot(table, table.hostParticipantId).tableClosure?.reason).toBe("host_stopped");
     expect(table.timer?.seconds).toBe(60);
     expect(table.timer?.endsAtMs).toBeUndefined();
 
     store.handleIntent(table.code, hostToken, { type: "reset_table" }, false);
     expect(table.phase).toBe("lobby");
+    expect(table.idle.closure).toBeUndefined();
     expect(table.participantOrder).toEqual(participantIds);
     expect(table.targetDishCount).toBe(2);
     expect(table.stockPerIngredient).toBe(requiredStock);

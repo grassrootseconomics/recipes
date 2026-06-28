@@ -218,12 +218,36 @@ export interface GameStats {
 export type TradeBalanceStats = [given: number, received: number, net: number];
 
 export interface TableTimer {
-  seconds: number;
-  startedAtTurn?: number;
-  startedAtMs?: number;
-  endsAtMs?: number;
-  expiredAtMs?: number;
-  pausedRemainingMs?: number;
+ seconds: number;
+ startedAtTurn?: number;
+ startedAtMs?: number;
+ endsAtMs?: number;
+ expiredAtMs?: number;
+ pausedRemainingMs?: number;
+}
+
+export type IdlePromptPhase = "lobby" | "running";
+export type TableClosureReason = "host_stopped" | "idle_declined" | "idle_timeout";
+
+export interface IdlePrompt {
+  id: string;
+  message: string;
+  phase: IdlePromptPhase;
+  startedAtMs: number;
+  expiresAtMs: number;
+}
+
+export interface TableClosure {
+  reason: TableClosureReason;
+  message: string;
+  createdAtMs: number;
+  returnToMenuAtMs: number;
+}
+
+export interface TableIdleState {
+  lastActivityAtMs: number;
+  prompt?: IdlePrompt;
+  closure?: TableClosure;
 }
 
 export interface Table {
@@ -249,6 +273,7 @@ export interface Table {
   turnMode: TurnMode;
   currentTurnParticipantId?: string;
   timer?: TableTimer;
+  idle: TableIdleState;
   turn: number;
   nextId: number;
 }
@@ -319,6 +344,8 @@ export interface Snapshot {
   targetDishCount: number;
   stockPerIngredient: number;
   timer?: TableTimer;
+  idlePrompt?: IdlePrompt;
+  tableClosure?: TableClosure;
   ownHand: Voucher[];
   ownFoodParts: DishPart[];
   ownRecipe?: Recipe;
@@ -357,6 +384,7 @@ export type Intent =
   | { type: "leave_table" }
   | { type: "close_table" }
   | { type: "reset_table" }
+  | { type: "idle_response"; promptId: string; response: "yes" | "no" }
   | { type: "set_table_visibility"; isPublic: boolean }
   | { type: "set_role"; participantId: string; role: ParticipantRole }
   | { type: "rename_participant"; participantId: string; name: string }

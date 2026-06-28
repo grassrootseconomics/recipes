@@ -82,6 +82,11 @@ const GENERIC_BOT_NAMES = new Set(["", "bot", "pool bot", "barter bot", "mixed b
 
 type ResolvedPlatterAsset = { kind: "voucher"; value: Voucher } | { kind: "dish_part"; value: DishPart };
 
+export const ACTIVE_IDLE_PROMPT_MS = 5 * 60 * 1000;
+export const LOBBY_IDLE_PROMPT_MS = 10 * 60 * 1000;
+export const IDLE_RESPONSE_TIMEOUT_MS = 5 * 60 * 1000;
+export const TABLE_CLOSURE_NOTICE_MS = 2500;
+
 export class GameError extends Error {
   constructor(message: string, public readonly code = "game_error") {
     super(message);
@@ -123,6 +128,9 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
     targetDishCount: DEFAULT_TARGET_DISH_COUNT,
     stockPerIngredient: REAL_UNITS_PER_INGREDIENT,
     turnMode: "round_robin",
+    idle: {
+      lastActivityAtMs: Date.now()
+    },
     turn: 0,
     nextId: 2
   };
@@ -271,7 +279,8 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       intent.type !== "convert_to_bot" &&
       intent.type !== "leave_table" &&
       intent.type !== "close_table" &&
-      intent.type !== "reset_table"
+      intent.type !== "reset_table" &&
+      intent.type !== "idle_response"
     ) {
       throw new GameError("The table is paused.", "table_paused");
     }
@@ -290,6 +299,9 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
         break;
       case "reset_table":
         resetTable(table, actor);
+        break;
+      case "idle_response":
+        respondToIdlePrompt(table, actor, intent.promptId, intent.response);
         break;
       case "set_table_visibility":
         setTableVisibility(table, actor, intent.isPublic);
@@ -381,6 +393,9 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       default:
         assertNever(intent);
     }
+    if (shouldMarkActivityAfterIntent(intent) && table.phase !== "complete") {
+      markTableActivity(table);
+    }
     autoRefuseUnavailableOffers(table);
     if (table.phase === "settlement") {
       advanceSettlementIfReady(table);
@@ -411,6 +426,58 @@ export function expireTimer(table: Table, nowMs = Date.now()): boolean {
   table.turn += 1;
   table.timer.expiredAtMs = nowMs;
   enterEndgamePhase(table);
+  table.version += 1;
+  return true;
+}
+
+export function markTableActivity(table: Table, nowMs = Date.now()): void {
+  if (table.idle.closure) {
+    return;
+  }
+  table.idle = {
+    lastActivityAtMs: nowMs
+  };
+}
+
+export function nextIdleDeadlineMs(table: Table): number | undefined {
+  if (table.phase === "complete" || table.idle.closure) {
+    return undefined;
+  }
+  if (table.idle.prompt) {
+    return table.idle.prompt.expiresAtMs;
+  }
+  const delayMs = idlePromptDelayMs(table);
+  if (delayMs === undefined) {
+    return undefined;
+  }
+  return table.idle.lastActivityAtMs + delayMs;
+}
+
+export function advanceIdleState(table: Table, nowMs = Date.now()): boolean {
+  if (table.phase === "complete" || table.idle.closure) {
+    return false;
+  }
+  const prompt = table.idle.prompt;
+  if (prompt) {
+    if (prompt.expiresAtMs > nowMs) {
+      return false;
+    }
+    closeTableWithNotice(table, "idle_timeout", "The table closed because no one answered.", nowMs);
+    table.turn += 1;
+    table.version += 1;
+    return true;
+  }
+  const deadlineMs = nextIdleDeadlineMs(table);
+  if (deadlineMs === undefined || deadlineMs > nowMs) {
+    return false;
+  }
+  table.idle.prompt = {
+    id: `idle_${table.turn}_${nowMs}`,
+    message: "Are you still cooking?",
+    phase: table.phase === "lobby" ? "lobby" : "running",
+    startedAtMs: nowMs,
+    expiresAtMs: nowMs + IDLE_RESPONSE_TIMEOUT_MS
+  };
   table.version += 1;
   return true;
 }
@@ -685,10 +752,7 @@ function leaveTable(table: Table, actor: Participant): void {
 
 function closeTable(table: Table, actor: Participant): void {
   requireHost(actor);
-  cancelAllPendingOffers(table);
-  table.phase = "complete";
-  table.paused = false;
-  clearTimerRuntime(table);
+  closeTableWithNotice(table, "host_stopped", "Host has stopped cooking.");
 }
 
 function resetTable(table: Table, actor: Participant): void {
@@ -706,6 +770,9 @@ function resetTable(table: Table, actor: Participant): void {
   table.winnerParticipantIds = [];
   table.currentTurnParticipantId = undefined;
   clearTimerRuntime(table);
+  table.idle = {
+    lastActivityAtMs: Date.now()
+  };
   for (const participant of Object.values(table.participants)) {
     participant.dishCount = 0;
     participant.depositedInitial = false;
@@ -714,6 +781,42 @@ function resetTable(table: Table, actor: Participant): void {
     delete participant.realIngredientStock;
   }
   assignRandomLobbyIngredients(table);
+}
+
+function closeTableWithNotice(
+  table: Table,
+  reason: "host_stopped" | "idle_declined" | "idle_timeout",
+  message: string,
+  nowMs = Date.now()
+): void {
+  cancelAllPendingOffers(table);
+  table.phase = "complete";
+  table.paused = false;
+  table.currentTurnParticipantId = undefined;
+  clearTimerRuntime(table);
+  table.idle = {
+    lastActivityAtMs: nowMs,
+    closure: {
+      reason,
+      message,
+      createdAtMs: nowMs,
+      returnToMenuAtMs: nowMs + TABLE_CLOSURE_NOTICE_MS
+    }
+  };
+}
+
+function respondToIdlePrompt(table: Table, actor: Participant, promptId: string, response: "yes" | "no"): void {
+  if (actor.kind !== "human") {
+    throw new GameError("Only human participants can answer an idle prompt.", "human_only");
+  }
+  if (!table.idle.prompt || table.idle.prompt.id !== promptId) {
+    return;
+  }
+  if (response === "no") {
+    closeTableWithNotice(table, "idle_declined", "The table closed because someone stopped cooking.");
+    return;
+  }
+  markTableActivity(table);
 }
 
 function setTableVisibility(table: Table, actor: Participant, isPublic: boolean): void {
@@ -2032,6 +2135,20 @@ function advanceSettlementIfReady(table: Table): void {
 
 function enterEndgamePhase(table: Table): void {
   enterSettlementPhase(table);
+}
+
+function idlePromptDelayMs(table: Table): number | undefined {
+  if (table.phase === "lobby") {
+    return LOBBY_IDLE_PROMPT_MS;
+  }
+  if (table.phase === "deposit" || table.phase === "playing" || table.phase === "settlement" || table.phase === "eating") {
+    return ACTIVE_IDLE_PROMPT_MS;
+  }
+  return undefined;
+}
+
+function shouldMarkActivityAfterIntent(intent: Intent): boolean {
+  return intent.type !== "close_table" && intent.type !== "idle_response";
 }
 
 function shouldGateTurn(table: Table, intent: Intent): boolean {

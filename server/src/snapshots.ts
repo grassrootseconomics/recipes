@@ -15,6 +15,7 @@ import type {
   DishPart,
   FoodPartLocationSummary,
   GameStats,
+  IdlePrompt,
   Offer,
   OfferSnapshot,
   Participant,
@@ -23,6 +24,7 @@ import type {
   Recipe,
   Snapshot,
   Table,
+  TableClosure,
   TableTimer,
   TransactionRecord,
   Voucher,
@@ -98,6 +100,8 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
     targetDishCount: table.targetDishCount,
     stockPerIngredient: table.stockPerIngredient,
     timer: cloneTimer(table.timer),
+    idlePrompt: cloneIdlePrompt(table.idle.prompt),
+    tableClosure: cloneTableClosure(table.idle.closure),
     ownHand,
     ownFoodParts,
     ownRecipe,
@@ -391,4 +395,12 @@ function cloneTransaction(transaction: TransactionRecord): TransactionRecord {
 
 function cloneTimer(timer?: TableTimer): TableTimer | undefined {
   return timer ? { ...timer } : undefined;
+}
+
+function cloneIdlePrompt(prompt?: IdlePrompt): IdlePrompt | undefined {
+  return prompt ? { ...prompt } : undefined;
+}
+
+function cloneTableClosure(closure?: TableClosure): TableClosure | undefined {
+  return closure ? { ...closure } : undefined;
 }

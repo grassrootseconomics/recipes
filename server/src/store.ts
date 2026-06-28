@@ -1,6 +1,16 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { runBots } from "./bots.js";
-import { addHumanParticipant, applyIntent, createEmptyTable, disconnectParticipant, expireTimer, GameError } from "./game.js";
+import {
+  addHumanParticipant,
+  advanceIdleState,
+  applyIntent,
+  createEmptyTable,
+  disconnectParticipant,
+  expireTimer,
+  GameError,
+  markTableActivity,
+  nextIdleDeadlineMs
+} from "./game.js";
 import { buildSnapshot } from "./snapshots.js";
 import type { CreateTableResult, Intent, JoinTableResult, Participant, PublicTableSummary, Snapshot, Table, TransactionRecord } from "./types.js";
 
@@ -25,6 +35,7 @@ export class TableStore {
     const table = this.requireTable(code);
     const seatToken = this.nextSeatToken();
     const participant = addHumanParticipant(table, name, seatToken, asWitness);
+    markTableActivity(table);
     return {
       table,
       participant,
@@ -121,6 +132,7 @@ export class TableStore {
       const wasConnected = participant.connected;
       participant.connected = true;
       if (!wasConnected) {
+        markTableActivity(table);
         table.version += 1;
       }
     }
@@ -147,6 +159,18 @@ export class TableStore {
 
   expireTimer(code: string, nowMs = Date.now()): boolean {
     return expireTimer(this.requireTable(code), nowMs);
+  }
+
+  nextIdleDeadlineMs(code: string): number | undefined {
+    return nextIdleDeadlineMs(this.requireTable(code));
+  }
+
+  advanceIdle(code: string, nowMs = Date.now()): boolean {
+    return advanceIdleState(this.requireTable(code), nowMs);
+  }
+
+  deleteTable(code: string): boolean {
+    return this.tables.delete(code.toUpperCase());
   }
 
   requireTable(code: string): Table {
@@ -207,7 +231,13 @@ function openBotSeatCount(table: Table): number {
 }
 
 function shouldRunBotsAfterIntent(intent: Intent): boolean {
-  if (intent.type === "start" || intent.type === "leave_table" || intent.type === "close_table" || intent.type === "reset_table") {
+  if (
+    intent.type === "start" ||
+    intent.type === "leave_table" ||
+    intent.type === "close_table" ||
+    intent.type === "reset_table" ||
+    intent.type === "idle_response"
+  ) {
     return false;
   }
   if (intent.type === "respond_offer" && intent.response === "refuse") {
