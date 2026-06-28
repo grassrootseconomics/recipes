@@ -27,6 +27,7 @@ import type {
   ParticipantRole,
   PlatterAssetRef,
   Table,
+  TableIdleState,
   TransactionAction,
   Voucher
 } from "./types.js";
@@ -91,6 +92,15 @@ export class GameError extends Error {
   constructor(message: string, public readonly code = "game_error") {
     super(message);
   }
+}
+
+function ensureTableIdle(table: Table, nowMs = Date.now()): TableIdleState {
+  if (!table.idle) {
+    table.idle = {
+      lastActivityAtMs: nowMs
+    };
+  }
+  return table.idle;
 }
 
 export function createEmptyTable(code: string, seed: string, hostName: string, seatToken: string, isPublic = true): Table {
@@ -431,7 +441,8 @@ export function expireTimer(table: Table, nowMs = Date.now()): boolean {
 }
 
 export function markTableActivity(table: Table, nowMs = Date.now()): void {
-  if (table.idle.closure) {
+  const idle = ensureTableIdle(table, nowMs);
+  if (idle.closure) {
     return;
   }
   table.idle = {
@@ -440,24 +451,26 @@ export function markTableActivity(table: Table, nowMs = Date.now()): void {
 }
 
 export function nextIdleDeadlineMs(table: Table): number | undefined {
-  if (table.phase === "complete" || table.idle.closure) {
+  const idle = ensureTableIdle(table);
+  if (table.phase === "complete" || idle.closure) {
     return undefined;
   }
-  if (table.idle.prompt) {
-    return table.idle.prompt.expiresAtMs;
+  if (idle.prompt) {
+    return idle.prompt.expiresAtMs;
   }
   const delayMs = idlePromptDelayMs(table);
   if (delayMs === undefined) {
     return undefined;
   }
-  return table.idle.lastActivityAtMs + delayMs;
+  return idle.lastActivityAtMs + delayMs;
 }
 
 export function advanceIdleState(table: Table, nowMs = Date.now()): boolean {
-  if (table.phase === "complete" || table.idle.closure) {
+  const idle = ensureTableIdle(table, nowMs);
+  if (table.phase === "complete" || idle.closure) {
     return false;
   }
-  const prompt = table.idle.prompt;
+  const prompt = idle.prompt;
   if (prompt) {
     if (prompt.expiresAtMs > nowMs) {
       return false;
@@ -809,7 +822,8 @@ function respondToIdlePrompt(table: Table, actor: Participant, promptId: string,
   if (actor.kind !== "human") {
     throw new GameError("Only human participants can answer an idle prompt.", "human_only");
   }
-  if (!table.idle.prompt || table.idle.prompt.id !== promptId) {
+  const idle = ensureTableIdle(table);
+  if (!idle.prompt || idle.prompt.id !== promptId) {
     return;
   }
   if (response === "no") {

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { decideBotIntent, runBots } from "../src/bots.js";
 import { computeGameStats } from "../src/gameStats.js";
@@ -3426,6 +3426,31 @@ describe("HTTP app", () => {
     });
     expect(forbidden.statusCode).toBe(400);
     await app.close();
+  });
+
+  it("periodically sweeps idle public and private tables that missed per-table scheduling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const store = new TableStore();
+    const app = await buildApp({ store });
+    try {
+      const publicTable = store.createTable("Public Host", "idle-sweep-public", "sweep1", true);
+      const privateTable = store.createTable("Private Host", "idle-sweep-private", "sweep2", false);
+      publicTable.table.idle.lastActivityAtMs = 0;
+      privateTable.table.idle.lastActivityAtMs = 0;
+
+      expect(publicTable.table.idle.prompt).toBeUndefined();
+      expect(privateTable.table.idle.prompt).toBeUndefined();
+
+      vi.setSystemTime(10 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+
+      expect(publicTable.table.idle.prompt).toMatchObject({ phase: "lobby" });
+      expect(privateTable.table.idle.prompt).toMatchObject({ phase: "lobby" });
+    } finally {
+      await app.close();
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.41"
+const APP_VERSION := "0.0.42"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -179,6 +179,8 @@ var _lobby_pending_seat_names := {}
 var _saved_lobby_seat_setup := {}
 var _public_tables_poll_elapsed := 0.0
 var _public_tables_request_quiet := false
+var _deferred_lobby_controls_refresh := false
+var _native_lobby_name_prompt_active := false
 
 
 func _ready() -> void:
@@ -3372,6 +3374,10 @@ func _refresh_participant_detail(snapshot: Dictionary) -> void:
 
 
 func _refresh_controls(snapshot: Dictionary) -> void:
+	if _should_preserve_lobby_controls_for_text_input(snapshot):
+		_deferred_lobby_controls_refresh = true
+		return
+	_deferred_lobby_controls_refresh = false
 	_clear(_phase_controls)
 	_clear(_hand_controls)
 	_clear(_recipe_controls)
@@ -3408,6 +3414,27 @@ func _refresh_controls(snapshot: Dictionary) -> void:
 		_add_settlement_controls(snapshot)
 	elif phase == "eating" or phase == "complete":
 		_add_eating_controls(snapshot)
+
+
+func _should_preserve_lobby_controls_for_text_input(snapshot: Dictionary) -> bool:
+	if str(snapshot.get("phase", "lobby")) != "lobby" or _game_started(snapshot):
+		return false
+	return _lobby_name_input_has_focus()
+
+
+func _lobby_name_input_has_focus() -> bool:
+	for raw_input in _lobby_seat_name_inputs.values():
+		var input := raw_input as LineEdit
+		if input != null and is_instance_valid(input) and input.has_focus():
+			return true
+	return false
+
+
+func _refresh_controls_after_lobby_edit() -> void:
+	if _lobby_name_input_has_focus():
+		return
+	_deferred_lobby_controls_refresh = false
+	_refresh_controls(RecipesClient.latest_snapshot)
 
 
 func _add_lobby_controls(snapshot: Dictionary) -> void:
@@ -3781,6 +3808,10 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 
 	_lobby_seat_name_inputs[participant_id] = name_input
 	_lobby_seat_kind_inputs[participant_id] = kind_toggle
+	name_input.focus_entered.connect(func(target_id := participant_id, input := name_input) -> void:
+		if _should_use_native_lobby_name_editor(input):
+			call_deferred("_open_native_lobby_name_editor", target_id, input)
+	)
 	name_input.text_changed.connect(func(text: String, target_id := participant_id) -> void:
 		_remember_lobby_seat_name_edit(target_id, text)
 	)
@@ -3795,6 +3826,8 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 			_remember_lobby_seat_name_edit(target_id, input.text)
 		_save_lobby_seat_setup_from_inputs()
 		_flush_pending_lobby_name_edits()
+		if _deferred_lobby_controls_refresh:
+			call_deferred("_refresh_controls_after_lobby_edit")
 	)
 	kind_toggle.item_selected.connect(func(index: int, target_id := participant_id, input := name_input) -> void:
 		_save_lobby_seat_setup_from_inputs()
@@ -3850,6 +3883,45 @@ func _rename_lobby_seat(participant_id: String, input: LineEdit) -> void:
 		return
 	if _send_lobby_edit_intent({"type": "rename_participant", "participantId": participant_id, "name": name}):
 		_lobby_pending_seat_names.erase(participant_id)
+
+
+func _should_use_native_lobby_name_editor(input: LineEdit) -> bool:
+	if OS.get_name() != "Web" or _native_lobby_name_prompt_active:
+		return false
+	if input == null or not is_instance_valid(input) or not input.editable:
+		return false
+	var has_touch = JavaScriptBridge.eval("Boolean(('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0))", true)
+	return bool(has_touch)
+
+
+func _open_native_lobby_name_editor(participant_id: String, input: LineEdit) -> void:
+	if participant_id == "" or not _should_use_native_lobby_name_editor(input):
+		return
+	if not input.has_focus():
+		return
+	_native_lobby_name_prompt_active = true
+	var current_name := _sanitize_lobby_seat_name(input.text)
+	var result = JavaScriptBridge.eval(
+		"window.prompt(%s, %s)" % [
+			JSON.stringify("Cook name"),
+			JSON.stringify(current_name)
+		],
+		true
+	)
+	_native_lobby_name_prompt_active = false
+	input.release_focus()
+	if result == null:
+		return
+	var name := _sanitize_lobby_seat_name(str(result))
+	if name == "":
+		return
+	input.text = name
+	input.caret_column = name.length()
+	_remember_lobby_seat_name_edit(participant_id, name)
+	_rename_lobby_seat(participant_id, input)
+	_save_lobby_seat_setup_from_inputs()
+	if _deferred_lobby_controls_refresh:
+		call_deferred("_refresh_controls_after_lobby_edit")
 
 
 func _remember_lobby_seat_name_edit(participant_id: String, name: String) -> void:
@@ -4069,6 +4141,8 @@ func _clear_lobby_edit_state() -> void:
 	_lobby_seat_name_inputs.clear()
 	_lobby_seat_kind_inputs.clear()
 	_lobby_pending_seat_names.clear()
+	_deferred_lobby_controls_refresh = false
+	_native_lobby_name_prompt_active = false
 
 
 func _send_lobby_edit_intent(intent: Dictionary) -> bool:

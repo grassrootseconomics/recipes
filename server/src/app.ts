@@ -120,6 +120,8 @@ const viewEnvelopeSchema = z.object({
   participantId: z.string().min(1)
 });
 
+const IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
+
 export interface AppOptions {
   store?: TableStore;
   hub?: ConnectionHub;
@@ -133,6 +135,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   const timerHandles = new Map<string, ReturnType<typeof setTimeout>>();
   const idleHandles = new Map<string, ReturnType<typeof setTimeout>>();
   const closedTableCleanupHandles = new Map<string, ReturnType<typeof setTimeout>>();
+  let idleSweepHandle: ReturnType<typeof setInterval> | undefined;
 
   app.addHook("onRequest", (request, reply, done) => {
     const origin = request.headers.origin;
@@ -344,7 +347,14 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       clearTimeout(handle);
     }
     closedTableCleanupHandles.clear();
+    if (idleSweepHandle) {
+      clearInterval(idleSweepHandle);
+      idleSweepHandle = undefined;
+    }
   });
+
+  startIdleSweep();
+  scheduleAllTableMaintenance();
 
   function scheduleTimer(tableCode: string): void {
     const normalizedCode = tableCode.toUpperCase();
@@ -425,7 +435,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     let returnToMenuAtMs = 0;
     try {
       const table = store.requireTable(normalizedCode);
-      returnToMenuAtMs = table.idle.closure?.returnToMenuAtMs ?? 0;
+      returnToMenuAtMs = table.idle?.closure?.returnToMenuAtMs ?? 0;
     } catch {
       return;
     }
@@ -439,6 +449,37 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       store.deleteTable(normalizedCode);
     }, delayMs);
     closedTableCleanupHandles.set(normalizedCode, handle);
+  }
+
+  function startIdleSweep(): void {
+    idleSweepHandle = setInterval(() => {
+      sweepIdleTables();
+    }, IDLE_SWEEP_INTERVAL_MS);
+    (idleSweepHandle as { unref?: () => void }).unref?.();
+  }
+
+  function scheduleAllTableMaintenance(): void {
+    for (const tableCode of store.tables.keys()) {
+      scheduleTimer(tableCode);
+      scheduleIdle(tableCode);
+      scheduleClosedTableCleanup(tableCode);
+    }
+  }
+
+  function sweepIdleTables(): void {
+    for (const tableCode of [...store.tables.keys()]) {
+      try {
+        const changed = store.advanceIdle(tableCode);
+        if (changed) {
+          hub.broadcastTable(store.requireTable(tableCode));
+        }
+        scheduleTimer(tableCode);
+        scheduleIdle(tableCode);
+        scheduleClosedTableCleanup(tableCode);
+      } catch {
+        // Periodic maintenance must not fail the server because one table is malformed or gone.
+      }
+    }
   }
 
   return app;

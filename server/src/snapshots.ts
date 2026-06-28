@@ -59,6 +59,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
   const visibleTransactionHistory = transactionHistory.slice(-(isWitness ? WITNESS_TRANSACTION_HISTORY_LIMIT : TRANSACTION_HISTORY_LIMIT));
   const ownRecipe = isKnownViewer ? cloneRecipe(table.recipes[viewerParticipantId as string]) : undefined;
   const gameStats = computeGameStats(table);
+  const idle = table.idle ?? { lastActivityAtMs: Date.now() };
   const offers = Object.values(table.offers)
     .filter((offer) => offer.status === "pending")
     .filter((offer) => isWitness || offer.fromParticipantId === viewerParticipantId || offer.toParticipantId === viewerParticipantId)
@@ -100,8 +101,8 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
     targetDishCount: table.targetDishCount,
     stockPerIngredient: table.stockPerIngredient,
     timer: cloneTimer(table.timer),
-    idlePrompt: cloneIdlePrompt(table.idle.prompt),
-    tableClosure: cloneTableClosure(table.idle.closure),
+    idlePrompt: cloneIdlePrompt(idle.prompt),
+    tableClosure: cloneTableClosure(idle.closure),
     ownHand,
     ownFoodParts,
     ownRecipe,
