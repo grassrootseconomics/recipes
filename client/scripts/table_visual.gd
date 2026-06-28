@@ -5729,7 +5729,8 @@ func _asset_event_fields_from_label(label: String, prefix: String, previous_snap
 
 
 func _dish_part_info_from_label(label: String, previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Dictionary:
-	var normalized := label.strip_edges().to_lower()
+	var cleaned_label := _label_without_quantity_suffix(label)
+	var normalized := cleaned_label.to_lower()
 	if normalized == "" or normalized == "none":
 		return {}
 	for snapshot in [previous_snapshot, current_snapshot, _snapshot]:
@@ -5744,10 +5745,31 @@ func _dish_part_info_from_label(label: String, previous_snapshot: Dictionary, cu
 		var suffix := " %s" % unit
 		if normalized.ends_with(suffix) and normalized.length() > suffix.length():
 			return {
-				"dishName": label.strip_edges().substr(0, label.strip_edges().length() - suffix.length()).strip_edges(),
+				"dishName": cleaned_label.substr(0, cleaned_label.length() - suffix.length()).strip_edges(),
 				"unitSingular": unit
 			}
 	return {}
+
+
+func _label_without_quantity_suffix(label: String) -> String:
+	var trimmed := label.strip_edges()
+	var marker := trimmed.to_lower().rfind(" x")
+	if marker < 0:
+		return trimmed
+	var suffix := trimmed.substr(marker + 2).strip_edges()
+	if not _is_ascii_digits(suffix):
+		return trimmed
+	return trimmed.substr(0, marker).strip_edges()
+
+
+func _is_ascii_digits(value: String) -> bool:
+	if value == "":
+		return false
+	for index in range(value.length()):
+		var code := value.unicode_at(index)
+		if code < 48 or code > 57:
+			return false
+	return true
 
 
 func _public_swap_event_from_platter_delta(previous_snapshot: Dictionary, current_snapshot: Dictionary, platter_delta: Dictionary, platter_food_delta: Dictionary) -> Dictionary:
