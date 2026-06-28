@@ -9,6 +9,26 @@ func _initialize() -> void:
 	var app_tablecloth := main.find_child("AppTableclothBackground", true, false) as Control
 	_require(app_tablecloth != null and app_tablecloth.mouse_filter == Control.MOUSE_FILTER_IGNORE, "main scene renders a tiled tablecloth outside the table panel")
 
+	var original_window_size := root.size
+	root.size = Vector2i(360, 740)
+	await process_frame
+	main.call("_show_online_setup")
+	await process_frame
+	main.call("_refresh_connection_buttons", {})
+	await process_frame
+	var phone_viewport_width := root.get_viewport().get_visible_rect().size.x
+	var online_setup_panel := _control_from_property(main, "_online_setup_panel")
+	var server_option := _control_from_property(main, "_server_option")
+	var code_input := _control_from_property(main, "_code_input")
+	var generate_button := _control_from_property(main, "_generate_code_button")
+	_require(online_setup_panel != null and online_setup_panel.visible, "phone create/join setup is visible")
+	_require(online_setup_panel != null and online_setup_panel.get_global_rect().end.x <= phone_viewport_width + 1.0, "phone create/join setup fits viewport width; panel=%s viewport=%s" % [online_setup_panel.get_global_rect(), phone_viewport_width])
+	_require(server_option != null and server_option.get_global_rect().end.x <= phone_viewport_width + 1.0, "phone server chooser fits viewport width; option=%s viewport=%s" % [server_option.get_global_rect(), phone_viewport_width])
+	_require(code_input != null and generate_button != null and generate_button.get_global_rect().position.x > code_input.get_global_rect().position.x and generate_button.get_global_rect().end.x <= phone_viewport_width + 1.0, "phone invite code row keeps Generate inside the viewport")
+	main.call("_return_to_main_menu")
+	root.size = original_window_size
+	await process_frame
+
 	var online_waiting_snapshot := _online_lobby_snapshot(false)
 	_require(str(main.call("_host_lobby_start_label", online_waiting_snapshot)) == "Waiting for Cooks", "online host lobby waits for another cook before start")
 	_require(not bool(main.call("_host_lobby_start_enabled", online_waiting_snapshot)), "online host lobby disables start before another cook joins")
@@ -26,6 +46,15 @@ func _initialize() -> void:
 	_require(bool(main.call("_host_lobby_start_enabled", online_ready_snapshot)), "online host lobby enables start after another cook joins")
 
 	var recipes_client := root.get_node("/root/RecipesClient")
+	recipes_client.latest_snapshot = online_waiting_snapshot.duplicate(true)
+	main.call("_remember_lobby_seat_name_edit", "p1", "")
+	var pending_names: Dictionary = main.get("_lobby_pending_seat_names")
+	_require(not pending_names.has("p1"), "blank Android lobby name edits are not retained as pending renames")
+	var blank_name_input := LineEdit.new()
+	blank_name_input.text = ""
+	main.call("_rename_lobby_seat", "p1", blank_name_input)
+	_require(blank_name_input.text == "SmallHost", "blank submitted lobby names fall back to the current server name")
+
 	var missing_prepare_append := {"transactionHistory": [{"action": "Prepare", "participantId": "p1"}]}
 	var complete_prepare_patch := {"ownFoodParts": [{"id": "dish_1_part_1", "dishId": "dish_1"}]}
 	_require(bool(recipes_client.call("debug_delta_missing_viewer_prepare_food_parts", _prepare_delta_snapshot_fixture(), {}, missing_prepare_append)), "online client requests a fresh snapshot when a viewer prepare delta omits ownFoodParts")
@@ -89,7 +118,6 @@ func _initialize() -> void:
 	var basket_area := visual.find_child("BasketTableArea", true, false) as Control
 	_require(visual.find_child("Title_Cooks", true, false) == null, "main scene table omits the separate Cooks title")
 	_require(basket_area != null and basket_area.get_global_rect().position.y - visual_rect.position.y < 80.0, "table content is top-aligned without a large blank band")
-	var original_window_size := root.size
 	root.size = Vector2i(1600, 900)
 	await process_frame
 	main.call("_fit_table_visual_to_window")

@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.39"
+const APP_VERSION := "0.0.40"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -21,11 +21,14 @@ const LOBBY_SEAT_SETUP_STORE_PATH := "user://lobby-seat-setup.json"
 const LOBBY_SEAT_SETUP_STORE_TMP_PATH := "user://lobby-seat-setup.tmp"
 const DESKTOP_ANDROID_PREVIEW_SIZE := Vector2i(1080, 1920)
 const DESKTOP_ANDROID_PREVIEW_MARGIN := 48
-const TABLE_VISUAL_BOTTOM_SAFE_MARGIN := 18.0
-const TABLE_VISUAL_PANEL_CLIP_PADDING := 14.0
-const TABLE_VISUAL_LANDSCAPE_WIDTH_INSET := 24.0
-const TABLE_VISUAL_MAX_UPSCALE_PORTRAIT := 1.16
-const TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE := 1.12
+const UI_READABILITY_SCALE := 1.10
+const UI_DEFAULT_FONT_SIZE := 18
+const PHONE_LAYOUT_WIDTH := 760.0
+const TABLE_VISUAL_BOTTOM_SAFE_MARGIN := 8.0
+const TABLE_VISUAL_PANEL_CLIP_PADDING := 8.0
+const TABLE_VISUAL_LANDSCAPE_WIDTH_INSET := 18.0
+const TABLE_VISUAL_MAX_UPSCALE_PORTRAIT := 1.24
+const TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE := 1.55
 const TABLE_VISUAL_MIN_SCALE := 0.45
 const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 1.25
 const PUBLIC_TABLES_POLL_SECONDS := 2.0
@@ -267,6 +270,20 @@ func _sanitize_dev_client_profile(value: String) -> String:
 	return result.left(32)
 
 
+func _apply_readability_theme() -> void:
+	var ui_theme := Theme.new()
+	ui_theme.default_font_size = UI_DEFAULT_FONT_SIZE
+	theme = ui_theme
+
+
+func _scaled_ui_font_size(size: int) -> int:
+	return maxi(1, int(round(float(size) * UI_READABILITY_SCALE)))
+
+
+func _is_phone_layout_width() -> bool:
+	return get_viewport_rect().size.x <= PHONE_LAYOUT_WIDTH
+
+
 func _process(delta: float) -> void:
 	_update_home_sprites(delta)
 	_poll_public_tables_if_visible(delta)
@@ -274,6 +291,7 @@ func _process(delta: float) -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
+		_apply_layout_density(_table_exists(RecipesClient.latest_snapshot), _game_started(RecipesClient.latest_snapshot))
 		_fit_home_panel_to_window()
 		_fit_table_visual_to_window()
 
@@ -285,6 +303,7 @@ func _exit_tree() -> void:
 
 
 func _build_ui() -> void:
+	_apply_readability_theme()
 	var background := TableclothPattern.new()
 	background.configure_background()
 	background.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -302,10 +321,10 @@ func _build_ui() -> void:
 	_root_margin = margin
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_theme_constant_override("margin_left", 20)
-	margin.add_theme_constant_override("margin_top", 16)
-	margin.add_theme_constant_override("margin_right", 20)
-	margin.add_theme_constant_override("margin_bottom", 24)
+	margin.add_theme_constant_override("margin_left", 10 if _is_phone_layout_width() else 20)
+	margin.add_theme_constant_override("margin_top", 12 if _is_phone_layout_width() else 16)
+	margin.add_theme_constant_override("margin_right", 10 if _is_phone_layout_width() else 20)
+	margin.add_theme_constant_override("margin_bottom", 14 if _is_phone_layout_width() else 24)
 	scroll.add_child(margin)
 
 	var root := VBoxContainer.new()
@@ -528,7 +547,7 @@ func _build_home_panel() -> PanelContainer:
 	title.text = "Recipes"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 68)
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(68))
 	title.add_theme_color_override("font_color", Color(1.0, 0.72, 0.20))
 	title.add_theme_color_override("font_outline_color", Color(0.18, 0.16, 0.09))
 	title.add_theme_constant_override("outline_size", 7)
@@ -540,7 +559,7 @@ func _build_home_panel() -> PanelContainer:
 	var subtitle := Label.new()
 	subtitle.text = "Cook, trade, and share the table"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.add_theme_font_size_override("font_size", 20)
+	subtitle.add_theme_font_size_override("font_size", _scaled_ui_font_size(20))
 	subtitle.add_theme_color_override("font_color", Color(0.22, 0.17, 0.10))
 	box.add_child(subtitle)
 
@@ -570,7 +589,7 @@ func _build_home_panel() -> PanelContainer:
 	_version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_version_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_version_label.custom_minimum_size = Vector2(0, 26)
-	_version_label.add_theme_font_size_override("font_size", 16)
+	_version_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(16))
 	_version_label.add_theme_color_override("font_color", Color(0.16, 0.13, 0.08, 0.86))
 	_version_label.add_theme_color_override("font_outline_color", Color(1.0, 0.98, 0.84, 0.72))
 	_version_label.add_theme_constant_override("outline_size", 2)
@@ -592,7 +611,7 @@ func _fit_home_panel_to_window() -> void:
 func _build_online_setup_controls(root: VBoxContainer) -> void:
 	var title := _lobby_title("Online Table")
 	title.custom_minimum_size = Vector2(0, 30)
-	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(24))
 	root.add_child(title)
 
 	var server_label := _wrapped_label("Server URL")
@@ -604,7 +623,9 @@ func _build_online_setup_controls(root: VBoxContainer) -> void:
 	_server_option.custom_minimum_size = Vector2(0, 34)
 	for raw_server in _server_options:
 		var server: Dictionary = raw_server
-		var label := "%s  %s" % [str(server.get("name", "Server")), str(server.get("url", ""))]
+		var label := str(server.get("name", "Server")).strip_edges()
+		if label == "":
+			label = str(server.get("url", "Server")).strip_edges()
 		_server_option.add_item(label)
 		_server_option.set_item_metadata(_server_option.get_item_count() - 1, str(server.get("url", "")))
 	_server_option.add_item("Other")
@@ -643,7 +664,7 @@ func _build_online_setup_controls(root: VBoxContainer) -> void:
 	_generate_code_button = _button("Generate", func() -> void:
 		_begin_unique_code_generation()
 	)
-	_generate_code_button.custom_minimum_size = Vector2(104, 34)
+	_generate_code_button.custom_minimum_size = Vector2(98, 34)
 	_generate_code_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 	code_row.add_child(_generate_code_button)
 	_refresh_online_setup_ready_state()
@@ -1453,7 +1474,7 @@ func _home_button(label: String, base_bg: Color, border: Color, callback: Callab
 	button.custom_minimum_size = Vector2(0, 76)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	button.add_theme_font_size_override("font_size", 32)
+	button.add_theme_font_size_override("font_size", _scaled_ui_font_size(32))
 	button.add_theme_color_override("font_color", Color(1, 0.98, 0.90))
 	button.add_theme_color_override("font_hover_color", Color(1, 1, 1))
 	button.add_theme_color_override("font_pressed_color", Color(1, 0.95, 0.82))
@@ -1471,7 +1492,7 @@ func _home_footer_button(label: String, callback: Callable) -> Button:
 	button.custom_minimum_size = Vector2(0, 50)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	button.add_theme_font_size_override("font_size", 22)
+	button.add_theme_font_size_override("font_size", _scaled_ui_font_size(22))
 	button.add_theme_color_override("font_color", Color(0.18, 0.13, 0.08))
 	button.add_theme_color_override("font_hover_color", Color(0.30, 0.20, 0.10))
 	button.add_theme_color_override("font_pressed_color", Color(0.10, 0.08, 0.05))
@@ -1519,7 +1540,7 @@ func _home_logo_button(callback: Callable) -> Button:
 		logo.texture = texture
 	else:
 		button.text = "Grassroots Economics"
-		button.add_theme_font_size_override("font_size", 22)
+		button.add_theme_font_size_override("font_size", _scaled_ui_font_size(22))
 		button.add_theme_color_override("font_color", Color(0.08, 0.16, 0.1, 1.0))
 	button.add_child(logo)
 	return button
@@ -1667,7 +1688,7 @@ func _section(root: VBoxContainer, title_text: String) -> VBoxContainer:
 	title.text = title_text
 	title.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title.flat = false
-	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
 	title.add_theme_color_override("font_color", Color(0.18, 0.12, 0.07))
 	title.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
 	title.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
@@ -1735,7 +1756,7 @@ func _labeled_line_edit(root: VBoxContainer, label_text: String, placeholder: St
 
 	var label := Label.new()
 	label.text = label_text
-	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
 	label.add_theme_color_override("font_color", Color(0.20, 0.13, 0.07))
 	field.add_child(label)
 
@@ -1750,6 +1771,7 @@ func _line_edit(placeholder: String, value: String) -> LineEdit:
 	input.text = value
 	input.custom_minimum_size = Vector2(0, 44)
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	input.add_theme_font_size_override("font_size", UI_DEFAULT_FONT_SIZE)
 	input.add_theme_color_override("font_color", Color(0.15, 0.11, 0.07))
 	input.add_theme_color_override("font_uneditable_color", Color(0.28, 0.23, 0.16))
 	input.add_theme_color_override("font_placeholder_color", Color(0.40, 0.34, 0.25, 0.75))
@@ -1766,6 +1788,7 @@ func _button(label: String, callback: Callable) -> Button:
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	button.custom_minimum_size = Vector2(112, 44)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.add_theme_font_size_override("font_size", UI_DEFAULT_FONT_SIZE)
 	button.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
 	button.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
 	button.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
@@ -1788,13 +1811,13 @@ func _configure_confirmation_dialog(dialog: ConfirmationDialog) -> void:
 	dialog.add_theme_stylebox_override("panel", _confirmation_panel_style())
 	dialog.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
 	dialog.add_theme_color_override("title_color", Color(0.24, 0.15, 0.07))
-	dialog.add_theme_font_size_override("font_size", 18)
+	dialog.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
 
 	var label := dialog.call("get_label") as Label if dialog.has_method("get_label") else null
 	if is_instance_valid(label):
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		label.add_theme_font_size_override("font_size", 18)
+		label.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
 		label.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
 
 	_style_confirmation_button(dialog.get_ok_button(), true)
@@ -1848,7 +1871,7 @@ func _build_offline_end_popup() -> Control:
 	title.text = "Stop cooking?"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 19)
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(19))
 	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
 	box.add_child(title)
 
@@ -1857,7 +1880,7 @@ func _build_offline_end_popup() -> Control:
 	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	message.add_theme_font_size_override("font_size", 15)
+	message.add_theme_font_size_override("font_size", _scaled_ui_font_size(15))
 	message.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
 	box.add_child(message)
 
@@ -1910,7 +1933,7 @@ func _build_history_popup() -> PopupPanel:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(20))
 	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
 	header.add_child(title)
 
@@ -1956,7 +1979,7 @@ func _build_debug_sync_popup() -> PopupPanel:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(20))
 	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
 	header.add_child(title)
 
@@ -1972,7 +1995,7 @@ func _build_debug_sync_popup() -> PopupPanel:
 	_debug_sync_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_debug_sync_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_debug_sync_text.custom_minimum_size = Vector2(0, 180)
-	_debug_sync_text.add_theme_font_size_override("font_size", 14)
+	_debug_sync_text.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
 	_debug_sync_text.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
 	_debug_sync_text.add_theme_color_override("font_readonly_color", Color(0.17, 0.12, 0.07))
 	_debug_sync_text.add_theme_color_override("font_placeholder_color", Color(0.45, 0.35, 0.23))
@@ -2029,7 +2052,7 @@ func _style_confirmation_button(button: Button, primary: bool) -> void:
 		return
 	button.custom_minimum_size = Vector2(120, 42)
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	button.add_theme_font_size_override("font_size", 18)
+	button.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
 	button.add_theme_color_override("font_color", Color(1.0, 0.92, 0.70) if primary else Color(0.17, 0.12, 0.07))
 	button.add_theme_color_override("font_hover_color", Color(1.0, 0.98, 0.82) if primary else Color(0.24, 0.16, 0.08))
 	button.add_theme_color_override("font_pressed_color", Color(1.0, 0.86, 0.58) if primary else Color(0.10, 0.07, 0.04))
@@ -2092,6 +2115,8 @@ func _option_button() -> OptionButton:
 	option.custom_minimum_size = Vector2(0, 44)
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	option.fit_to_longest_item = false
+	option.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	option.add_theme_font_size_override("font_size", UI_DEFAULT_FONT_SIZE)
 	option.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
 	option.add_theme_color_override("font_hover_color", Color(0.24, 0.16, 0.08))
 	option.add_theme_color_override("font_pressed_color", Color(0.10, 0.07, 0.04))
@@ -2184,10 +2209,10 @@ func _transaction_cell(text: String, min_width: int, bold := false) -> Label:
 	label.custom_minimum_size = Vector2(min_width, 30)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
 	label.add_theme_color_override("font_color", Color(0.18, 0.12, 0.07))
 	if bold:
-		label.add_theme_font_size_override("font_size", 14)
+		label.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
 		label.add_theme_color_override("font_color", Color(0.12, 0.08, 0.04))
 	return label
 
@@ -2213,7 +2238,7 @@ func _action_badge(action: String) -> PanelContainer:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
 	label.add_theme_color_override("font_color", _action_text_color(action))
 	panel.add_child(label)
 	return panel
@@ -2734,13 +2759,14 @@ func _refresh_connection_buttons(snapshot: Dictionary) -> void:
 
 
 func _apply_layout_density(compact_table: bool, game_started := false) -> void:
-	var horizontal_margin := 2 if game_started else (8 if compact_table else 20)
-	var vertical_margin := 4 if compact_table else 16
+	var phone_width := _is_phone_layout_width()
+	var horizontal_margin := 4 if game_started else (6 if compact_table else (10 if phone_width else 20))
+	var vertical_margin := 4 if game_started else (6 if compact_table else (12 if phone_width else 16))
 	if is_instance_valid(_root_margin):
 		_root_margin.add_theme_constant_override("margin_left", horizontal_margin)
 		_root_margin.add_theme_constant_override("margin_top", vertical_margin)
 		_root_margin.add_theme_constant_override("margin_right", horizontal_margin)
-		_root_margin.add_theme_constant_override("margin_bottom", 4 if compact_table else 24)
+		_root_margin.add_theme_constant_override("margin_bottom", 4 if compact_table or game_started else (14 if phone_width else 24))
 	if is_instance_valid(_root_container):
 		_root_container.add_theme_constant_override("separation", 4 if compact_table else 12)
 	if is_instance_valid(_table_section):
@@ -3304,13 +3330,13 @@ func _add_online_lobby_invite_controls(snapshot: Dictionary) -> void:
 	var server_label := _wrapped_label("Server: %s" % RecipesClient.server_url)
 	server_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	if _is_compact_lobby():
-		server_label.add_theme_font_size_override("font_size", 13)
+		server_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(13))
 	box.add_child(server_label)
 
 	var code_label := _wrapped_label("Invite Code: %s" % str(snapshot.get("tableCode", RecipesClient.table_code)))
 	code_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	if _is_compact_lobby():
-		code_label.add_theme_font_size_override("font_size", 13)
+		code_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(13))
 	box.add_child(code_label)
 
 	var invite_button := _button("Invite Others", func(snap := snapshot) -> void:
@@ -3351,7 +3377,7 @@ func _lobby_waiting_on_host_label() -> Label:
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.custom_minimum_size = Vector2(0, 42 if compact else 64)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label.add_theme_font_size_override("font_size", 24 if compact else 32)
+	label.add_theme_font_size_override("font_size", _scaled_ui_font_size(24 if compact else 32))
 	label.add_theme_color_override("font_color", Color(0.26, 0.14, 0.06))
 	label.add_theme_color_override("font_outline_color", Color(1.0, 0.91, 0.68, 0.90))
 	label.add_theme_constant_override("outline_size", 2)
@@ -3405,7 +3431,7 @@ func _lobby_title(text: String) -> Label:
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.custom_minimum_size = Vector2(0, 24 if compact else 56)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label.add_theme_font_size_override("font_size", 20 if compact else 34)
+	label.add_theme_font_size_override("font_size", _scaled_ui_font_size(20 if compact else 34))
 	label.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
 	label.add_theme_color_override("font_outline_color", Color(1.0, 0.92, 0.70, 0.88))
 	label.add_theme_constant_override("outline_size", 2)
@@ -3413,7 +3439,7 @@ func _lobby_title(text: String) -> Label:
 
 
 func _style_start_cooking_button(button: Button) -> void:
-	button.add_theme_font_size_override("font_size", 18 if _is_compact_lobby() else 24)
+	button.add_theme_font_size_override("font_size", _scaled_ui_font_size(18 if _is_compact_lobby() else 24))
 	button.add_theme_color_override("font_color", Color(1.0, 0.92, 0.70))
 	button.add_theme_color_override("font_hover_color", Color(1.0, 0.98, 0.82))
 	button.add_theme_color_override("font_pressed_color", Color(1.0, 0.86, 0.58))
@@ -3595,7 +3621,7 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 	ingredient_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ingredient_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	ingredient_label.custom_minimum_size = Vector2(0, 13 if compact else 18)
-	ingredient_label.add_theme_font_size_override("font_size", 10 if compact else 14)
+	ingredient_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(10 if compact else 14))
 	ingredient_label.add_theme_color_override("font_color", Color(0.20, 0.13, 0.07))
 	ingredient_label.add_theme_color_override("font_outline_color", Color(1.0, 0.93, 0.72, 0.70))
 	ingredient_label.add_theme_constant_override("outline_size", 1)
@@ -3610,14 +3636,14 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 	name_input.editable = name_editable
 	name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if compact:
-		name_input.add_theme_font_size_override("font_size", 18)
+		name_input.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
 	row.add_child(name_input)
 
 	var kind_toggle := _option_button()
 	kind_toggle.custom_minimum_size = Vector2(86, 38) if compact else Vector2(112, 50)
 	kind_toggle.size_flags_horizontal = Control.SIZE_SHRINK_END
 	if compact:
-		kind_toggle.add_theme_font_size_override("font_size", 17)
+		kind_toggle.add_theme_font_size_override("font_size", _scaled_ui_font_size(17))
 	kind_toggle.add_item("Player")
 	kind_toggle.add_item("Bot")
 	var is_bot := str(participant.get("kind", "human")) == "bot"
@@ -3637,7 +3663,10 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 		_save_lobby_seat_setup_from_inputs()
 	)
 	name_input.focus_exited.connect(func(target_id := participant_id, input := name_input) -> void:
-		_remember_lobby_seat_name_edit(target_id, input.text)
+		if _sanitize_lobby_seat_name(input.text) == "":
+			_rename_lobby_seat(target_id, input)
+		else:
+			_remember_lobby_seat_name_edit(target_id, input.text)
 		_save_lobby_seat_setup_from_inputs()
 		_flush_pending_lobby_name_edits()
 	)
@@ -3685,6 +3714,11 @@ func _rename_lobby_seat(participant_id: String, input: LineEdit) -> void:
 	if participant_id == "":
 		return
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
+	if name == "":
+		_lobby_pending_seat_names.erase(participant_id)
+		if not participant.is_empty():
+			input.text = str(participant.get("name", "")).strip_edges()
+		return
 	if not participant.is_empty() and name == str(participant.get("name", "")).strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
 		return
@@ -3697,6 +3731,9 @@ func _remember_lobby_seat_name_edit(participant_id: String, name: String) -> voi
 		return
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
 	var trimmed := _sanitize_lobby_seat_name(name)
+	if trimmed == "":
+		_lobby_pending_seat_names.erase(participant_id)
+		return
 	if not participant.is_empty() and trimmed == str(participant.get("name", "")).strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
 	else:
@@ -3708,6 +3745,7 @@ func _publish_lobby_seat_name_edit(participant_id: String, name: String) -> void
 		return
 	var trimmed := _sanitize_lobby_seat_name(name)
 	if trimmed == "":
+		_lobby_pending_seat_names.erase(participant_id)
 		return
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
 	if not participant.is_empty() and trimmed == str(participant.get("name", "")).strip_edges():
@@ -3780,7 +3818,9 @@ func _capture_lobby_seat_setup_edits() -> Array:
 		var toggle := _lobby_seat_kind_inputs.get(participant_id, null) as OptionButton
 		var name := str(participant.get("name", "")).strip_edges()
 		if input != null and is_instance_valid(input):
-			name = _sanitize_lobby_seat_name(input.text)
+			var entered_name := _sanitize_lobby_seat_name(input.text)
+			if entered_name != "":
+				name = entered_name
 		var kind := "bot" if str(participant.get("kind", "human")) == "bot" else "player"
 		if toggle != null and is_instance_valid(toggle):
 			kind = "bot" if toggle.selected == 1 else "player"
@@ -3840,6 +3880,8 @@ func _commit_lobby_seat_setup_edit(edit: Dictionary) -> void:
 		return
 	var current_kind := "bot" if str(participant.get("kind", "human")) == "bot" else "player"
 	var current_name := str(participant.get("name", "")).strip_edges()
+	if desired_name == "":
+		desired_name = current_name
 	if desired_kind == "player" and current_kind == "bot":
 		if _send_lobby_edit_intent({"type": "add_controlled_seat", "participantId": participant_id, "name": desired_name}):
 			_lobby_pending_seat_names.erase(participant_id)
@@ -3882,10 +3924,13 @@ func _apply_saved_lobby_setup_to_active_table() -> void:
 			kind = "bot"
 		if index == 0:
 			kind = "player"
+		var saved_name := str(seat.get("name", "")).strip_edges()
+		if saved_name == "":
+			saved_name = str(participant.get("name", "")).strip_edges()
 		edits.append({
 			"participantId": str(participant.get("id", "")),
 			"seatIndex": index,
-			"name": str(seat.get("name", "")).strip_edges(),
+			"name": saved_name,
 			"kind": kind
 		})
 	for edit in edits:
