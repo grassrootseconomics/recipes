@@ -169,7 +169,7 @@ export interface DishPartGroup {
   count: number;
 }
 
-export type TransactionAction = "Deposit" | "Swap" | "Settlement Swap" | "Exchange" | "Redeem" | "Prepare" | "Eat" | "Pass Turn";
+export type TransactionAction = "Deposit" | "Swap" | "Settlement Swap" | "Exchange" | "Redeem" | "Prepare" | "Share" | "Eat" | "Pass Turn";
 
 export interface TransactionRecord {
   id: string;

@@ -30,7 +30,7 @@ Players can also trade directly with each other. A player zooms out to see the f
 
 Players can only be asked for their own ingredient while they still have at least one available voucher for that ingredient in hand and at least one real unit of stock remaining. If a pending offer asks for an ingredient that the recipient no longer has available, the server automatically refuses that offer and returns the offered card to the sender. Clients should not show players with zero available own-ingredient vouchers or zero real stock as offer targets.
 
-After all active players reach the dish goal, the table enters settlement unless everyone is already clear. During settlement, voucher cards and finished dish parts are both 1:1 value assets. A player may give any held card or food part to the platter and take any visible card or food part from the platter. Final clearance requires each active player to have exactly two of their own voucher cards in the central platter, exactly six of their own voucher cards in their own hand, and zero other players' voucher cards in their hand. This also means none of that player's cards can remain in another player's hand. A player with more than two own cards in the platter has platter debt; a player with fewer than two own cards in the platter has platter shortfall. Only own cards in the platter count toward platter debt and shortfall, but eating remains locked until all promise cards are fully returned to their owners.
+After all active players reach the dish goal, the table enters settlement unless everyone is already clear. During settlement, voucher cards and finished dish parts are both 1:1 value assets. A player may give any held card or food part to the platter and take any visible card or food part from the platter. Final clearance requires each active player to have exactly two of their own voucher cards in the central platter, exactly six of their own voucher cards in their own hand, and zero other players' voucher cards in their hand. This also means none of that player's cards can remain in another player's hand. A player with more than two own cards in the platter has platter debt; a player with fewer than two own cards in the platter has platter shortfall. Only own cards in the platter count toward platter debt and shortfall, but final food sharing remains locked until all promise cards are fully returned to their owners.
 
 Successful table transactions are public history entries with: legacy interaction number, player name, action, counterparty, item out, and item back. MVP transaction actions are `Deposit`, `Swap`, `Settlement Swap`, `Exchange`, `Redeem`, `Prepare`, `Eat`, and `Pass Turn`.
 
@@ -56,7 +56,7 @@ If an active human player leaves an online table, their seat stays reserved for 
 
 The game should include an offline mode for Web and Android. Offline mode is single-device pass-and-play: one local controller starts with one human seat and 7 bot seats, can take over bot seats with custom names, and can pass the device between people. Offline mode cannot invite remote players, join hosted tables, use witnesses, or access online matchmaking.
 
-Offline mode should preserve the same recipe, voucher, platter, redemption, preparation, scoring, and eating rules as online play where possible. Bots remain deterministic from the local table seed.
+Offline mode should preserve the same recipe, voucher, platter, redemption, preparation, scoring, settlement, and automatic food-sharing rules as online play where possible. Bots remain deterministic from the local table seed.
 
 Because the Godot client must remain GDScript-only, offline mode cannot depend on running the Node TypeScript server locally on the device. Offline implementation should either share generated rule fixtures from the server or add a small GDScript rules runtime that mirrors the authoritative online server for local controlled seats and bot play.
 
@@ -66,7 +66,7 @@ Gameplay semantics must stay aligned between online and offline modes. When a ru
 
 For hosted online tables, the host should be able to take the place of several active players before the game starts. This supports playtesting, local party facilitation, and filling seats without converting those seats into bots.
 
-A host-controlled seat is still a normal active participant for ingredient identity, vouchers, recipe assignment, scoring, visibility, turn order, and eating. The implementation should track the seat/participant identity separately from the human controller, so one host connection can submit intents for multiple controlled seats while each action is validated as the selected seat.
+A host-controlled seat is still a normal active participant for ingredient identity, vouchers, recipe assignment, scoring, visibility, turn order, settlement, and final food sharing. The implementation should track the seat/participant identity separately from the human controller, so one host connection can submit intents for multiple controlled seats while each action is validated as the selected seat.
 
 Host-controlled seats must not weaken hidden-information rules. The host can act for seats they control, but active seats still receive filtered snapshots according to their own participant perspective. Witness visibility remains separate from active seat control.
 
@@ -74,7 +74,7 @@ Host-controlled seats must not weaken hidden-information rules. The host can act
 
 Recipes uses one turn model for both online and offline play: active participants take turns in a circle using deterministic table order. The fixed 8-seat table order is clockwise around the Common Basket: the four upper seats from left to right, then the four lower seats from right to left. The lobby seat order follows that same clockwise path, so normal participant indices `0..7` are also the round-robin turn order.
 
-Only the current active seat can perform turn-gated gameplay actions. The current seat keeps the turn across swaps, offers, settlement, and eating until they explicitly pass. During cooking, `Redeem / Pass` redeems all useful held cards first, automatically prepares the dish if the recipe becomes complete, plays those animations, and then advances to the next active seat.
+Only the current active seat can perform turn-gated gameplay actions. The current seat keeps the turn across swaps, offers, and settlement until they explicitly pass. During cooking, `Redeem / Pass` redeems all useful held cards first, automatically prepares the dish if the recipe becomes complete, plays those animations, and then advances to the next active seat.
 
 Online multiplayer must keep active turn and turn advancement server-owned. Offline mode mirrors the same turn semantics locally.
 
@@ -82,26 +82,26 @@ End-game statistics use explicit terms:
 
 - `playerTurnCount`: completed player turns, counted by public `Pass Turn` records.
 - `cycleCount`: completed player turns divided by active player count; this can be fractional.
-- `interactionCount`: successful non-pass transactions, including offerings, swaps, exchanges, redemptions, preparation, and eating.
+- `interactionCount`: successful non-pass transactions, including offerings, swaps, exchanges, redemptions, preparation, settlement, and automatic food sharing.
 - `commonBasketSwapCount`: normal Common Basket voucher swaps.
 - `directExchangeCount`: direct player-to-player exchanges, including exchanges involving finished food pieces.
 - `settlementSwapCount`: settlement-phase Common Basket swaps.
 - `foodPieceSettlementSwapCount`: settlement swaps where either side is a finished food piece.
 - `redemptionCount`: promise cards redeemed into real recipe ingredients.
 
-## Winning And Eating
+## Winning And Sharing
 
 The MVP dish goal is fixed at 3 dishes per active player. Starting stock is fixed at 40 real units per active ingredient owner. The current MVP active participant count is fixed at 8. Each player starts with 8 promise cards for their ingredient, automatically contributes 2 cards to the Common Basket at start, and begins play with 6 own cards in hand. When a player prepares a dish below the target, they receive a new recipe. When a player reaches the target, they stop receiving new recipes while the rest of the table finishes.
 
 The MVP does not expose a timer in the normal client setup flow. The host can pause or resume the game for everyone. While paused, gameplay actions and bot turns stop. Only the host can stop the game for everyone. When the host stops the game, the player with the most prepared dishes wins.
 
-Winning can also mean that all active players have reached the configured dish goal. Players that have made an equal number of dishes can tie as winners. Before eating, the table must settle the central platter accounts and all outstanding promise-card debts. Eating begins only when every active player has exactly two own cards in the platter, exactly six own cards in their own hand, no other players' cards in their hand, no own cards in other players' hands, and no food parts remain in the platter. A cleared player may eat food parts they hold in their own inventory. Bots should settle accounts, return outstanding promise cards through food-piece swaps, and eat held food parts deterministically. The game is fully complete when all prepared food parts have been eaten.
+Winning can also mean that all active players have reached the configured dish goal. Players that have made an equal number of dishes can tie as winners. Before final food sharing, the table must settle the central platter accounts and all outstanding promise-card debts. Sharing begins automatically only when every active player has exactly two own cards in the platter, exactly six own cards in their own hand, no other players' cards in their hand, no own cards in other players' hands, and no food parts remain in the platter. Once those conditions are met, all held food bundles are treated as shared, animate into the table orbit, and the game completes without requiring a manual Share Food button.
 
 ## Visibility Rules
 
 Active players and bots cannot see other active hands or full hidden recipe state. They can see their own hand, their own recipe, the public platter, public dish counts, incoming and outgoing offers, table status, and public current-recipe help summaries for other players. A recipe-help summary contains only the recipe name and the net ingredient counts still missing after counting recipe progress and useful promise cards already in that player’s hand.
 
-Witnesses can see everything. They can zoom in and out to inspect hands, recipes, the platter, and dishes, but they cannot trade, redeem, prepare, score, or eat before the eating phase.
+Witnesses can see everything. They can zoom in and out to inspect hands, recipes, the platter, and dishes, but they cannot trade, redeem, prepare, score, or affect automatic final sharing.
 
 ## Software Architecture
 
@@ -113,7 +113,7 @@ The Godot client will be GDScript-only for Web and Android compatibility. The An
 
 `org.grassecon.recipes`
 
-Online multiplayer uses one hosted authoritative Node TypeScript server. The server owns all online game state: tables, invite codes, roles, ingredient sets, card locations, recipes, trades, platter state, redemption, dish preparation, bots, timers, visibility filtering, scoring, and eating phase.
+Online multiplayer uses one hosted authoritative Node TypeScript server. The server owns all online game state: tables, invite codes, roles, ingredient sets, card locations, recipes, trades, platter state, redemption, dish preparation, bots, timers, visibility filtering, scoring, settlement, and automatic final sharing.
 
 Online clients send intents only. The server validates every action and sends filtered snapshots back to each client. Offline mode is separate and local-only, with no remote multiplayer or witness mode.
 
@@ -187,7 +187,7 @@ The server should include focused unit and integration tests for:
 - prepared dishes create exactly 10 named food parts from the recipe catalog.
 - settlement swaps allow any held card or food part to be swapped 1:1 with any platter card or food part.
 - platter clearance requires exactly two own cards in the platter for every active player.
-- full settlement clearance also requires each active player to hold exactly six own cards, hold zero foreign cards, and have zero own cards held by other players before eating.
+- full settlement clearance also requires each active player to hold exactly six own cards, hold zero foreign cards, and have zero own cards held by other players before automatic final sharing.
 - players cannot eat until cleared, and can only eat food parts they hold.
 - generated client fixtures match the server recipe catalog and shared rule constants.
-- offline smoke/parity coverage exercises the same intent names, fixture data, hidden-information boundaries, turn mode defaults, bot-seat takeover, deposits, swaps, offers, redemption, preparation, settlement, eating, and fixed stock/dish-goal assumptions as online play.
+- offline smoke/parity coverage exercises the same intent names, fixture data, hidden-information boundaries, turn mode defaults, bot-seat takeover, deposits, swaps, offers, redemption, preparation, settlement, automatic final sharing, and fixed stock/dish-goal assumptions as online play.

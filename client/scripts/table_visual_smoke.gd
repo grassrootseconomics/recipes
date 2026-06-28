@@ -68,6 +68,7 @@ func _initialize() -> void:
 	_require(hand_card != null and hand_card.find_child("CardStackLayer_1", true, false) != null, "grouped promise cards draw a tight stack layer without changing tile size")
 	_require(visual.find_child("Title_Cooks", true, false) == null, "visual table removes the separate Cooks title")
 	_require(_has_label_containing(visual, "Amina's Actions"), "Actions panel title includes the viewing cook name")
+	_require(_action_status_labels_fit(visual), "default Actions panel status text has enough room")
 	var main_tablecloth := visual.find_child("MainTableclothPattern", true, false) as Control
 	_require(main_tablecloth != null and main_tablecloth.mouse_filter == Control.MOUSE_FILTER_IGNORE, "main table panel renders a non-interactive tiled tablecloth layer")
 	_require(main_tablecloth != null and main_tablecloth.get_parent() == visual and main_tablecloth.get_index() < 1, "main tablecloth layer stays behind table content")
@@ -356,6 +357,8 @@ func _initialize() -> void:
 	visual.debug_press_hand_ingredient("rice")
 	await process_frame
 	var selected_swap_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(_has_label_containing(visual, "Choose a needed card in basket or from another player."), "selected-card Actions panel shows the full needed-card instruction")
+	_require(_action_status_labels_fit(visual), "selected-card Actions panel instruction has enough room")
 	for action in selected_swap_actions:
 		_require(not str(action).begins_with("Swap"), "Actions panel does not show a Swap button after selecting a card")
 	visual.debug_press_platter_ingredient("beans")
@@ -384,6 +387,7 @@ func _initialize() -> void:
 	var off_turn_viewer := visual.find_child("Participant_p1", true, false)
 	_require(off_turn_viewer != null and off_turn_viewer.find_child("TurnCircle", true, false) == null, "off-turn viewer cook tile has no turn circle")
 	_require(_has_label_containing(visual, "Wait while other cooks take their turns."), "off-turn round-robin Actions panel tells the viewer to wait")
+	_require(_action_status_labels_fit(visual), "off-turn Actions panel wait text has enough room")
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
 	await _assert_start_snapshot_animates_offerings_from_empty_basket(visual)
@@ -497,6 +501,17 @@ func _initialize() -> void:
 	_require(_intents.is_empty(), "deposit card selection does not immediately mutate")
 	visual.debug_press_offer_selected_to_common_basket()
 	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "deposit", "offer to common basket emits deposit intent")
+	visual.debug_clear_selections()
+	visual.debug_flush_animations()
+	await process_frame
+	var deposit_waiting := _snapshot_fixture()
+	deposit_waiting["phase"] = "deposit"
+	deposit_waiting["currentTurnParticipantId"] = "p2"
+	deposit_waiting["participants"][0]["openingOfferingsCount"] = 2
+	visual.debug_apply_snapshot(deposit_waiting)
+	await process_frame
+	_require(_has_label_containing(visual, "Offering given. Waiting for the table."), "deposit Actions panel shows the full waiting instruction")
+	_require(_action_status_labels_fit(visual), "deposit Actions panel waiting text has enough room")
 
 	_intents.clear()
 	var swap := _snapshot_fixture()
@@ -795,11 +810,12 @@ func _initialize() -> void:
 	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Food to Share", "eating phase labels held food as food to share")
 	_require(_has_text_containing(visual, "2 left"), "eating phase shows held pieces still left")
 	_require(_has_text_containing(visual, "3 shared"), "eating phase shows food already shared")
+	_require(_has_label_containing(visual, "Food is being shared automatically."), "eating phase explains that sharing is automatic")
 	var eating_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
-	_require(eating_actions.has("Share food."), "eating phase labels the eat-all action as Share food")
-	_require(bool(visual.debug_stats.get("takeBiteEnabled", false)), "eating phase enables Share food for cleared player with held food parts")
+	_require(not eating_actions.has("Share food."), "eating phase does not show a manual Share food button")
+	_require(not bool(visual.debug_stats.get("takeBiteEnabled", true)), "eating phase keeps manual Share food disabled")
 	visual.debug_press_take_bite_action()
-	_require(_intents.size() == 1 and str(_intents[0].get("type", "")) == "bite_all", "Share food emits bite-all intent")
+	_require(_intents.is_empty(), "eating phase has no visible Share food action to emit bite-all")
 
 	_intents.clear()
 	visual.debug_apply_snapshot(snapshot)
@@ -1585,6 +1601,38 @@ func _has_label_containing(node: Node, needle: String) -> bool:
 		if label != null and label.text.find(needle) >= 0:
 			return true
 	return false
+
+
+func _action_status_labels_fit(node: Node) -> bool:
+	var checked := 0
+	for raw_child in node.find_children("ActionStatusLabel", "Label", true, false):
+		var label := raw_child as Label
+		if label == null or label.text.strip_edges() == "":
+			continue
+		checked += 1
+		var required_height := _expected_action_status_height(label.text)
+		if label.custom_minimum_size.y + 0.1 < required_height:
+			return false
+		if label.size.y + 0.1 < required_height:
+			return false
+		if label.has_method("get_line_count"):
+			var line_count := int(label.call("get_line_count"))
+			var font := label.get_theme_font("font")
+			if line_count > 0 and font != null:
+				var font_size := label.get_theme_font_size("font_size")
+				var text_height := float(font.get_height(font_size) * line_count)
+				if label.size.y + 2.0 < text_height:
+					return false
+	return checked > 0
+
+
+func _expected_action_status_height(text: String) -> float:
+	var length := text.strip_edges().length()
+	if length <= 24:
+		return 44.0
+	if length <= 42:
+		return 78.0
+	return 94.0
 
 
 func _progress_node_matches(node: Node, filled: int, total: int) -> bool:
@@ -2652,7 +2700,7 @@ func _final_eating_after() -> Dictionary:
 	snapshot["currentTurnParticipantId"] = ""
 	snapshot["ownFoodParts"] = []
 	snapshot["transactionHistory"] = [
-		{"id": "tx_final_eat_1", "turn": 19, "participantId": "p1", "name": "Amina", "action": "Eat", "counterparty": "Amina", "itemOut": "Cheese Frittata slice", "itemBack": "Eaten"}
+		{"id": "tx_final_share_1", "turn": 19, "participantId": "p1", "name": "Amina", "action": "Share", "counterparty": "Amina", "itemOut": "Cheese Frittata slice x1", "itemBack": "Shared"}
 	]
 	snapshot["transactionTotal"] = 1
 	snapshot["gameStats"] = {"playerTurnCount": 18, "cycleCount": 2.25, "eatCount": 10}
@@ -2687,7 +2735,7 @@ func _public_final_eating_after() -> Dictionary:
 	snapshot["participants"][1]["heldFoodPartCount"] = 0
 	snapshot["participants"][1]["heldFoodPartGroups"] = []
 	snapshot["transactionHistory"] = [
-		{"id": "tx_public_final_eat_1", "turn": 22, "participantId": "p2", "name": "Ben", "action": "Eat", "counterparty": "Ben", "itemOut": "Bean Dip scoop", "itemBack": "Eaten"}
+		{"id": "tx_public_final_share_1", "turn": 22, "participantId": "p2", "name": "Ben", "action": "Share", "counterparty": "Ben", "itemOut": "Bean Dip scoop x1", "itemBack": "Shared"}
 	]
 	snapshot["transactionTotal"] = 1
 	snapshot["gameStats"] = {"playerTurnCount": 21, "cycleCount": 2.5, "eatCount": 10}

@@ -1856,6 +1856,7 @@ function eatDishPart(table: Table, actor: Participant, dish: Dish, part: DishPar
 function completeIfAllFoodPartsEaten(table: Table): void {
   if (Object.values(table.dishParts ?? {}).every((candidate) => candidate.location.type === "eaten")) {
     table.phase = "complete";
+    table.currentTurnParticipantId = undefined;
   }
 }
 
@@ -2144,7 +2145,68 @@ function advanceSettlementIfReady(table: Table): void {
   if (platterDishPartIds(table).length > 0) {
     return;
   }
-  table.phase = Object.values(table.dishParts ?? {}).some((part) => part.location.type !== "eaten") ? "eating" : "complete";
+  shareAllHeldFoodParts(table);
+  completeIfAllFoodPartsEaten(table);
+}
+
+function shareAllHeldFoodParts(table: Table): void {
+  const activeIds = new Set(activeParticipants(table).map((participant) => participant.id));
+  const heldPartsByActorAndDish = new Map<string, { actor: Participant; dish: Dish; parts: DishPart[] }>();
+  const heldParts: Array<{ holderId: string; part: DishPart }> = [];
+  for (const part of Object.values(table.dishParts ?? {})) {
+    if (part.location.type !== "inventory") {
+      continue;
+    }
+    const holderId = part.location.participantId;
+    if (!holderId || !activeIds.has(holderId)) {
+      continue;
+    }
+    heldParts.push({ holderId, part });
+  }
+  heldParts.sort((left, right) => {
+    const holderOrder = table.participantOrder.indexOf(left.holderId) - table.participantOrder.indexOf(right.holderId);
+    return holderOrder !== 0 ? holderOrder : left.part.id.localeCompare(right.part.id);
+  });
+
+  for (const { holderId, part } of heldParts) {
+    const actor = table.participants[holderId];
+    const dish = table.dishes[part.dishId];
+    if (!actor || actor.role !== "active" || !dish) {
+      continue;
+    }
+    const key = `${actor.id}|${dish.id}`;
+    const group = heldPartsByActorAndDish.get(key) ?? { actor, dish, parts: [] };
+    group.parts.push(part);
+    heldPartsByActorAndDish.set(key, group);
+  }
+
+  for (const group of heldPartsByActorAndDish.values()) {
+    shareDishPartBundle(table, group.actor, group.dish, group.parts);
+  }
+}
+
+function shareDishPartBundle(table: Table, actor: Participant, dish: Dish, parts: DishPart[]): void {
+  if (parts.length === 0) {
+    return;
+  }
+  const biteCounts = dish.biteCounts ?? {};
+  dish.biteCounts = biteCounts;
+  for (const part of parts) {
+    part.location = { type: "eaten", participantId: actor.id };
+  }
+  dish.partsEaten = (dish.partsEaten ?? 0) + parts.length;
+  dish.partsRemaining = Math.max(0, (dish.partsRemaining ?? dish.bitesRemaining ?? 0) - parts.length);
+  dish.bitesRemaining = dish.partsRemaining;
+  biteCounts[actor.id] = (biteCounts[actor.id] ?? 0) + parts.length;
+  const firstPart = parts[0] as DishPart;
+  recordTransaction(
+    table,
+    actor,
+    "Share",
+    actor.name,
+    `${platterAssetLabel({ kind: "dish_part", value: firstPart })} x${parts.length}`,
+    "Shared"
+  );
 }
 
 function enterEndgamePhase(table: Table): void {

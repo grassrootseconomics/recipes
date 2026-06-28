@@ -44,6 +44,9 @@ const INVENTORY_LOWER_PANEL_MIN_HEIGHT := 232
 const INVENTORY_SURFACE_MIN_HEIGHT := INVENTORY_UPPER_PANEL_MIN_HEIGHT + INVENTORY_LOWER_PANEL_MIN_HEIGHT + 6
 const ACTION_PANEL_MIN_WIDTH := 286
 const ACTION_PANEL_FIXED_HEIGHT := INVENTORY_UPPER_PANEL_MIN_HEIGHT - INVENTORY_SECTION_MARGIN_Y * 2
+const ACTION_LABEL_SHORT_HEIGHT := 44
+const ACTION_LABEL_MEDIUM_HEIGHT := 78
+const ACTION_LABEL_LONG_HEIGHT := 94
 const COMPLETE_ACTION_FIREWORKS_SIZE := Vector2(210, 68)
 const LANDSCAPE_MIN_AVAILABLE_WIDTH := 1060.0
 const LANDSCAPE_MIN_ASPECT := 1.25
@@ -106,6 +109,10 @@ const MAX_PENDING_VISUAL_SNAPSHOTS := 32
 const PREPARE_ANNOUNCEMENT_HOLD_SECONDS := 2.05
 const COMPLETE_FOOD_ORBIT_MIN_ITEMS := 8
 const COMPLETE_FOOD_ORBIT_MAX_ITEMS := 16
+const COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS := 0.42
+const COMPLETE_ORBIT_LAUNCH_SETTLE_SECONDS := 0.05
+const COMPLETE_ORBIT_LAUNCH_FADE_SECONDS := 0.07
+const COMPLETE_ORBIT_LAUNCH_EVENT_SECONDS := 0.58
 const ANIMATION_POINT_BOUNDS_PADDING := 96.0
 const ANIMATION_POINT_ORIGIN_EPSILON := 1.0
 
@@ -2082,6 +2089,7 @@ func _render_settlement_action_controls() -> void:
 
 
 func _render_eating_action_controls() -> void:
+	debug_stats["takeBiteEnabled"] = false
 	var viewer := _participant_by_id(_viewer_id())
 	if not bool(viewer.get("cleared", false)):
 		_redeem_box.add_child(_action_label("Return promise cards before sharing food."))
@@ -2093,11 +2101,7 @@ func _render_eating_action_controls() -> void:
 		else:
 			_redeem_box.add_child(_action_label("All food is shared. Finishing the table."))
 		return
-	_redeem_box.add_child(_action_label("Ready to share."))
-	var button := _action_button("Share food.", _take_bite_action)
-	button.disabled = not _can_act_now("eating")
-	debug_stats["takeBiteEnabled"] = not button.disabled
-	_redeem_box.add_child(button)
+	_redeem_box.add_child(_action_label("Food is being shared automatically."))
 
 
 func _render_complete_action_controls() -> void:
@@ -2123,8 +2127,8 @@ func _viewer_has_finished_dish_goal() -> bool:
 
 func _finished_dishes_help_label() -> Label:
 	var label := _action_label("Help the other cooks make their dishes.")
-	label.fixed_minimum_size = Vector2(206, 74)
-	label.custom_minimum_size = Vector2(206, 74)
+	label.fixed_minimum_size = Vector2(206, ACTION_LABEL_MEDIUM_HEIGHT)
+	label.custom_minimum_size = Vector2(206, ACTION_LABEL_MEDIUM_HEIGHT)
 	return label
 
 
@@ -2437,6 +2441,10 @@ func _clear_complete_food_orbit(clear_shared_items := true) -> void:
 
 
 func _complete_food_orbit_items() -> Array:
+	if str(_snapshot.get("phase", "")) == "complete":
+		var snapshot_items := _complete_food_orbit_items_for_snapshot(_snapshot)
+		if not snapshot_items.is_empty():
+			return snapshot_items
 	if not _shared_food_orbit_items.is_empty():
 		return _shared_food_orbit_items.duplicate(true)
 	return _complete_food_orbit_items_for_snapshot(_snapshot)
@@ -2700,7 +2708,7 @@ func _derive_game_stats() -> Dictionary:
 		if _transaction_asset_is_food_piece(str(transaction.get("itemOut", ""))) or _transaction_asset_is_food_piece(str(transaction.get("itemBack", ""))):
 			food_piece_settlement_swaps += 1
 	var asset_loss_count := _derive_asset_loss_count()
-	var productivity_count := _count_transactions(history, "Eat")
+	var productivity_count := _count_transactions(history, "Share") + _count_transactions(history, "Eat")
 	var interaction_count := history.size() - pass_turns
 	var common_basket_swaps := _count_transactions(history, "Swap")
 	var direct_exchanges := _count_transactions(history, "Exchange")
@@ -2862,7 +2870,7 @@ func _derive_settlement_time_turns(history: Array) -> int:
 		return 0
 	for raw_transaction in history:
 		var transaction: Dictionary = raw_transaction
-		if str(transaction.get("action", "")) == "Eat" and int(transaction.get("turn", 0)) >= last_prepare_turn:
+		if ["Share", "Eat"].has(str(transaction.get("action", ""))) and int(transaction.get("turn", 0)) >= last_prepare_turn:
 			return maxi(0, int(transaction.get("turn", 0)) - last_prepare_turn)
 	var phase := str(_snapshot.get("phase", ""))
 	if phase == "settlement" or phase == "eating" or phase == "complete":
@@ -3427,19 +3435,7 @@ func _on_inventory_food_group_pressed(group: Dictionary) -> void:
 
 
 func _take_bite_action() -> void:
-	if not _can_act_now("eating"):
-		status_requested.emit("This is not your turn.")
-		return
-	var viewer := _participant_by_id(_viewer_id())
-	if not bool(viewer.get("cleared", false)):
-		status_requested.emit("Return all promise cards before sharing food.")
-		return
-	var groups := _food_part_group_options(_snapshot.get("ownFoodParts", []))
-	if groups.is_empty():
-		status_requested.emit("You have shared all your food.")
-		return
-	intent_requested.emit({"type": "bite_all"})
-	status_requested.emit("Sharing food!")
+	status_requested.emit("Food is shared automatically.")
 
 
 func _try_settlement_swap() -> void:
@@ -5038,7 +5034,7 @@ func _transaction_order_for_event(event: Dictionary, rows: Array) -> int:
 		"public_prepare":
 			return _transaction_order_by_action(rows, ["Prepare"], str(event.get("participantId", "")), "")
 		"eat":
-			return _transaction_order_by_action(rows, ["Eat", "Bite"], str(event.get("participantId", _viewer_id())), "")
+			return _transaction_order_by_action(rows, ["Share", "Eat", "Bite"], str(event.get("participantId", _viewer_id())), "")
 		"turn":
 			return _transaction_order_by_action(rows, ["Pass Turn"], "", str(event.get("participantId", "")))
 		_:
@@ -6323,7 +6319,7 @@ func _grouped_share_events_from_transactions(previous_snapshot: Dictionary, curr
 	var order: Array[String] = []
 	for raw_transaction in _new_transactions(previous_snapshot, current_snapshot):
 		var transaction: Dictionary = raw_transaction
-		if not ["Eat", "Bite"].has(str(transaction.get("action", ""))):
+		if not ["Share", "Eat", "Bite"].has(str(transaction.get("action", ""))):
 			continue
 		var participant_id := str(transaction.get("participantId", ""))
 		if participant_id == "":
@@ -6398,7 +6394,7 @@ func _detect_complete_events(previous_snapshot: Dictionary, current_snapshot: Di
 func _snapshot_has_eating_transition(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> bool:
 	for raw_transaction in _new_transactions(previous_snapshot, current_snapshot):
 		var transaction: Dictionary = raw_transaction
-		if ["Eat", "Bite"].has(str(transaction.get("action", ""))):
+		if ["Share", "Eat", "Bite"].has(str(transaction.get("action", ""))):
 			return true
 	if previous_snapshot.get("ownFoodParts", []).size() > current_snapshot.get("ownFoodParts", []).size():
 		return true
@@ -7145,7 +7141,7 @@ func _animate_eat_to_complete_orbit(event: Dictionary) -> float:
 	_animate_texture_to_complete_orbit(texture, start, target, int(event.get("completeOrbitRevealCount", items.size())), items)
 	if _is_usable_animation_point(start):
 		_emit_sparkles(start, 8, Color(0.95, 0.62, 0.34))
-	return 0.98
+	return COMPLETE_ORBIT_LAUNCH_EVENT_SECONDS
 
 
 func _animate_texture_to_complete_orbit(texture: Texture2D, global_start: Vector2, global_end: Vector2, reveal_count: int, orbit_items: Array) -> void:
@@ -7173,10 +7169,10 @@ func _animate_texture_to_complete_orbit(texture: Texture2D, global_start: Vector
 	icon.position = _animation_local(start) - icon_size * 0.5
 
 	var tween := create_tween()
-	tween.tween_property(icon, "position", _animation_local(finish) - icon_size * 0.5, 0.72).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tween.parallel().tween_property(icon, "scale", Vector2(1.12, 1.12), 0.36).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tween.tween_property(icon, "scale", Vector2(0.96, 0.96), 0.08).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-	tween.parallel().tween_property(icon, "modulate", Color(1.0, 1.0, 1.0, 0.0), 0.10)
+	tween.tween_property(icon, "position", _animation_local(finish) - icon_size * 0.5, COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	tween.parallel().tween_property(icon, "scale", Vector2(1.12, 1.12), COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS * 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.tween_property(icon, "scale", Vector2(0.96, 0.96), COMPLETE_ORBIT_LAUNCH_SETTLE_SECONDS).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tween.parallel().tween_property(icon, "modulate", Color(1.0, 1.0, 1.0, 0.0), COMPLETE_ORBIT_LAUNCH_FADE_SECONDS)
 	tween.tween_callback(func() -> void:
 		_reveal_complete_orbit_items(reveal_count, orbit_items)
 		if is_instance_valid(icon):
@@ -9530,16 +9526,27 @@ func _muted_label(text: String) -> Label:
 
 func _action_label(text: String) -> FixedLabel:
 	var label := FixedLabel.new()
+	label.name = "ActionStatusLabel"
 	label.text = text
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.add_theme_color_override("font_color", TEXT_MUTED)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.fixed_minimum_size = Vector2(206, 54)
-	label.custom_minimum_size = Vector2(206, 54)
+	var label_height := _action_label_height(text)
+	label.fixed_minimum_size = Vector2(206, label_height)
+	label.custom_minimum_size = Vector2(206, label_height)
 	label.clip_text = true
 	return label
+
+
+func _action_label_height(text: String) -> int:
+	var length := text.strip_edges().length()
+	if length <= 24:
+		return ACTION_LABEL_SHORT_HEIGHT
+	if length <= 42:
+		return ACTION_LABEL_MEDIUM_HEIGHT
+	return ACTION_LABEL_LONG_HEIGHT
 
 
 func _offer_popup_title(text: String) -> Label:

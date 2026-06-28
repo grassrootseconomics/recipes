@@ -28,7 +28,7 @@ func _initialize() -> void:
 	_regression_same_card_offer_rejected(store)
 	_regression_stock_depleted_cards_not_usable(store)
 	_regression_lifecycle(store)
-	_regression_eating_turn_skips_empty_hands(store)
+	_regression_auto_share_skips_manual_eating(store)
 	_regression_settlement_requires_returned_promise_cards(store)
 	_regression_bot_settlement_avoids_food_part_cycle(store)
 	_regression_bot_settlement_shortfall_extra_own_card(store)
@@ -194,10 +194,11 @@ func _regression_settlement_requires_returned_promise_cards(store: Node) -> void
 	owner_public = _public_participant(store.latest_snapshot, owner_id)
 	_require(bool(holder_public.get("cleared", false)) and int(holder_public.get("foreignCardsInHand", 0)) == 0, "holder settles after returning foreign card")
 	_require(bool(owner_public.get("cleared", false)) and int(owner_public.get("ownCardsInOtherHands", 0)) == 0, "owner settles after own card returns to basket")
-	_require(str(store.table.get("phase", "")) == "eating", "offline settlement enters eating only after cards are returned")
+	_require(str(store.table.get("phase", "")) == "complete", "offline settlement auto-shares food after cards are returned")
+	_require(_inventory_dish_parts(store, holder_id).is_empty(), "holder food is shared automatically")
 
 
-func _regression_eating_turn_skips_empty_hands(store: Node) -> void:
+func _regression_auto_share_skips_manual_eating(store: Node) -> void:
 	_setup_round_robin_table(store)
 	for participant_id in ["p1", "p2"]:
 		_complete_recipe(store, participant_id)
@@ -209,16 +210,10 @@ func _regression_eating_turn_skips_empty_hands(store: Node) -> void:
 	_force_all_accounts_cleared(store)
 	store._enter_settlement_phase()
 	store._advance_settlement_if_ready()
-	_require(str(store.table.get("phase", "")) == "eating", "eating skip table enters eating")
-	_require(_inventory_dish_parts(store, "p1").size() > 0, "p1 has food before eating")
-	_require(_inventory_dish_parts(store, "p2").size() > 0, "p2 has food before eating")
-	_require(_inventory_dish_parts(store, "p3").is_empty(), "p3 has no food before eating")
-	store.table["currentTurnParticipantId"] = "p1"
-	_require(store.handle_intent({"type": "bite_all"}, "p1"), "p1 bite-all succeeds: %s" % _last_error)
-	_require(_inventory_dish_parts(store, "p1").is_empty(), "p1 has no food after bite-all")
-	_require(str(store.table.get("currentTurnParticipantId", "")) == "p2", "eating turn skips empty hands and advances to next eater")
-	_require(store.handle_intent({"type": "bite_all"}, "p2"), "p2 bite-all succeeds: %s" % _last_error)
-	_require(str(store.table.get("phase", "")) == "complete", "final bite-all completes offline table")
+	_require(str(store.table.get("phase", "")) == "complete", "settlement auto-shares food instead of entering manual eating")
+	_require(_inventory_dish_parts(store, "p1").is_empty(), "p1 food is shared automatically")
+	_require(_inventory_dish_parts(store, "p2").is_empty(), "p2 food is shared automatically")
+	_require(_inventory_dish_parts(store, "p3").is_empty(), "p3 still has no food")
 	_require(str(store.table.get("currentTurnParticipantId", "")) == "", "complete offline table clears current turn")
 
 
@@ -337,7 +332,7 @@ func _regression_bot_settlement_direct_offer_for_food_piece(store: Node) -> void
 	)
 	_require(bool(_public_participant(store.latest_snapshot, owner_id).get("cleared", false)), "owner clears after direct card return")
 	_require(bool(_public_participant(store.latest_snapshot, holder_id).get("cleared", false)), "holder clears after direct card return")
-	_require(str(store.table.get("phase", "")) == "eating", "direct settlement exchange can advance to eating")
+	_require(str(store.table.get("phase", "")) == "complete", "direct settlement exchange auto-shares food after clearing")
 
 
 func _regression_redeem_all_and_pass_turn(store: Node) -> void:
@@ -854,11 +849,9 @@ func _assert_settlement_and_eating(store: Node, maker_id: String, dish_id: Strin
 	_require(int(_public_participant(store.latest_snapshot, maker_id).get("ownCardsInPlatter", 0)) == 2, "maker account is cleared")
 	store.table["dishParts"][str(part.get("id", ""))]["location"] = {"type": "inventory", "participantId": maker_id}
 	store._advance_settlement_if_ready()
-	_require(str(store.table.get("phase", "")) == "eating", "cleared table enters eating")
-	var before_remaining := int(store.table["dishes"][dish_id].get("partsRemaining", 0))
-	var held_parts := _inventory_dish_parts(store, maker_id)
-	_require(store.handle_intent({"type": "bite_all"}, maker_id), "cleared maker can eat all held pieces: %s" % _last_error)
-	_require(int(store.table["dishes"][dish_id].get("partsRemaining", 0)) == before_remaining - held_parts.size(), "bite-all decrements dish parts once per held piece")
+	_require(str(store.table.get("phase", "")) == "complete", "cleared table auto-shares food")
+	_require(_inventory_dish_parts(store, maker_id).is_empty(), "maker held pieces are shared automatically")
+	_require(int(store.table["dishes"][dish_id].get("partsRemaining", 0)) == 0, "auto-share decrements dish parts once per held piece")
 
 
 func _force_all_accounts_cleared(store: Node) -> void:

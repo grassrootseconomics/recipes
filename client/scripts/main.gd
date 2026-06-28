@@ -2423,7 +2423,7 @@ func _action_color(action: String) -> Color:
 			return Color(0.18, 0.40, 0.82)
 		"Prepare":
 			return Color(0.63, 0.34, 0.12)
-		"Eat":
+		"Share", "Eat":
 			return Color(0.70, 0.26, 0.42)
 		"Pass Turn":
 			return Color(0.30, 0.36, 0.46)
@@ -4474,7 +4474,7 @@ func _add_playing_controls(snapshot: Dictionary) -> void:
 
 func _add_settlement_controls(snapshot: Dictionary) -> void:
 	_add_pass_turn_button(snapshot)
-	_phase_controls.add_child(_wrapped_label("Settlement: clear the central platter before eating."))
+	_phase_controls.add_child(_wrapped_label("Settlement: clear the central platter before sharing food."))
 	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
 	_hand_controls.add_child(_wrapped_label("Your inventory\n%s" % _format_inventory_assets(snapshot)))
 	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
@@ -4552,30 +4552,22 @@ func _add_eating_controls(snapshot: Dictionary) -> void:
 	_hand_controls.add_child(_wrapped_label("Your inventory\n%s" % _format_inventory_assets(snapshot)))
 	_platter_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
 	_platter_controls.add_child(_wrapped_label("%s\n%s" % [_platter_title(snapshot), _format_platter_assets(snapshot)]))
-	_offer_controls.add_child(_wrapped_label("Offers are closed during eating."))
+	_offer_controls.add_child(_wrapped_label("Offers are closed during final sharing."))
 	if snapshot.get("phase", "") == "complete":
-		_dish_controls.add_child(_wrapped_label("All food parts have been eaten."))
+		_dish_controls.add_child(_wrapped_label("All food has been shared."))
 		return
 	var viewer := _participant_by_id(snapshot, str(snapshot.get("viewerParticipantId", "")))
 	if not bool(viewer.get("cleared", false)):
-		_dish_controls.add_child(_wrapped_label("Clear your central platter account before eating."))
+		_dish_controls.add_child(_wrapped_label("Clear your central platter account before sharing food."))
 		_dish_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
+		return
+	_dish_controls.add_child(_wrapped_label("Food is being shared automatically."))
 	for raw_dish in snapshot.get("dishes", []):
 		var dish: Dictionary = raw_dish
 		var parts := int(dish.get("partsRemaining", dish.get("bitesRemaining", 0)))
 		var unit := _unit_for_count(dish, parts)
 		var label := "%s: %s %s left" % [dish.get("name", "Dish"), parts, unit]
-		if parts > 0:
-			var can_bite := _viewer_can_bite_dish(snapshot, dish)
-			var bite_button := _button("Eat %s" % label, func(d: Dictionary = dish) -> void:
-				RecipesClient.send_intent({"type": "bite", "dishId": d.get("id", "")})
-			)
-			bite_button.disabled = not can_bite
-			if not can_bite:
-				bite_button.text = "Cannot eat yet: %s" % label
-			_dish_controls.add_child(bite_button)
-		else:
-			_dish_controls.add_child(_wrapped_label(label))
+		_dish_controls.add_child(_wrapped_label(label))
 
 
 func _add_dish_summary_controls(snapshot: Dictionary) -> void:
@@ -4604,7 +4596,7 @@ func _add_transaction_history_controls(snapshot: Dictionary, target: VBoxContain
 		target.add_child(_wrapped_label("Transaction history is not available from this server. Rebuild and restart the server, then create a new table."))
 		return
 	if transactions.is_empty():
-		target.add_child(_wrapped_label("No successful transactions yet. Deposits, swaps, exchanges, redemptions, preparation, settlement, and eating will appear here."))
+		target.add_child(_wrapped_label("No successful transactions yet. Deposits, swaps, exchanges, redemptions, preparation, settlement, and sharing will appear here."))
 		return
 	if not history_complete:
 		target.add_child(_wrapped_label("Showing latest %s of %s transactions in this live witness view." % [
@@ -5388,7 +5380,7 @@ func _transaction_history_label(snapshot: Dictionary) -> String:
 		return "Transaction history is not available from this server. Rebuild and restart the server, then create a new table."
 	var transactions: Array = snapshot.get("transactionHistory", [])
 	if transactions.is_empty():
-		return "No successful transactions yet. Deposits, swaps, exchanges, redemptions, preparation, settlement, and eating will appear here."
+		return "No successful transactions yet. Deposits, swaps, exchanges, redemptions, preparation, settlement, and sharing will appear here."
 	var lines: Array[String] = ["Turn | Name | Action | Counterparty | Item out | Item back"]
 	for raw_transaction in _transactions_newest_first(transactions):
 		var transaction: Dictionary = raw_transaction
@@ -6408,7 +6400,7 @@ func _phase_label(phase: String) -> String:
 		"settlement":
 			return "Settlement"
 		"eating":
-			return "Eating"
+			return "Sharing"
 		"complete":
 			return "Complete"
 		_:

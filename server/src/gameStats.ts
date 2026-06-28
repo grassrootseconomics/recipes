@@ -13,7 +13,7 @@ export function computeGameStats(table: Table): GameStats {
   const settlementRows = history.filter((transaction) => transaction.action === "Settlement Swap");
   const settlementSwapCount = settlementRows.length;
   const assetLossCount = countConsumedRealIngredients(table);
-  const productivityCount = countAction(history, "Eat");
+  const productivityCount = countAction(history, "Share") + countAction(history, "Eat");
   const totalTrades = commonBasketSwapCount + directExchangeCount + settlementSwapCount;
   return {
     activePlayerCount,
@@ -170,7 +170,7 @@ function computeSettlementTimeTurns(table: Table, history: TransactionRecord[]):
   if (lastPrepareTurn === undefined) {
     return 0;
   }
-  const firstEat = history.find((transaction) => transaction.action === "Eat" && transaction.turn >= lastPrepareTurn);
+  const firstEat = history.find((transaction) => (transaction.action === "Share" || transaction.action === "Eat") && transaction.turn >= lastPrepareTurn);
   if (firstEat) {
     return Math.max(0, firstEat.turn - lastPrepareTurn);
   }

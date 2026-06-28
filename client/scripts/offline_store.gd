@@ -958,16 +958,11 @@ func _bite(actor: Dictionary, dish_id: String) -> bool:
 	var part := _first_dish_part_in_inventory(dish_id, str(actor.get("id", "")))
 	if part.is_empty():
 		return _fail("You do not hold any uneaten parts of this dish.")
-	part["location"] = {"type": "eaten", "participantId": actor.get("id", "")}
-	dish["partsEaten"] = int(dish.get("partsEaten", 0)) + 1
-	dish["partsRemaining"] = maxi(0, int(dish.get("partsRemaining", 0)) - 1)
-	dish["bitesRemaining"] = int(dish.get("partsRemaining", 0))
-	var bites: Dictionary = dish.get("biteCounts", {})
-	bites[str(actor.get("id", ""))] = int(bites.get(str(actor.get("id", "")), 0)) + 1
-	dish["biteCounts"] = bites
-	_record_transaction(actor, "Eat", str(actor.get("name", "")), _asset_label({"kind": "dish_part", "value": part}), "Eaten")
+	if not _share_food_part(actor, part):
+		return false
 	if _all_dish_parts_eaten():
 		table["phase"] = "complete"
+		table["currentTurnParticipantId"] = ""
 	return true
 
 
@@ -981,23 +976,29 @@ func _bite_all(actor: Dictionary) -> bool:
 		return _fail("You do not hold any uneaten food parts.")
 	for raw_part in held_parts:
 		var part: Dictionary = raw_part
-		var dish_id := str(part.get("dishId", ""))
-		var dish: Dictionary = table.get("dishes", {}).get(dish_id, {})
-		if dish.is_empty():
-			return _fail("Dish not found.")
-		part["location"] = {"type": "eaten", "participantId": actor.get("id", "")}
-		dish["partsEaten"] = int(dish.get("partsEaten", 0)) + 1
-		dish["partsRemaining"] = maxi(0, int(dish.get("partsRemaining", 0)) - 1)
-		dish["bitesRemaining"] = int(dish.get("partsRemaining", 0))
-		var bites: Dictionary = dish.get("biteCounts", {})
-		bites[str(actor.get("id", ""))] = int(bites.get(str(actor.get("id", "")), 0)) + 1
-		dish["biteCounts"] = bites
-		_record_transaction(actor, "Eat", str(actor.get("name", "")), _asset_label({"kind": "dish_part", "value": part}), "Eaten")
+		if not _share_food_part(actor, part):
+			return false
 	if _all_dish_parts_eaten():
 		table["phase"] = "complete"
 		table["currentTurnParticipantId"] = ""
 	else:
 		_advance_turn(str(actor.get("id", "")))
+	return true
+
+
+func _share_food_part(actor: Dictionary, part: Dictionary) -> bool:
+	var dish_id := str(part.get("dishId", ""))
+	var dish: Dictionary = table.get("dishes", {}).get(dish_id, {})
+	if dish.is_empty():
+		return _fail("Dish not found.")
+	part["location"] = {"type": "eaten", "participantId": actor.get("id", "")}
+	dish["partsEaten"] = int(dish.get("partsEaten", 0)) + 1
+	dish["partsRemaining"] = maxi(0, int(dish.get("partsRemaining", 0)) - 1)
+	dish["bitesRemaining"] = int(dish.get("partsRemaining", 0))
+	var bites: Dictionary = dish.get("biteCounts", {})
+	bites[str(actor.get("id", ""))] = int(bites.get(str(actor.get("id", "")), 0)) + 1
+	dish["biteCounts"] = bites
+	_record_transaction(actor, "Eat", str(actor.get("name", "")), _asset_label({"kind": "dish_part", "value": part}), "Eaten")
 	return true
 
 
@@ -1162,7 +1163,7 @@ func _game_stats() -> Dictionary:
 		if _transaction_asset_is_food_piece(str(transaction.get("itemOut", ""))) or _transaction_asset_is_food_piece(str(transaction.get("itemBack", ""))):
 			food_piece_settlement_swaps += 1
 	var asset_loss_count := _asset_loss_count(active_participants)
-	var productivity_count := _count_transactions(history, "Eat")
+	var productivity_count := _count_transactions(history, "Share") + _count_transactions(history, "Eat")
 	var total_trades := common_basket_swaps + direct_exchanges + settlement_swaps
 	var hoarding := _hoarding_index()
 	return {
@@ -1336,7 +1337,7 @@ func _settlement_time_turns(history: Array) -> int:
 		return 0
 	for raw_transaction in history:
 		var transaction: Dictionary = raw_transaction
-		if str(transaction.get("action", "")) == "Eat" and int(transaction.get("turn", 0)) >= last_prepare_turn:
+		if ["Share", "Eat"].has(str(transaction.get("action", ""))) and int(transaction.get("turn", 0)) >= last_prepare_turn:
 			return maxi(0, int(transaction.get("turn", 0)) - last_prepare_turn)
 	var phase := str(table.get("phase", ""))
 	if phase == "settlement" or phase == "eating" or phase == "complete":
@@ -1940,7 +1941,48 @@ func _advance_settlement_if_ready() -> void:
 			return
 	if not _platter_dish_parts().is_empty():
 		return
-	table["phase"] = "eating" if not _all_dish_parts_eaten() else "complete"
+	_share_all_held_food_parts()
+	if _all_dish_parts_eaten():
+		table["phase"] = "complete"
+		table["currentTurnParticipantId"] = ""
+
+
+func _share_all_held_food_parts() -> void:
+	for participant in _active_participants():
+		var groups := {}
+		for raw_part in _inventory_dish_parts(str(participant.get("id", ""))):
+			var part: Dictionary = raw_part
+			var dish_id := str(part.get("dishId", ""))
+			if dish_id == "":
+				continue
+			if not groups.has(dish_id):
+				groups[dish_id] = []
+			var parts: Array = groups[dish_id]
+			parts.append(part)
+			groups[dish_id] = parts
+		for dish_id in groups.keys():
+			_share_food_part_bundle(participant, groups[dish_id])
+
+
+func _share_food_part_bundle(actor: Dictionary, parts: Array) -> bool:
+	if parts.is_empty():
+		return true
+	var first_part: Dictionary = parts[0]
+	var dish_id := str(first_part.get("dishId", ""))
+	var dish: Dictionary = table.get("dishes", {}).get(dish_id, {})
+	if dish.is_empty():
+		return _fail("Dish not found.")
+	for raw_part in parts:
+		var part: Dictionary = raw_part
+		part["location"] = {"type": "eaten", "participantId": actor.get("id", "")}
+	dish["partsEaten"] = int(dish.get("partsEaten", 0)) + parts.size()
+	dish["partsRemaining"] = maxi(0, int(dish.get("partsRemaining", 0)) - parts.size())
+	dish["bitesRemaining"] = int(dish.get("partsRemaining", 0))
+	var bites: Dictionary = dish.get("biteCounts", {})
+	bites[str(actor.get("id", ""))] = int(bites.get(str(actor.get("id", "")), 0)) + parts.size()
+	dish["biteCounts"] = bites
+	_record_transaction(actor, "Share", str(actor.get("name", "")), "%s x%s" % [_asset_label({"kind": "dish_part", "value": first_part}), parts.size()], "Shared")
+	return true
 
 
 func _set_paused(paused: bool) -> void:

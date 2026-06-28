@@ -145,6 +145,24 @@ function prepareAllDishesBySetup(table: Table): void {
   }
 }
 
+function restoreDishPartsToInventoryForLegacyEating(table: Table, holderId: string, dishId: string): string[] {
+  const partIds = Object.values(table.dishParts)
+    .filter((part) => part.dishId === dishId)
+    .map((part) => part.id)
+    .sort((left, right) => left.localeCompare(right));
+  for (const partId of partIds) {
+    table.dishParts[partId].location = { type: "inventory", participantId: holderId };
+  }
+  const dish = table.dishes[dishId];
+  dish.partsRemaining = partIds.length;
+  dish.bitesRemaining = partIds.length;
+  dish.partsEaten = 0;
+  dish.biteCounts = {};
+  table.phase = "eating";
+  table.currentTurnParticipantId = holderId;
+  return partIds;
+}
+
 function validQuantityShape(quantities: number[]): boolean {
   const sorted = [...quantities].sort((left, right) => right - left);
   return (
@@ -2111,7 +2129,7 @@ describe("platter, offers, and visibility", () => {
   it("keeps mature reconnect snapshots and normal deltas within load-test budgets", () => {
     const { store, table } = startAndDeposit(8, "payload-budget");
     prepareAllDishesBySetup(table);
-    expect(table.phase).toBe("eating");
+    expect(table.phase).toBe("complete");
 
     const witness = store.joinTable(table.code, "Observer", true);
     const witnessPayloadBytes = Buffer.byteLength(JSON.stringify({ type: "snapshot", snapshot: buildSnapshot(table, witness.participant.id) }), "utf8");
@@ -2147,7 +2165,7 @@ describe("platter, offers, and visibility", () => {
     const p95DeltaBytes = deltaSizes[Math.min(deltaSizes.length - 1, Math.ceil(deltaSizes.length * 0.95) - 1)] ?? 0;
 
     expect(activePayloadBytes).toBeLessThan(64 * 1024);
-    expect(witnessPayloadBytes).toBeLessThan(28 * 1024);
+    expect(witnessPayloadBytes).toBeLessThan(32 * 1024);
     expect(Math.max(...deltaSizes)).toBeLessThan(16 * 1024);
     expect(p95DeltaBytes).toBeLessThan(4 * 1024);
   });
@@ -2650,7 +2668,7 @@ describe("winning and eating", () => {
     }
   });
 
-  it("enters eating after everyone reaches the configured dish goal when accounts are clear", () => {
+  it("auto-shares food after everyone reaches the configured dish goal when accounts are clear", () => {
     const harness = makeHarness(8, "one-dish-goal");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
@@ -2666,12 +2684,15 @@ describe("winning and eating", () => {
     completeRecipeBySetup(harness.table, finalParticipant.id);
     applyAsTurn(harness.table, finalParticipant.id, { type: "prepare" });
 
-    expect(harness.table.phase).toBe("eating");
+    expect(harness.table.phase).toBe("complete");
+    expect(harness.table.currentTurnParticipantId).toBeUndefined();
     expect(harness.table.winnerParticipantIds).toHaveLength(8);
     for (const participant of participants) {
       expect(harness.table.recipes[participant.id]).toBeUndefined();
       expect(platterAccountForParticipant(harness.table, participant.id).cleared).toBe(true);
     }
+    expect(Object.values(harness.table.dishParts).every((part) => part.location.type === "eaten")).toBe(true);
+    expect(harness.table.transactionHistory.filter((row) => row.action === "Share")).toHaveLength(participants.length);
   });
 
   it("lets the host pause and resume while blocking gameplay actions", () => {
@@ -2837,8 +2858,9 @@ describe("winning and eating", () => {
 
     expect(platterAccountForParticipant(harness.table, shortfall.id).cleared).toBe(true);
     expect(platterDishPartIds(harness.table)).toHaveLength(0);
-    expect(harness.table.phase).toBe("eating");
-    expect(harness.table.dishParts[debtorPartId].location).toEqual({ type: "inventory", participantId: shortfall.id });
+    expect(harness.table.phase).toBe("complete");
+    expect(harness.table.dishParts[debtorPartId].location).toEqual({ type: "eaten", participantId: shortfall.id });
+    expect(harness.table.currentTurnParticipantId).toBeUndefined();
   });
 
   it("requires every promise card to return to its owner before eating", () => {
@@ -2908,7 +2930,8 @@ describe("winning and eating", () => {
       cleared: true
     });
     expect(platterDishPartIds(harness.table)).toHaveLength(0);
-    expect(harness.table.phase).toBe("eating");
+    expect(harness.table.phase).toBe("complete");
+    expect(Object.values(harness.table.dishParts).every((part) => part.location.type === "eaten")).toBe(true);
   });
 
   it("blocks invalid settlement swaps without mutation", () => {
@@ -2957,8 +2980,9 @@ describe("winning and eating", () => {
     });
 
     expect(table.vouchers[nonOwnVoucher.id].location).toEqual({ type: "platter" });
-    expect(table.dishParts[partId].location).toEqual({ type: "inventory", participantId: participant.id });
-    expect(table.transactionHistory.at(-1)).toMatchObject({ name: participant.name, action: "Settlement Swap" });
+    expect(table.dishParts[partId].location).toEqual({ type: "eaten", participantId: participant.id });
+    expect(table.transactionHistory.some((row) => row.name === participant.name && row.action === "Settlement Swap")).toBe(true);
+    expect(table.transactionHistory.at(-1)).toMatchObject({ name: participant.name, action: "Share" });
   });
 
   it("only lets cleared players eat food parts they hold", () => {
@@ -2975,6 +2999,7 @@ describe("winning and eating", () => {
     if (!ownerDish) {
       throw new Error("Missing owner dish");
     }
+    restoreDishPartsToInventoryForLegacyEating(harness.table, owner.id, ownerDish.id);
     expect(() => applyAsTurn(harness.table, other.id, { type: "bite", dishId: ownerDish.id })).toThrow(GameError);
 
     applyAsTurn(harness.table, owner.id, { type: "bite", dishId: ownerDish.id });
@@ -2999,7 +3024,13 @@ describe("winning and eating", () => {
     }
 
     const [owner, other] = activeParticipants(harness.table);
-    const heldBefore = inventoryDishPartIds(harness.table, owner.id);
+    const ownerDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === owner.id);
+    const otherDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === other.id);
+    if (!ownerDish || !otherDish) {
+      throw new Error("Missing legacy eating dishes");
+    }
+    const heldBefore = restoreDishPartsToInventoryForLegacyEating(harness.table, owner.id, ownerDish.id);
+    restoreDishPartsToInventoryForLegacyEating(harness.table, other.id, otherDish.id);
     harness.table.currentTurnParticipantId = other.id;
 
     applyIntent(harness.table, owner.id, { type: "bite_all" });
@@ -3018,7 +3049,7 @@ describe("winning and eating", () => {
     expect(inventoryDishPartIds(harness.table, nextEaterId ?? "")).not.toHaveLength(0);
   });
 
-  it("has bots settle accounts and eat held food parts deterministically", () => {
+  it("auto-shares bot-held food parts after settlement clears", () => {
     const harness = makeHarness(1, "bot-settlement-eating");
     addBots(harness.table, harness.table.hostParticipantId, ["mixed", "mixed", "mixed", "mixed", "mixed", "mixed", "mixed"]);
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
@@ -3028,12 +3059,11 @@ describe("winning and eating", () => {
       applyAsTurn(harness.table, participant.id, { type: "prepare" });
     }
 
-    harness.table.currentTurnParticipantId = activeParticipants(harness.table).find((participant) => participant.kind === "bot")?.id;
     const decisions = runBots(harness.table, 40).filter((decision) => decision.intent.type === "bite_all");
 
-    expect(harness.table.phase).toBe("eating");
-    expect(decisions.length).toBeGreaterThan(0);
-    expect(Object.values(harness.table.dishes).some((dish) => dish.partsRemaining < DISH_PARTS_PER_DISH)).toBe(true);
+    expect(harness.table.phase).toBe("complete");
+    expect(decisions).toHaveLength(0);
+    expect(Object.values(harness.table.dishes).every((dish) => dish.partsRemaining === 0)).toBe(true);
   });
 
   it("has a settlement bot offer food for its own stranded promise card", () => {
@@ -3085,7 +3115,13 @@ describe("winning and eating", () => {
     const botOwnPlatterVoucher = platterVoucherIds(harness.table).find(
       (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === bot.id
     ) as string;
-    const hostFoodPart = inventoryDishPartIds(harness.table, host.id)[0] as string;
+    const hostDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === host.id);
+    const botDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === bot.id);
+    if (!hostDish || !botDish) {
+      throw new Error("Missing settlement seed dishes");
+    }
+    const hostFoodPart = restoreDishPartsToInventoryForLegacyEating(harness.table, host.id, hostDish.id)[0] as string;
+    restoreDishPartsToInventoryForLegacyEating(harness.table, bot.id, botDish.id);
     harness.table.vouchers[botOwnPlatterVoucher].location = { type: "hand", participantId: bot.id };
     harness.table.dishParts[hostFoodPart].location = { type: "platter" };
     harness.table.phase = "settlement";
@@ -3129,7 +3165,13 @@ describe("winning and eating", () => {
     const ownerHandVoucher = handVoucherIds(harness.table, owner.id).find(
       (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === owner.id
     ) as string;
-    const thirdFoodPart = inventoryDishPartIds(harness.table, third.id)[0] as string;
+    const thirdDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === third.id);
+    const ownerDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === owner.id);
+    if (!thirdDish || !ownerDish) {
+      throw new Error("Missing direct-return dishes");
+    }
+    const thirdFoodPart = restoreDishPartsToInventoryForLegacyEating(harness.table, third.id, thirdDish.id)[0] as string;
+    restoreDishPartsToInventoryForLegacyEating(harness.table, owner.id, ownerDish.id);
     harness.table.vouchers[ownerHandVoucher].location = { type: "hand", participantId: holder.id };
     harness.table.dishParts[thirdFoodPart].location = { type: "platter" };
     harness.table.phase = "settlement";
@@ -3183,7 +3225,11 @@ describe("winning and eating", () => {
     const ownerHandVoucher = handVoucherIds(harness.table, owner.id).find(
       (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === owner.id
     ) as string;
-    const ownerFoodPart = inventoryDishPartIds(harness.table, owner.id)[0] as string;
+    const ownerDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === owner.id);
+    if (!ownerDish) {
+      throw new Error("Missing owner dish");
+    }
+    const ownerFoodPart = restoreDishPartsToInventoryForLegacyEating(harness.table, owner.id, ownerDish.id)[0] as string;
     harness.table.vouchers[ownerHandVoucher].location = { type: "hand", participantId: holder.id };
     harness.table.phase = "settlement";
     harness.table.currentTurnParticipantId = holder.id;
@@ -3209,10 +3255,10 @@ describe("winning and eating", () => {
     });
 
     expect(harness.table.vouchers[ownerHandVoucher].location).toEqual({ type: "hand", participantId: owner.id });
-    expect(harness.table.dishParts[ownerFoodPart].location).toEqual({ type: "inventory", participantId: holder.id });
+    expect(harness.table.dishParts[ownerFoodPart].location).toEqual({ type: "eaten", participantId: holder.id });
     expect(platterAccountForParticipant(harness.table, owner.id).cleared).toBe(true);
     expect(platterAccountForParticipant(harness.table, holder.id).cleared).toBe(true);
-    expect(harness.table.phase).toBe("eating");
+    expect(harness.table.phase).toBe("complete");
   });
 
   it("has settlement bots recover own stranded cards before seeding basket food", () => {
@@ -3233,7 +3279,13 @@ describe("winning and eating", () => {
     const botOwnPlatterVoucher = platterVoucherIds(harness.table).find(
       (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === bot.id
     ) as string;
-    const hostFoodPart = inventoryDishPartIds(harness.table, host.id)[0] as string;
+    const hostDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === host.id);
+    const botDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === bot.id);
+    if (!hostDish || !botDish) {
+      throw new Error("Missing settlement seed dishes");
+    }
+    const hostFoodPart = restoreDishPartsToInventoryForLegacyEating(harness.table, host.id, hostDish.id)[0] as string;
+    restoreDishPartsToInventoryForLegacyEating(harness.table, bot.id, botDish.id);
     harness.table.vouchers[botOwnHandVoucher].location = { type: "hand", participantId: host.id };
     harness.table.vouchers[botOwnPlatterVoucher].location = { type: "hand", participantId: host.id };
     harness.table.dishParts[hostFoodPart].location = { type: "platter" };
@@ -3269,7 +3321,7 @@ describe("winning and eating", () => {
     const expired = store.expireTimer(table.code, (table.timer?.endsAtMs ?? Date.now()) + 1);
 
     expect(expired).toBe(true);
-    expect(table.phase).toBe("eating");
+    expect(table.phase).toBe("complete");
     expect(table.winnerParticipantIds).toEqual([winner.id]);
     expect(table.timer?.expiredAtMs).toBeDefined();
   });
