@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.42"
+const APP_VERSION := "0.0.45"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -181,6 +181,7 @@ var _public_tables_poll_elapsed := 0.0
 var _public_tables_request_quiet := false
 var _deferred_lobby_controls_refresh := false
 var _native_lobby_name_prompt_active := false
+var _native_invite_code_prompt_active := false
 
 
 func _ready() -> void:
@@ -680,6 +681,10 @@ func _build_online_setup_controls(root: VBoxContainer) -> void:
 
 	_code_input = _line_edit("Connect to a server first", "")
 	_code_input.custom_minimum_size = Vector2(0, 34)
+	_code_input.focus_entered.connect(func() -> void:
+		if _should_use_native_invite_code_editor():
+			call_deferred("_open_native_invite_code_editor")
+	)
 	_code_input.text_changed.connect(func(_text: String) -> void:
 		_on_invite_code_changed()
 	)
@@ -1237,6 +1242,46 @@ func _reset_invite_code_state() -> void:
 	_invite_code_exists = false
 
 
+func _web_touch_device() -> bool:
+	if OS.get_name() != "Web":
+		return false
+	var has_touch = JavaScriptBridge.eval("Boolean(('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0))", true)
+	return bool(has_touch)
+
+
+func _should_use_native_invite_code_editor() -> bool:
+	if _native_invite_code_prompt_active:
+		return false
+	if not is_instance_valid(_code_input) or not _code_input.editable:
+		return false
+	return _web_touch_device()
+
+
+func _open_native_invite_code_editor() -> void:
+	if not _should_use_native_invite_code_editor():
+		return
+	if not _code_input.has_focus():
+		return
+	_native_invite_code_prompt_active = true
+	var result = JavaScriptBridge.eval(
+		"window.prompt(%s, %s)" % [
+			JSON.stringify("Invite code"),
+			JSON.stringify(_normalized_invite_code())
+		],
+		true
+	)
+	_native_invite_code_prompt_active = false
+	_code_input.release_focus()
+	if result == null:
+		return
+	var code := _sanitize_invite_code_text(str(result))
+	_suppress_invite_code_check = true
+	_code_input.text = code
+	_code_input.caret_column = code.length()
+	_suppress_invite_code_check = false
+	_on_invite_code_changed()
+
+
 func _on_invite_code_changed() -> void:
 	if _suppress_invite_code_check:
 		return
@@ -1385,6 +1430,10 @@ func _generate_invite_code() -> String:
 
 func _normalized_invite_code() -> String:
 	return _code_input.text.strip_edges().to_upper().replace(" ", "")
+
+
+func _sanitize_invite_code_text(value: String) -> String:
+	return value.strip_edges().to_upper().replace(" ", "")
 
 
 func _online_code_needs_generation() -> bool:
@@ -2769,9 +2818,7 @@ func _on_error_received(error: Dictionary) -> void:
 	elif error_code == "missing_table":
 		_forget_online_session(RecipesClient.server_url, RecipesClient.table_code)
 	elif error_code == "seat_already_connected":
-		_ignore_online_session_for_process(RecipesClient.server_url, RecipesClient.table_code)
-		RecipesClient.disconnect_local()
-		description = "Your saved seat is already open in another client. You can join this table as another player."
+		description = "Your saved seat is already open in another client. Close the other tab or device, then reconnect this seat."
 		show_plain_message = true
 	elif ["dish_part_not_in_platter", "voucher_not_in_platter", "dish_part_not_held", "voucher_not_in_hand"].has(error_code):
 		description = "The basket changed before that swap completed. Refreshed the table; please choose again."
@@ -3886,12 +3933,11 @@ func _rename_lobby_seat(participant_id: String, input: LineEdit) -> void:
 
 
 func _should_use_native_lobby_name_editor(input: LineEdit) -> bool:
-	if OS.get_name() != "Web" or _native_lobby_name_prompt_active:
+	if _native_lobby_name_prompt_active:
 		return false
 	if input == null or not is_instance_valid(input) or not input.editable:
 		return false
-	var has_touch = JavaScriptBridge.eval("Boolean(('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0))", true)
-	return bool(has_touch)
+	return _web_touch_device()
 
 
 func _open_native_lobby_name_editor(participant_id: String, input: LineEdit) -> void:
@@ -4143,6 +4189,7 @@ func _clear_lobby_edit_state() -> void:
 	_lobby_pending_seat_names.clear()
 	_deferred_lobby_controls_refresh = false
 	_native_lobby_name_prompt_active = false
+	_native_invite_code_prompt_active = false
 
 
 func _send_lobby_edit_intent(intent: Dictionary) -> bool:

@@ -1840,10 +1840,7 @@ func _basket_ingredient_slot(ingredient_id: String, group: Dictionary, visual_sl
 
 	var card_count := int(group.get("count", 0))
 	var meta := _card_meta_with_stack(VisualAssets.ingredient_meta(ingredient_id), card_count)
-	var label := "%s x%s" % [
-		_ingredient_display(ingredient_id),
-		card_count
-	]
+	var label := _counted_ingredient_card_label(ingredient_id, card_count)
 	var button := _visual_card("", label, meta, slot_size, func(g := group) -> void:
 		_on_platter_voucher_group_pressed(g)
 	)
@@ -3095,10 +3092,7 @@ func _render_hand() -> void:
 		var card_count := int(group.get("count", 0))
 		var meta := _card_meta_with_stack(VisualAssets.ingredient_meta(ingredient_id), card_count)
 		var has_stock := _voucher_group_has_stock(group)
-		var label := "%s x%s" % [
-			_ingredient_display(ingredient_id),
-			card_count
-		]
+		var label := _counted_ingredient_card_label(ingredient_id, card_count)
 		if not has_stock:
 			label += "\nNo stock"
 		var button := _visual_card("", label, meta, HAND_CARD_SIZE, func(g := group) -> void:
@@ -3699,7 +3693,7 @@ func _offer_asset_summary_for_ingredient(ingredient_id: String, quantity: int) -
 	return {
 		"kind": "voucher",
 		"key": ingredient_id,
-		"label": "%s x%s" % [_ingredient_display(ingredient_id), qty],
+		"label": _counted_ingredient_card_label(ingredient_id, qty),
 		"sentenceLabel": "%s x%s" % [_ingredient_display(ingredient_id), qty],
 		"tooltip": "%s x%s" % [_ingredient_display(ingredient_id), qty],
 		"meta": _card_meta_with_stack(VisualAssets.ingredient_meta(ingredient_id), qty),
@@ -4011,7 +4005,7 @@ func _offer_missing_ingredient_card(ingredient_id: String, quantity: int) -> Con
 		icon.modulate = Color(0.55, 0.55, 0.55, 0.72)
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		box.add_child(icon)
-	var label := _label("%s x%s" % [_ingredient_display(ingredient_id), quantity])
+	var label := _label(_counted_ingredient_card_label(ingredient_id, quantity))
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -8942,6 +8936,16 @@ func _ingredient_display(ingredient_id: String) -> String:
 		if str(ingredient.get("id", "")) == ingredient_id:
 			return str(ingredient.get("name", ingredient_id.capitalize()))
 	return ingredient_id.capitalize() if ingredient_id != "" else "Unknown"
+
+
+func _ingredient_card_display(ingredient_id: String) -> String:
+	if ingredient_id == "vegetables":
+		return "Veg."
+	return _ingredient_display(ingredient_id)
+
+
+func _counted_ingredient_card_label(ingredient_id: String, count: int) -> String:
+	return "%s x%s" % [_ingredient_card_display(ingredient_id), count]
 
 
 func _recipe_ingredient_display(ingredient_id: String) -> String:
