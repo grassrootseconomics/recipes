@@ -8,3 +8,10 @@
 - Prefer deterministic game logic and seedable bot/recipe behavior.
 - Add focused server tests for every rules change before broad client work.
 - Do not add blockchain, wallets, accounts, borrowing, free chat, or a global leaderboard unless the design doc is updated first.
+### MCP
+| You have access to                                                                       | Use MCP     |
+| -------------------------------------------------------------------------------------- | ----------- |
+| Live library docs                                                                      | `context7`  |
+| Browser automation, screenshot, dogfood                                                | `charlotte` |
+
+- You have acess to gh cli to search for libraries, open source sprites and other assets and godot examples
