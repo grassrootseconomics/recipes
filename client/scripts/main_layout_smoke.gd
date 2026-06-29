@@ -77,6 +77,9 @@ func _initialize() -> void:
 	blank_name_input.text = ""
 	main.call("_rename_lobby_seat", "p1", blank_name_input)
 	_require(blank_name_input.text == "SmallHost", "blank submitted lobby names fall back to the current server name")
+	_require(str(main.call("_sanitize_lobby_seat_name", "ABCDEFGHIJKLMNOPQ")) == "ABCDEFGHIJKLMNOP", "lobby seat names allow 16 display characters")
+	_require(str(main.call("_display_participant_name", {"name": "Jim_b", "kind": "bot"})) == "Jim", "bot lobby display names hide server uniqueness suffixes")
+	_require(str(main.call("_display_participant_name", {"name": "Jim_b", "kind": "human"})) == "Jim_b", "human lobby display names keep literal suffix text")
 
 	var missing_prepare_append := {"transactionHistory": [{"action": "Prepare", "participantId": "p1"}]}
 	var complete_prepare_patch := {"ownFoodParts": [{"id": "dish_1_part_1", "dishId": "dish_1"}]}
@@ -85,6 +88,7 @@ func _initialize() -> void:
 	_require(not bool(recipes_client.call("debug_delta_missing_viewer_prepare_food_parts", _prepare_delta_snapshot_fixture(), {}, {"transactionHistory": [{"action": "Prepare", "participantId": "p2"}]})), "online client does not freshen for other cooks' prepare deltas")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, false, 0)) == "fresh_snapshot", "online active table watchdog requests a full snapshot after a quiet socket")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, true, 9000)) == "reconnect", "online active table watchdog reconnects when a full snapshot request gets no response")
+	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, false, 0, true)) == "none", "online active table watchdog waits while visual updates are still busy")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", online_waiting_snapshot, true, 21000, false, 0)) == "none", "online lobby watchdog does not poll active-game snapshots")
 	recipes_client.start_offline_table("", "")
 	await process_frame

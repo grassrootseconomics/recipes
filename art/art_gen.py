@@ -7,8 +7,11 @@ client_ingredient_dir = os.path.join(repo_root, "client", "art", "ingredients")
 os.makedirs(out_dir, exist_ok=True)
 os.makedirs(client_ingredient_dir, exist_ok=True)
 
-# Draw at 64x64 directly, no antialiasing, transparent canvas.
+# Draw the legacy sprites at 64x64 and emit smoothed high-res companions for
+# HD UIs. The 64px files stay as deterministic fallback/export assets.
 SIZE = 64
+HIGH_RES_SIZE = 256
+LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 
 def canvas():
     return Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
@@ -19,6 +22,13 @@ def save(img, name):
     client_path = os.path.join(client_ingredient_dir, name)
     if os.path.isdir(client_ingredient_dir):
         img.save(client_path)
+    if name.endswith("_64.png"):
+        high_name = name.replace("_64.png", f"_{HIGH_RES_SIZE}.png")
+        high_img = img.resize((HIGH_RES_SIZE, HIGH_RES_SIZE), LANCZOS)
+        high_path = os.path.join(out_dir, high_name)
+        high_img.save(high_path)
+        if os.path.isdir(client_ingredient_dir):
+            high_img.save(os.path.join(client_ingredient_dir, high_name))
     return path
 
 def dither_shadow(draw, cx=32, cy=52, rx=21, ry=6):
@@ -278,6 +288,8 @@ zip_path = os.path.join(out_dir, "ingredient_pixel_art_8_pack.zip")
 with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
     for label, fn in names:
         z.write(os.path.join(out_dir, fn), arcname=fn)
+        high_fn = fn.replace("_64.png", f"_{HIGH_RES_SIZE}.png")
+        z.write(os.path.join(out_dir, high_fn), arcname=high_fn)
     z.write(sheet_path, arcname="ingredient_8_icon_preview_sheet.png")
 
 print("Created:")

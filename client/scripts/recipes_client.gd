@@ -8,6 +8,7 @@ const RECONNECT_DELAY_SECONDS := 1.5
 const SOCKET_WATCHDOG_FRESH_SNAPSHOT_MS := 20000
 const SOCKET_WATCHDOG_RECONNECT_MS := 8000
 const SOCKET_WATCHDOG_CHECK_MS := 1000
+const SOCKET_WATCHDOG_VISUAL_BUSY_GRACE_MS := 3000
 const OfflineStore := preload("res://scripts/offline_store.gd")
 
 var server_url := "http://127.0.0.1:3000"
@@ -24,6 +25,7 @@ var manual_fresh_snapshot_count := 0
 var watchdog_fresh_snapshot_count := 0
 var watchdog_reconnect_count := 0
 var last_socket_message_type := ""
+var visual_busy := false
 
 var _http_request: HTTPRequest
 var _offline_store: Node
@@ -38,6 +40,7 @@ var _last_socket_message_msec := 0
 var _fresh_snapshot_request_started_msec := 0
 var _fresh_snapshot_request_in_flight := false
 var _next_socket_watchdog_check_msec := 0
+var _last_visual_busy_msec := 0
 
 
 func _ready() -> void:
@@ -443,6 +446,12 @@ func _mark_socket_message(message_type: String) -> void:
 	last_socket_message_type = message_type
 
 
+func set_visual_busy(is_busy: bool) -> void:
+	visual_busy = is_busy
+	if is_busy:
+		_last_visual_busy_msec = Time.get_ticks_msec()
+
+
 func _watch_socket_freshness() -> void:
 	if offline_mode or table_code == "" or seat_token == "":
 		return
@@ -450,12 +459,14 @@ func _watch_socket_freshness() -> void:
 	if now_ms < _next_socket_watchdog_check_msec:
 		return
 	_next_socket_watchdog_check_msec = now_ms + SOCKET_WATCHDOG_CHECK_MS
+	var visual_busy_recent := visual_busy or (_last_visual_busy_msec > 0 and now_ms - _last_visual_busy_msec <= SOCKET_WATCHDOG_VISUAL_BUSY_GRACE_MS)
 	var action := _socket_watchdog_action_for_state(
 		latest_snapshot,
 		is_socket_connected(),
 		now_ms - _last_socket_message_msec,
 		_fresh_snapshot_request_in_flight,
-		now_ms - _fresh_snapshot_request_started_msec
+		now_ms - _fresh_snapshot_request_started_msec,
+		visual_busy_recent
 	)
 	if action == "fresh_snapshot":
 		watchdog_fresh_snapshot_count += 1
@@ -465,10 +476,12 @@ func _watch_socket_freshness() -> void:
 		connect_socket()
 
 
-func _socket_watchdog_action_for_state(snapshot: Dictionary, socket_connected: bool, last_message_age_ms: int, request_in_flight: bool, request_age_ms: int) -> String:
+func _socket_watchdog_action_for_state(snapshot: Dictionary, socket_connected: bool, last_message_age_ms: int, request_in_flight: bool, request_age_ms: int, visual_busy_active := false) -> String:
 	if not socket_connected or snapshot.is_empty():
 		return "none"
 	if not _phase_needs_socket_watchdog(str(snapshot.get("phase", ""))):
+		return "none"
+	if visual_busy_active:
 		return "none"
 	if request_in_flight:
 		return "reconnect" if request_age_ms >= SOCKET_WATCHDOG_RECONNECT_MS else "none"
@@ -479,8 +492,8 @@ func _phase_needs_socket_watchdog(phase: String) -> bool:
 	return phase == "playing" or phase == "settlement" or phase == "eating"
 
 
-func debug_socket_watchdog_action(snapshot: Dictionary, socket_connected: bool, last_message_age_ms: int, request_in_flight: bool, request_age_ms: int) -> String:
-	return _socket_watchdog_action_for_state(snapshot, socket_connected, last_message_age_ms, request_in_flight, request_age_ms)
+func debug_socket_watchdog_action(snapshot: Dictionary, socket_connected: bool, last_message_age_ms: int, request_in_flight: bool, request_age_ms: int, visual_busy_active := false) -> String:
+	return _socket_watchdog_action_for_state(snapshot, socket_connected, last_message_age_ms, request_in_flight, request_age_ms, visual_busy_active)
 
 
 func debug_delta_missing_viewer_prepare_food_parts(previous_snapshot: Dictionary, patch: Dictionary, append: Dictionary) -> bool:

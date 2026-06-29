@@ -14,6 +14,14 @@ func _initialize() -> void:
 	var visual = TableVisual.new()
 	root.add_child(visual)
 	await process_frame
+	_require(visual.texture_filter == VisualAssets.preferred_texture_filter(), "visual table uses linear mipmap texture filtering for HD sprites")
+	var cheese_meta := VisualAssets.ingredient_meta("cheese")
+	_require(str(cheese_meta.get("texture_path", "")).ends_with("_256.png"), "ingredient registry prefers high-res sprites when available")
+	var cheese_texture = cheese_meta.get("texture", null)
+	_require(cheese_texture is Texture2D and cheese_texture.get_width() >= 256, "high-res ingredient texture loads at 256px")
+	var avatar_texture := VisualAssets.avatar_texture(0)
+	_require(avatar_texture is Texture2D and avatar_texture.get_width() >= 128, "cook avatar registry prefers 128px sprites")
+	_require(str(visual.call("_participant_display_name", {"name": "Jim_b", "kind": "bot"})) == "Jim", "table visual hides bot uniqueness suffixes")
 	visual.intent_requested.connect(func(intent: Dictionary) -> void:
 		_intents.append(intent)
 	)
@@ -634,7 +642,7 @@ func _initialize() -> void:
 	visual.debug_press_participant("p4")
 	var create_offer_height := int(visual.debug_stats.get("offerPopupHeight", 0))
 	_require(create_offer_height > 0 and create_offer_height <= 620, "create-offer popup stays within portrait bounds with recipe and hand context, height=%s" % create_offer_height)
-	_require(not bool(visual.debug_stats.get("offerPopupScrollEnabled", true)), "create-offer popup is tall enough to avoid a scrollbar")
+	_require(not bool(visual.debug_stats.get("offerPopupScrollEnabled", true)), "create-offer popup is tall enough to avoid a scrollbar, height=%s content=%s" % [create_offer_height, int(visual.debug_stats.get("offerPopupContentHeight", 0))])
 	_require(visual.find_child("OfferGiveCard_rice", true, false) != null, "create-offer popup shows the offered card")
 	_require(visual.find_child("OfferGetCard_vegetables", true, false) != null, "create-offer popup shows the requested card")
 	_require(visual.find_child("OfferRecipeContext_p4", true, false) != null, "create-offer popup shows target recipe context")

@@ -125,17 +125,17 @@ function compactDeltaPatch(patch: Partial<Snapshot>, previous: Snapshot | undefi
   delete patch.dishes;
   delete patch.dishParts;
   if (snapshot.phase !== "playing" && snapshot.phase !== "settlement") {
-    if (!foodPartCountIncreased(previous?.ownFoodParts, snapshot.ownFoodParts)) {
+    if (!foodPartCountChanged(previous?.ownFoodParts, snapshot.ownFoodParts)) {
       delete patch.ownFoodParts;
     }
-    if (!foodPartCountIncreased(previous?.platterFoodParts, snapshot.platterFoodParts)) {
+    if (!foodPartCountChanged(previous?.platterFoodParts, snapshot.platterFoodParts)) {
       delete patch.platterFoodParts;
     }
   }
 }
 
-function foodPartCountIncreased(previous: unknown[] | undefined, next: unknown[]): boolean {
-  return next.length > (previous?.length ?? 0);
+function foodPartCountChanged(previous: unknown[] | undefined, next: unknown[]): boolean {
+  return next.length !== (previous?.length ?? 0);
 }
 
 function changedDishRows(previous: Snapshot | undefined, next: Snapshot): Dish[] {

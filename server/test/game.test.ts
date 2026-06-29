@@ -2464,6 +2464,15 @@ describe("platter, offers, and visibility", () => {
     expect(participantDelta?.type).toBe("delta");
     expect(participantDelta?.patch?.participants).toBeUndefined();
     expect(participantDelta?.append?.participants).toContainEqual(expect.objectContaining({ id: host.id, role: "witness" }));
+
+    const renamed = activeParticipants(table).find((participant) => participant.id !== host.id) as Participant;
+    applyIntent(table, host.id, { type: "rename_participant", participantId: renamed.id, name: "KitchenCaptain" });
+    hub.broadcastTable(table);
+
+    const renameDelta = messages.at(-1);
+    expect(renameDelta?.type).toBe("delta");
+    expect(renameDelta?.patch?.participants).toBeUndefined();
+    expect(renameDelta?.append?.participants).toContainEqual(expect.objectContaining({ id: renamed.id, name: "KitchenCaptain" }));
   });
 
   it("includes prepared food parts in playing deltas", () => {
@@ -2503,7 +2512,40 @@ describe("platter, offers, and visibility", () => {
     expect(delta?.append?.dishes).toContainEqual(expect.objectContaining({ ownerParticipantId: participant.id }));
   });
 
-  it("sends a full snapshot to a reconnected socket", () => {
+  it("includes eating food-part decreases in compacted deltas", () => {
+    const { table } = startAndDeposit(8, "eating-food-part-decrease-delta");
+    const participant = activeParticipants(table)[0] as Participant;
+    const hub = new ConnectionHub();
+    const messages: Array<{
+      type: string;
+      patch?: Partial<ReturnType<typeof buildSnapshot>>;
+    }> = [];
+    hub.register({
+      tableCode: table.code,
+      participantId: participant.id,
+      send: (payload) => messages.push(JSON.parse(payload))
+    });
+
+    completeRecipeBySetup(table, participant.id);
+    applyAsTurn(table, participant.id, { type: "prepare" });
+    const dish = Object.values(table.dishes).find((candidate) => candidate.ownerParticipantId === participant.id);
+    if (!dish) {
+      throw new Error("Missing prepared dish");
+    }
+    restoreDishPartsToInventoryForLegacyEating(table, participant.id, dish.id);
+
+    hub.broadcastTable(table);
+    messages.length = 0;
+
+    applyAsTurn(table, participant.id, { type: "bite", dishId: dish.id });
+    hub.broadcastTable(table);
+
+    const delta = messages.at(-1);
+    expect(delta?.type).toBe("delta");
+    expect(delta?.patch?.ownFoodParts).toHaveLength(DISH_PARTS_PER_DISH - 1);
+  });
+
+  it("sends a full snapshot to a reconnected socket after queued bot-seat changes", () => {
     const { table } = makeHarness(8, "delta-reconnect");
     const host = table.participants[table.hostParticipantId];
     const hub = new ConnectionHub();
@@ -2516,7 +2558,11 @@ describe("platter, offers, and visibility", () => {
     hub.broadcastTable(table);
     hub.unregister(table.code, firstConnection.id);
 
-    const reconnectMessages: Array<{ type: string }> = [];
+    for (const participant of activeParticipants(table).slice(1, 4)) {
+      applyIntent(table, host.id, { type: "convert_to_bot", participantId: participant.id, botType: "mixed" });
+    }
+
+    const reconnectMessages: Array<{ type: string; snapshot?: ReturnType<typeof buildSnapshot> }> = [];
     hub.register({
       tableCode: table.code,
       participantId: host.id,
@@ -2525,6 +2571,8 @@ describe("platter, offers, and visibility", () => {
     hub.broadcastTable(table);
 
     expect(reconnectMessages.at(-1)?.type).toBe("snapshot");
+    expect(reconnectMessages.at(-1)?.snapshot?.version).toBe(table.version);
+    expect(reconnectMessages.at(-1)?.snapshot?.participants.filter((participant) => participant.kind === "bot")).toHaveLength(3);
   });
 
   it("detects duplicate sockets by connection participant, not viewed participant", () => {

@@ -615,6 +615,7 @@ var _shared_food_orbit_items: Array = []
 
 
 func _ready() -> void:
+	texture_filter = VisualAssets.preferred_texture_filter()
 	_build()
 	set_process_input(true)
 	set_process(true)
@@ -1695,7 +1696,7 @@ func _render_participants() -> void:
 		var participant: Dictionary = visible_participants[index]
 		var participant_id := str(participant.get("id", ""))
 		var indicator := _offer_indicator_for_participant(participant_id)
-		var name := str(participant.get("name", "Player"))
+		var name := _participant_display_name(participant)
 		var ingredient_id := str(participant.get("ingredientId", ""))
 		var meta := VisualAssets.ingredient_meta(ingredient_id)
 		var completed := int(participant.get("dishCount", 0))
@@ -2222,7 +2223,7 @@ func _render_dish_count_summary() -> void:
 		if str(participant.get("role", "")) != "active":
 			continue
 		var completed := int(participant.get("dishCount", 0))
-		var cell := _dish_progress_cell(str(participant.get("name", "Player")), completed, target)
+		var cell := _dish_progress_cell(_participant_display_name(participant), completed, target)
 		_recipe_grid.add_child(cell)
 		count += 1
 	if count == 0:
@@ -2242,14 +2243,14 @@ func _render_held_piece_summary() -> void:
 		var pieces := _held_food_part_count(participant)
 		if phase == "eating":
 			_recipe_grid.add_child(_food_summary_cell("%s\n%s left\n%s shared" % [
-				str(participant.get("name", "Player")),
+				_participant_display_name(participant),
 				pieces,
 				int(bite_totals.get(participant_id, 0))
 			]))
 		else:
 			var unit := "piece" if pieces == 1 else "pieces"
 			_recipe_grid.add_child(_dish_summary_cell("%s\n%s %s" % [
-				str(participant.get("name", "Player")),
+				_participant_display_name(participant),
 				pieces,
 				unit
 			]))
@@ -2303,7 +2304,7 @@ func _render_complete_summary() -> void:
 		var ingredient_id := str(participant.get("ingredientId", ""))
 		var stock := int(participant.get("realIngredientStock", 0))
 		_recipe_grid.add_child(_complete_summary_cell("%s\n%s: %s Shared: %s" % [
-			str(participant.get("name", "Player")),
+			_participant_display_name(participant),
 			_ingredient_display(ingredient_id),
 			stock,
 			shared
@@ -2784,7 +2785,7 @@ func _derive_hoarding_index() -> Dictionary:
 		var count := int(participant.get("foreignCardsInHand", 0))
 		if count > best_count:
 			best_count = count
-			best_name = str(participant.get("name", "Player"))
+			best_name = _participant_display_name(participant)
 	if best_count <= 0:
 		return {"hoardingIndex": 0, "hoardingIndexLabel": "None"}
 	return {"hoardingIndex": best_count, "hoardingIndexLabel": "%s holds foreign cards x%s" % [best_name, best_count]}
@@ -3080,7 +3081,7 @@ func _progress_stars(progress: int, target: int) -> String:
 
 
 func _cook_progress_name(participant: Dictionary) -> String:
-	var name := str(participant.get("name", "Player"))
+	var name := _participant_display_name(participant)
 	var target := int(_snapshot.get("targetDishCount", 0))
 	if target <= 0:
 		return name
@@ -3641,7 +3642,7 @@ func _offer_popup_component(title_text: String, participant_id: String, give_ing
 func _offer_popup_component_from_summaries(title_text: String, participant_id: String, give_summary: Dictionary, get_summary: Dictionary, detail_text: String, action_row: Control = null, card_pair_middle_control: Control = null) -> Control:
 	var box := VBoxContainer.new()
 	box.name = "OfferPanel"
-	box.add_theme_constant_override("separation", 6)
+	box.add_theme_constant_override("separation", 4)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(_offer_popup_header(title_text))
 	if detail_text != "":
@@ -4043,6 +4044,7 @@ func _offer_missing_ingredient_card(ingredient_id: String, quantity: int) -> Con
 		var icon := TextureRect.new()
 		icon.texture = texture
 		icon.custom_minimum_size = Vector2(40, 30)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.modulate = Color(0.55, 0.55, 0.55, 0.72)
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4949,7 +4951,7 @@ func _snapshot_identity_key(snapshot: Dictionary) -> String:
 		str(snapshot.get("turn", "")),
 		str(snapshot.get("phase", "")),
 		str(snapshot.get("currentTurnParticipantId", "")),
-		str(snapshot.get("transactionTotal", ""))
+		str(snapshot.get("transactionCursor", snapshot.get("transactionHistoryTotal", snapshot.get("transactionTotal", ""))))
 	]
 
 
@@ -6036,7 +6038,7 @@ func _detect_prepare_events(previous_snapshot: Dictionary, current_snapshot: Dic
 		if int(current_participant.get("dishCount", 0)) <= int(previous_participant.get("dishCount", 0)):
 			continue
 		var prepare_info := _public_prepare_info(previous_snapshot, current_snapshot, participant_id)
-		var participant_name := str(current_participant.get("name", "")).strip_edges()
+		var participant_name := _participant_display_name(current_participant, "").strip_edges()
 		if participant_name == "":
 			participant_name = _participant_name(participant_id)
 		events.append({
@@ -6065,7 +6067,7 @@ func _prepare_events_from_transactions(previous_snapshot: Dictionary, current_sn
 			participant = _participant_from_snapshot(previous_snapshot, participant_id)
 		var participant_name := str(transaction.get("name", "")).strip_edges()
 		if participant_name == "":
-			participant_name = str(participant.get("name", "")).strip_edges()
+			participant_name = _participant_display_name(participant, "").strip_edges()
 		if participant_name == "":
 			participant_name = _participant_name(participant_id)
 		var dish_name := _dish_name_from_prepare_transaction(transaction).strip_edges()
@@ -8946,13 +8948,36 @@ func _participant_by_id(participant_id: String) -> Dictionary:
 	return {}
 
 
+func _participant_display_name(participant: Dictionary, fallback := "Player") -> String:
+	var name := str(participant.get("name", "")).strip_edges()
+	if str(participant.get("kind", "")) == "bot":
+		name = _strip_bot_display_suffix(name)
+	if name == "":
+		return fallback
+	return name
+
+
+func _strip_bot_display_suffix(name: String) -> String:
+	var trimmed := name.strip_edges()
+	for suffix in ["_pool_bot", "_barter_bot", "_mixed_bot", "_mix_bot", "_bot", "_b"]:
+		if trimmed.ends_with(suffix) and trimmed.length() > suffix.length():
+			return trimmed.substr(0, trimmed.length() - suffix.length()).strip_edges()
+	var numbered_suffix_marker := "_b_"
+	var marker_index := trimmed.rfind(numbered_suffix_marker)
+	if marker_index > 0:
+		var suffix_number := trimmed.substr(marker_index + numbered_suffix_marker.length())
+		if suffix_number.is_valid_int():
+			return trimmed.substr(0, marker_index).strip_edges()
+	return trimmed
+
+
 func _viewer_id() -> String:
 	return str(_snapshot.get("viewerParticipantId", ""))
 
 
 func _participant_name(participant_id: String) -> String:
 	var participant := _participant_by_id(participant_id)
-	return str(participant.get("name", "Someone")) if not participant.is_empty() else "Someone"
+	return _participant_display_name(participant, "Someone") if not participant.is_empty() else "Someone"
 
 
 func _next_turn_participant_name() -> String:
@@ -9272,6 +9297,7 @@ func _add_visual_content(button: Button, top_text: String, bottom_text: String, 
 		var icon := TextureRect.new()
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.texture = texture
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		_place_overlay(icon, pad, pad + top_band, -pad, -(bottom_band + pad + stack_gap))
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		button.add_child(icon)
@@ -9711,6 +9737,7 @@ func _popup_centered_tight(width: int, max_height: int, allow_scroll := false) -
 	_offer_popup_scroller.custom_minimum_size = Vector2(content_width, height - panel_padding)
 	debug_stats["offerPopupWidth"] = width
 	debug_stats["offerPopupHeight"] = height
+	debug_stats["offerPopupContentHeight"] = content_height
 	debug_stats["offerPopupScrollEnabled"] = needs_scroll
 	_offer_popup.popup_centered(Vector2i(width, height))
 

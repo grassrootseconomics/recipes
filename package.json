@@ -18,9 +18,11 @@
     "simulate:game": "npm --workspace server run simulate:game --",
     "serve:web": "python3 scripts/serve-web.py --root client/web",
     "test": "npm --workspace server run test",
-    "test:all": "npm run typecheck && npm run test:run && npm run test:offline && npm run test:visual && godot4 --headless --log-file /tmp/recipes-godot-headless.log --path client --quit-after 5",
+    "test:all": "npm run typecheck && npm run test:run && npm run test:assets && npm run test:offline && npm run test:visual && godot4 --headless --log-file /tmp/recipes-godot-headless.log --path client --quit-after 5",
+    "test:assets": "node scripts/check-visual-assets.mjs",
     "test:offline": "godot4 --headless --log-file /tmp/recipes-offline-smoke.log --path client --script res://scripts/offline_smoke.gd && godot4 --headless --log-file /tmp/recipes-offline-regression.log --path client --script res://scripts/offline_regression.gd",
     "test:visual": "godot4 --headless --log-file /tmp/recipes-table-visual-smoke.log --path client --script res://scripts/table_visual_smoke.gd && godot4 --headless --log-file /tmp/recipes-main-layout-smoke.log --path client --script res://scripts/main_layout_smoke.gd",
+    "test:web-visual": "node scripts/web-visual-smoke.mjs",
     "test:run": "npm --workspace server run test:run",
     "typecheck": "npm --workspace server run typecheck"
   },

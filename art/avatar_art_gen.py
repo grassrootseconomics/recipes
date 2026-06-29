@@ -9,6 +9,8 @@ os.makedirs(out_dir, exist_ok=True)
 os.makedirs(client_out_dir, exist_ok=True)
 
 SIZE = 32
+HIGH_RES_SIZE = 128
+LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 
 OUTLINE = (64, 42, 31, 255)
 DEEP = (45, 30, 24, 255)
@@ -23,6 +25,11 @@ def save(img, name):
     path = os.path.join(out_dir, name)
     img.save(path)
     img.save(os.path.join(client_out_dir, name))
+    if name.endswith("_32.png"):
+        high_name = name.replace("_32.png", f"_{HIGH_RES_SIZE}.png")
+        high_img = img.resize((HIGH_RES_SIZE, HIGH_RES_SIZE), LANCZOS)
+        high_img.save(os.path.join(out_dir, high_name))
+        high_img.save(os.path.join(client_out_dir, high_name))
     return path
 
 

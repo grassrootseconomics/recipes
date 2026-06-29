@@ -16,6 +16,8 @@ CATALOG_PATH = ROOT / "client" / "data" / "recipe_catalog.json"
 CLIENT_OUT = ROOT / "client" / "art" / "dishes"
 ART_OUT = ROOT / "art" / "dishes"
 SIZE = 64
+HIGH_RES_SIZE = 256
+LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 
 OUTLINE = (83, 48, 31, 255)
 DEEP = (60, 34, 25, 255)
@@ -235,10 +237,8 @@ def draw_recipe(recipe: dict) -> Image.Image:
     return img
 
 
-def clear_pngs(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    for png in path.glob("*.png"):
-        png.unlink()
+def ensure_output_dir(path: Path) -> None:
+	path.mkdir(parents=True, exist_ok=True)
 
 
 def make_preview(recipes: list[dict], source_dir: Path, target: Path) -> None:
@@ -268,11 +268,11 @@ def main() -> None:
     with CATALOG_PATH.open("r", encoding="utf-8") as handle:
         catalog = json.load(handle)
     recipes = catalog.get("recipes", [])
-    if len(recipes) != 32:
-        raise SystemExit(f"Expected 32 recipes, found {len(recipes)}")
+    if not recipes:
+        raise SystemExit("Expected at least one recipe")
 
-    clear_pngs(CLIENT_OUT)
-    clear_pngs(ART_OUT)
+    ensure_output_dir(CLIENT_OUT)
+    ensure_output_dir(ART_OUT)
 
     seen: set[str] = set()
     for recipe in recipes:
@@ -283,8 +283,12 @@ def main() -> None:
         image = draw_recipe(recipe)
         client_path = CLIENT_OUT / f"{slug}_64.png"
         art_path = ART_OUT / f"{slug}_64.png"
+        client_high_path = CLIENT_OUT / f"{slug}_{HIGH_RES_SIZE}.png"
+        art_high_path = ART_OUT / f"{slug}_{HIGH_RES_SIZE}.png"
         image.save(client_path)
+        image.resize((HIGH_RES_SIZE, HIGH_RES_SIZE), LANCZOS).save(client_high_path)
         shutil.copy2(client_path, art_path)
+        shutil.copy2(client_high_path, art_high_path)
 
     make_preview(recipes, CLIENT_OUT, ART_OUT / "dish_piece_preview_sheet.png")
     print(f"Generated {len(recipes)} dish piece icons in {CLIENT_OUT}")

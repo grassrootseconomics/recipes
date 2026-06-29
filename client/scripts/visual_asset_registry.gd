@@ -67,6 +67,7 @@ const UNITS := {
 }
 
 const FALLBACK := {"mark": "??", "color": Color(0.78, 0.80, 0.82), "ink": Color(0.08, 0.09, 0.10)}
+const HIGH_RES_TEXTURE_FILTER := CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 
 const SHORT_DISH_NAMES := {
 	"Cheese Frittata": "Frittata",
@@ -132,14 +133,24 @@ static func dish_meta(dish_name: String, unit_name: String) -> Dictionary:
 	var slug := _slugify(dish_name)
 	if slug != "":
 		var texture_path := "res://art/dishes/%s_64.png" % slug
-		if ResourceLoader.exists(texture_path):
+		if _path_exists(texture_path):
 			meta["texture_path"] = texture_path
 	return _with_texture(meta)
 
 
 static func avatar_texture(index: int) -> Texture2D:
 	var normalized := posmod(index, 8) + 1
-	return _texture_for_path("res://art/avatars/cook_%s_32.png" % normalized)
+	var fallback_path := "res://art/avatars/cook_%s_32.png" % normalized
+	return _texture_for_path(_preferred_texture_path(fallback_path))
+
+
+static func preferred_texture_filter() -> int:
+	return HIGH_RES_TEXTURE_FILTER
+
+
+static func apply_texture_quality(item: CanvasItem) -> void:
+	if item != null:
+		item.texture_filter = HIGH_RES_TEXTURE_FILTER
 
 
 static func short_dish_name(dish_name: String) -> String:
@@ -176,10 +187,31 @@ static func _with_texture(raw_meta: Dictionary) -> Dictionary:
 	var meta := raw_meta.duplicate()
 	var texture_path := str(meta.get("texture_path", ""))
 	if texture_path != "":
+		var preferred_path := _preferred_texture_path(texture_path)
+		if preferred_path != texture_path:
+			meta["fallback_texture_path"] = texture_path
+			meta["texture_path"] = preferred_path
+			texture_path = preferred_path
 		var texture := _texture_for_path(texture_path)
 		if texture is Texture2D:
 			meta["texture"] = texture
 	return meta
+
+
+static func _preferred_texture_path(texture_path: String) -> String:
+	if texture_path.ends_with("_64.png"):
+		var high_path := texture_path.substr(0, texture_path.length() - "_64.png".length()) + "_256.png"
+		if _path_exists(high_path):
+			return high_path
+	elif texture_path.ends_with("_32.png"):
+		var avatar_path := texture_path.substr(0, texture_path.length() - "_32.png".length()) + "_128.png"
+		if _path_exists(avatar_path):
+			return avatar_path
+	return texture_path
+
+
+static func _path_exists(texture_path: String) -> bool:
+	return ResourceLoader.exists(texture_path) or FileAccess.file_exists(texture_path)
 
 
 static func _texture_for_path(texture_path: String) -> Texture2D:

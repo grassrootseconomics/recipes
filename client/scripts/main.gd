@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.46"
+const APP_VERSION := "0.0.47"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -32,7 +32,7 @@ const TABLE_VISUAL_MAX_UPSCALE_LANDSCAPE := 1.55
 const TABLE_VISUAL_MIN_SCALE := 0.45
 const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 0.5
 const PUBLIC_TABLES_POLL_SECONDS := 2.0
-const MAX_LOBBY_SEAT_NAME_LENGTH := 12
+const MAX_LOBBY_SEAT_NAME_LENGTH := 16
 
 
 class FixedScrollContainer:
@@ -185,6 +185,7 @@ var _native_invite_code_prompt_active := false
 
 
 func _ready() -> void:
+	texture_filter = VisualAssets.preferred_texture_filter()
 	_configure_dev_client_profile()
 	_configure_desktop_debug_window()
 	_csv_http_request = HTTPRequest.new()
@@ -210,6 +211,23 @@ func _ready() -> void:
 	RecipesClient.snapshot_received.connect(_on_snapshot_received)
 	RecipesClient.error_received.connect(_on_error_received)
 	RecipesClient.connection_changed.connect(_on_connection_changed)
+	call_deferred("_maybe_start_local_web_smoke_table")
+
+
+func _maybe_start_local_web_smoke_table() -> void:
+	if OS.get_name() != "Web":
+		return
+	var smoke_mode := str(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('recipes_smoke') || ''", true))
+	if smoke_mode != "table":
+		return
+	var host := str(JavaScriptBridge.eval("window.location.hostname || ''", true)).to_lower()
+	if host != "127.0.0.1" and host != "localhost":
+		return
+	RecipesClient.start_offline_table("Smoke", "web-smoke")
+	var timer := get_tree().create_timer(0.25)
+	timer.timeout.connect(func() -> void:
+		RecipesClient.send_host_intent({"type": "start"})
+	)
 
 
 func _configure_desktop_debug_window() -> void:
@@ -296,6 +314,7 @@ func _is_phone_layout_width() -> bool:
 func _process(delta: float) -> void:
 	_update_home_sprites(delta)
 	_poll_public_tables_if_visible(delta)
+	_sync_visual_busy_flag()
 
 
 func _notification(what: int) -> void:
@@ -3323,13 +3342,20 @@ func _debug_visual_update_waiting() -> String:
 	return "?"
 
 
+func _sync_visual_busy_flag() -> void:
+	var busy := false
+	if is_instance_valid(_table_visual) and _table_visual.has_method("visual_update_waiting"):
+		busy = bool(_table_visual.call("visual_update_waiting"))
+	RecipesClient.set_visual_busy(busy)
+
+
 func _debug_participant_label(snapshot: Dictionary, participant_id: String) -> String:
 	if participant_id == "":
 		return "(none)"
 	var participant := _participant_by_id(snapshot, participant_id)
 	if participant.is_empty():
 		return "%s (not in snapshot)" % participant_id
-	return "%s %s" % [participant_id, str(participant.get("name", "Someone"))]
+	return "%s %s" % [participant_id, _display_participant_name(participant, "Someone")]
 
 
 func _debug_participant_list(snapshot: Dictionary, participant_ids: Array) -> String:
@@ -3476,7 +3502,7 @@ func _refresh_acting_as(snapshot: Dictionary) -> void:
 		var prefix := "Acting as "
 		if participant_id == connection_id:
 			prefix = "Acting as self: "
-		_acting_as_option.add_item("%s%s" % [prefix, participant.get("name", "Player")])
+		_acting_as_option.add_item("%s%s" % [prefix, _display_participant_name(participant)])
 		_acting_as_option.set_item_metadata(item_index, participant_id)
 		if participant_id == viewer_id:
 			_acting_as_option.select(item_index)
@@ -3906,7 +3932,7 @@ func _seat_setup_row(snapshot: Dictionary, participant: Dictionary, seat_index: 
 	ingredient_label.add_theme_constant_override("outline_size", 1)
 	icon_box.add_child(ingredient_label)
 
-	var displayed_name := str(participant.get("name", ""))
+	var displayed_name := _display_participant_name(participant, "")
 	if _lobby_pending_seat_names.has(participant_id):
 		displayed_name = str(_lobby_pending_seat_names.get(participant_id, displayed_name))
 	var name_input := _line_edit("Seat name", _sanitize_lobby_seat_name(displayed_name))
@@ -4001,9 +4027,9 @@ func _rename_lobby_seat(participant_id: String, input: LineEdit) -> void:
 		_lobby_pending_seat_names.erase(participant_id)
 		_stop_lobby_name_publish_if_idle()
 		if not participant.is_empty():
-			input.text = str(participant.get("name", "")).strip_edges()
+			input.text = _display_participant_name(participant, "").strip_edges()
 		return
-	if not participant.is_empty() and name == str(participant.get("name", "")).strip_edges():
+	if not participant.is_empty() and name == _display_participant_name(participant, "").strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
 		_stop_lobby_name_publish_if_idle()
 		return
@@ -4059,7 +4085,7 @@ func _remember_lobby_seat_name_edit(participant_id: String, name: String) -> voi
 		_lobby_pending_seat_names.erase(participant_id)
 		_stop_lobby_name_publish_if_idle()
 		return
-	if not participant.is_empty() and trimmed == str(participant.get("name", "")).strip_edges():
+	if not participant.is_empty() and trimmed == _display_participant_name(participant, "").strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
 		_stop_lobby_name_publish_if_idle()
 	else:
@@ -4076,7 +4102,7 @@ func _publish_lobby_seat_name_edit(participant_id: String, name: String) -> void
 		_stop_lobby_name_publish_if_idle()
 		return
 	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
-	if not participant.is_empty() and trimmed == str(participant.get("name", "")).strip_edges():
+	if not participant.is_empty() and trimmed == _display_participant_name(participant, "").strip_edges():
 		_lobby_pending_seat_names.erase(participant_id)
 		_stop_lobby_name_publish_if_idle()
 		return
@@ -4122,7 +4148,7 @@ func _sync_lobby_pending_names_with_snapshot(snapshot: Dictionary) -> void:
 			_lobby_pending_seat_names.erase(participant_id)
 			continue
 		var pending := str(_lobby_pending_seat_names.get(participant_id, "")).strip_edges()
-		var current := str(participant.get("name", "")).strip_edges()
+		var current := _display_participant_name(participant, "").strip_edges()
 		if pending == current:
 			_lobby_pending_seat_names.erase(participant_id)
 			continue
@@ -4152,7 +4178,7 @@ func _capture_lobby_seat_setup_edits() -> Array:
 			continue
 		var input := _lobby_seat_name_inputs.get(participant_id, null) as LineEdit
 		var toggle := _lobby_seat_kind_inputs.get(participant_id, null) as OptionButton
-		var name := str(participant.get("name", "")).strip_edges()
+		var name := _display_participant_name(participant, "").strip_edges()
 		if input != null and is_instance_valid(input):
 			var entered_name := _sanitize_lobby_seat_name(input.text)
 			if entered_name != "":
@@ -4215,7 +4241,7 @@ func _commit_lobby_seat_setup_edit(edit: Dictionary) -> void:
 	if participant.is_empty():
 		return
 	var current_kind := "bot" if str(participant.get("kind", "human")) == "bot" else "player"
-	var current_name := str(participant.get("name", "")).strip_edges()
+	var current_name := _display_participant_name(participant, "").strip_edges()
 	if desired_name == "":
 		desired_name = current_name
 	if desired_kind == "player" and current_kind == "bot":
@@ -4262,7 +4288,7 @@ func _apply_saved_lobby_setup_to_active_table() -> void:
 			kind = "player"
 		var saved_name := str(seat.get("name", "")).strip_edges()
 		if saved_name == "":
-			saved_name = str(participant.get("name", "")).strip_edges()
+			saved_name = _display_participant_name(participant, "").strip_edges()
 		edits.append({
 			"participantId": str(participant.get("id", "")),
 			"seatIndex": index,
@@ -4837,7 +4863,7 @@ func _add_create_offer_controls(snapshot: Dictionary) -> void:
 		if not _participant_can_receive_offer(participant):
 			continue
 		var target_index := target_option.item_count
-		target_option.add_item("%s - %s" % [participant.get("name", ""), _ingredient_display(snapshot, str(participant.get("ingredientId", "")))])
+		target_option.add_item("%s - %s" % [_display_participant_name(participant, ""), _ingredient_display(snapshot, str(participant.get("ingredientId", "")))])
 		target_option.set_item_metadata(target_index, participant.get("id", ""))
 		if str(participant.get("id", "")) == _selected_offer_target_id:
 			target_option.select(target_index)
@@ -4928,6 +4954,29 @@ func _participant_by_id(snapshot: Dictionary, participant_id: String) -> Diction
 	return {}
 
 
+func _display_participant_name(participant: Dictionary, fallback := "Player") -> String:
+	var name := str(participant.get("name", "")).strip_edges()
+	if str(participant.get("kind", "")) == "bot":
+		name = _strip_bot_display_suffix(name)
+	if name == "":
+		return fallback
+	return name
+
+
+func _strip_bot_display_suffix(name: String) -> String:
+	var trimmed := name.strip_edges()
+	for suffix in ["_pool_bot", "_barter_bot", "_mixed_bot", "_mix_bot", "_bot", "_b"]:
+		if trimmed.ends_with(suffix) and trimmed.length() > suffix.length():
+			return trimmed.substr(0, trimmed.length() - suffix.length()).strip_edges()
+	var numbered_suffix_marker := "_b_"
+	var marker_index := trimmed.rfind(numbered_suffix_marker)
+	if marker_index > 0:
+		var suffix_number := trimmed.substr(marker_index + numbered_suffix_marker.length())
+		if suffix_number.is_valid_int():
+			return trimmed.substr(0, marker_index).strip_edges()
+	return trimmed
+
+
 func _opening_offering_count(participant: Dictionary) -> int:
 	if participant.has("openingOfferingsCount"):
 		return int(participant.get("openingOfferingsCount", 0))
@@ -4938,7 +4987,7 @@ func _participant_name(snapshot: Dictionary, participant_id: String) -> String:
 	var participant := _participant_by_id(snapshot, participant_id)
 	if participant.is_empty():
 		return "Someone"
-	return str(participant.get("name", "Someone"))
+	return _display_participant_name(participant, "Someone")
 
 
 func _voucher_has_stock(snapshot: Dictionary, voucher: Dictionary) -> bool:
@@ -5357,7 +5406,7 @@ func _dish_summary_label(snapshot: Dictionary) -> String:
 		var dish_names := _dish_names_for_participant(snapshot, participant_id)
 		var names_label := "none" if dish_names.is_empty() else ", ".join(dish_names)
 		lines.append("%s: %s finished - %s" % [
-			participant.get("name", "?"),
+			_display_participant_name(participant, "?"),
 			int(participant.get("dishCount", 0)),
 			names_label
 		])
@@ -5589,7 +5638,7 @@ func _clear(container: Node) -> void:
 
 func _participant_dropdown_label(snapshot: Dictionary, participant: Dictionary) -> String:
 	return "%s - %s %s - %s dishes%s" % [
-		participant.get("name", "?"),
+		_display_participant_name(participant, "?"),
 		participant.get("role", "?"),
 		_participant_kind_label(participant),
 		int(participant.get("dishCount", 0)),
@@ -5605,7 +5654,7 @@ func _participant_detail_text(snapshot: Dictionary, participant: Dictionary) -> 
 		int(participant.get("platterShortfall", 0))
 	]
 	return "%s\n%s %s, %s dishes, ingredient: %s%s, %s, %s" % [
-		participant.get("name", "?"),
+		_display_participant_name(participant, "?"),
 		participant.get("role", "?"),
 		_participant_kind_label(participant),
 		int(participant.get("dishCount", 0)),
@@ -6154,7 +6203,7 @@ func _accountability_label(snapshot: Dictionary) -> String:
 			continue
 		var status := "cleared" if bool(participant.get("cleared", false)) else "not cleared"
 		lines.append("%s: target 1 own card, current %s, debt %s, shortfall %s - %s" % [
-			participant.get("name", "?"),
+			_display_participant_name(participant, "?"),
 			int(participant.get("ownCardsInPlatter", 0)),
 			int(participant.get("platterDebt", 0)),
 			int(participant.get("platterShortfall", 0)),
@@ -6350,7 +6399,7 @@ func _dish_count_summary_label(snapshot: Dictionary) -> String:
 		if target > 0:
 			suffix = "/%s" % target
 		lines.append("%s: %s%s" % [
-			str(participant.get("name", "Player")),
+			_display_participant_name(participant),
 			count,
 			suffix
 		])
