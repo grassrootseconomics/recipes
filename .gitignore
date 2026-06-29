@@ -36,3 +36,4 @@ client/web/*.service.worker.js
 # Local scratch
 tmp/
 .cache/
+.codex/config.toml
