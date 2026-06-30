@@ -171,6 +171,13 @@ export interface DishPartGroup {
 
 export type TransactionAction = "Deposit" | "Swap" | "Settlement Swap" | "Exchange" | "Redeem" | "Prepare" | "Share" | "Eat" | "Pass Turn";
 
+export interface TransactionMetadata {
+  redemptionSource?: "voucher" | "own_stock";
+  ingredientId?: string;
+  requirementId?: string;
+  ownerParticipantId?: string;
+}
+
 export interface TransactionRecord {
   id: string;
   turn: number;
@@ -181,6 +188,7 @@ export interface TransactionRecord {
   counterparty: string;
   itemOut: string;
   itemBack: string;
+  metadata?: TransactionMetadata;
 }
 
 export interface GameStats {

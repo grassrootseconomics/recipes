@@ -799,7 +799,52 @@ func _redeem_voucher(actor: Dictionary, voucher_id: String) -> bool:
 		voucher["location"] = {"type": "hand", "participantId": owner.get("id", "")}
 	else:
 		voucher["location"] = {"type": "holding", "participantId": owner.get("id", ""), "recipeOwnerId": actor.get("id", ""), "requirementId": requirement.get("id", "")}
-	_record_transaction(actor, "Redeem", str(owner.get("name", "")), _ingredient_name(str(voucher.get("ingredientId", ""))), "Real %s" % _ingredient_name(str(voucher.get("ingredientId", ""))), str(owner.get("id", "")))
+	_record_transaction(
+		actor,
+		"Redeem",
+		str(owner.get("name", "")),
+		_ingredient_name(str(voucher.get("ingredientId", ""))),
+		"Real %s" % _ingredient_name(str(voucher.get("ingredientId", ""))),
+		str(owner.get("id", "")),
+		{
+			"redemptionSource": "voucher",
+			"ingredientId": str(voucher.get("ingredientId", "")),
+			"requirementId": str(requirement.get("id", "")),
+			"ownerParticipantId": str(owner.get("id", ""))
+		}
+	)
+	return true
+
+
+func _redeem_own_stock_for_requirement(actor: Dictionary, requirement: Dictionary) -> bool:
+	if not _require_phase("playing") or not _require_active(actor):
+		return false
+	var actor_id := str(actor.get("id", ""))
+	var ingredient_id := str(requirement.get("ingredientId", ""))
+	if ingredient_id == "" or ingredient_id != str(actor.get("ingredientId", "")):
+		return _fail("Own stock can only redeem the participant's primary ingredient.")
+	var placed_ids: Array = requirement.get("placedVoucherIds", [])
+	var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - placed_ids.size()
+	if outstanding <= 0:
+		return _fail("Requirement already has enough ingredients.")
+	if int(actor.get("realIngredientStock", 0)) <= 0:
+		return _fail("Ingredient owner has no real stock remaining.")
+	requirement["redeemedQty"] = int(requirement.get("redeemedQty", 0)) + 1
+	actor["realIngredientStock"] = int(actor.get("realIngredientStock", 0)) - 1
+	_record_transaction(
+		actor,
+		"Redeem",
+		str(actor.get("name", "")),
+		_ingredient_name(ingredient_id),
+		"Real %s" % _ingredient_name(ingredient_id),
+		actor_id,
+		{
+			"redemptionSource": "own_stock",
+			"ingredientId": ingredient_id,
+			"requirementId": str(requirement.get("id", "")),
+			"ownerParticipantId": actor_id
+		}
+	)
 	return true
 
 
@@ -810,47 +855,63 @@ func _redeem_all_and_pass_turn(actor: Dictionary) -> bool:
 	var recipe: Dictionary = table["recipes"].get(actor_id, {})
 	if not recipe.is_empty():
 		var remaining_stock_by_owner := {}
-		for raw_requirement in recipe.get("requirements", []):
-			var requirement: Dictionary = raw_requirement
-			var placed_ids: Array = requirement.get("placedVoucherIds", []).duplicate()
-			for voucher_id in placed_ids:
-				var placed_voucher_id := str(voucher_id)
-				var voucher := _voucher_by_id(placed_voucher_id)
-				var location: Dictionary = voucher.get("location", {})
-				if voucher.is_empty() or str(location.get("type", "")) != "placed" or str(location.get("recipeOwnerId", "")) != actor_id or str(location.get("requirementId", "")) != str(requirement.get("id", "")):
+		for raw_placed_requirement in recipe.get("requirements", []):
+			var placed_requirement: Dictionary = raw_placed_requirement
+			var placed_ids: Array = placed_requirement.get("placedVoucherIds", []).duplicate()
+			for raw_placed_voucher_id in placed_ids:
+				var placed_voucher_id := str(raw_placed_voucher_id)
+				var placed_voucher := _voucher_by_id(placed_voucher_id)
+				var placed_location: Dictionary = placed_voucher.get("location", {})
+				if placed_voucher.is_empty() or str(placed_location.get("type", "")) != "placed" or str(placed_location.get("recipeOwnerId", "")) != actor_id or str(placed_location.get("requirementId", "")) != str(placed_requirement.get("id", "")):
 					continue
-				var owner_id := str(voucher.get("ownerParticipantId", ""))
-				var owner := _participant_by_id(owner_id)
-				var remaining_stock := int(remaining_stock_by_owner.get(owner_id, int(owner.get("realIngredientStock", 0))))
-				if remaining_stock <= 0:
+				var placed_owner_id := str(placed_voucher.get("ownerParticipantId", ""))
+				var placed_owner := _participant_by_id(placed_owner_id)
+				var placed_remaining_stock := int(remaining_stock_by_owner.get(placed_owner_id, int(placed_owner.get("realIngredientStock", 0))))
+				if placed_remaining_stock <= 0:
 					continue
-				remaining_stock_by_owner[owner_id] = remaining_stock - 1
+				remaining_stock_by_owner[placed_owner_id] = placed_remaining_stock - 1
 				if not _redeem_voucher(actor, placed_voucher_id):
 					return false
 		var outstanding_by_requirement := {}
-		for raw_requirement in recipe.get("requirements", []):
-			var requirement: Dictionary = raw_requirement
-			var placed_ids: Array = requirement.get("placedVoucherIds", [])
-			outstanding_by_requirement[str(requirement.get("id", ""))] = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - placed_ids.size()
+		for raw_outstanding_requirement in recipe.get("requirements", []):
+			var outstanding_requirement: Dictionary = raw_outstanding_requirement
+			var outstanding_placed_ids: Array = outstanding_requirement.get("placedVoucherIds", [])
+			outstanding_by_requirement[str(outstanding_requirement.get("id", ""))] = int(outstanding_requirement.get("requiredQty", 0)) - int(outstanding_requirement.get("redeemedQty", 0)) - outstanding_placed_ids.size()
+		for raw_stock_requirement in recipe.get("requirements", []):
+			var stock_requirement: Dictionary = raw_stock_requirement
+			if str(stock_requirement.get("ingredientId", "")) != str(actor.get("ingredientId", "")):
+				continue
+			var stock_requirement_id := str(stock_requirement.get("id", ""))
+			var stock_outstanding := int(outstanding_by_requirement.get(stock_requirement_id, 0))
+			while stock_outstanding > 0:
+				var own_remaining_stock := int(remaining_stock_by_owner.get(actor_id, int(actor.get("realIngredientStock", 0))))
+				if own_remaining_stock <= 0:
+					break
+				remaining_stock_by_owner[actor_id] = own_remaining_stock - 1
+				if not _redeem_own_stock_for_requirement(actor, stock_requirement):
+					return false
+				stock_outstanding -= 1
+				outstanding_by_requirement[stock_requirement_id] = stock_outstanding
 		var planned_redemptions: Array = []
 		var initial_hand_ids: Array = []
-		for voucher in _hand_vouchers(actor_id):
-			initial_hand_ids.append(str(voucher.get("id", "")))
-		for voucher_id in initial_hand_ids:
-			var voucher := _voucher_by_id(voucher_id)
-			if voucher.is_empty() or not _voucher_in_hand(voucher, actor_id):
+		for hand_voucher in _hand_vouchers(actor_id):
+			initial_hand_ids.append(str(hand_voucher.get("id", "")))
+		for raw_hand_voucher_id in initial_hand_ids:
+			var hand_voucher_id := str(raw_hand_voucher_id)
+			var hand_voucher := _voucher_by_id(hand_voucher_id)
+			if hand_voucher.is_empty() or not _voucher_in_hand(hand_voucher, actor_id):
 				continue
-			var requirement_id := _planned_useful_requirement_id(recipe, str(voucher.get("ingredientId", "")), outstanding_by_requirement)
-			if requirement_id == "":
+			var hand_requirement_id := _planned_useful_requirement_id(recipe, str(hand_voucher.get("ingredientId", "")), outstanding_by_requirement)
+			if hand_requirement_id == "":
 				continue
-			var owner_id := str(voucher.get("ownerParticipantId", ""))
-			var owner := _participant_by_id(owner_id)
-			var remaining_stock := int(remaining_stock_by_owner.get(owner_id, int(owner.get("realIngredientStock", 0))))
-			if remaining_stock <= 0:
+			var hand_owner_id := str(hand_voucher.get("ownerParticipantId", ""))
+			var hand_owner := _participant_by_id(hand_owner_id)
+			var hand_remaining_stock := int(remaining_stock_by_owner.get(hand_owner_id, int(hand_owner.get("realIngredientStock", 0))))
+			if hand_remaining_stock <= 0:
 				continue
-			remaining_stock_by_owner[owner_id] = remaining_stock - 1
-			outstanding_by_requirement[requirement_id] = int(outstanding_by_requirement.get(requirement_id, 0)) - 1
-			planned_redemptions.append({"voucherId": voucher_id, "requirementId": requirement_id})
+			remaining_stock_by_owner[hand_owner_id] = hand_remaining_stock - 1
+			outstanding_by_requirement[hand_requirement_id] = int(outstanding_by_requirement.get(hand_requirement_id, 0)) - 1
+			planned_redemptions.append({"voucherId": hand_voucher_id, "requirementId": hand_requirement_id})
 		for planned in planned_redemptions:
 			var planned_voucher_id := str(planned.get("voucherId", ""))
 			var planned_requirement_id := str(planned.get("requirementId", ""))
@@ -1637,6 +1698,8 @@ func _decide_bot_intent(bot_id: String) -> Dictionary:
 				var offer_intent := _decide_bot_create_offer(bot_id, snapshot)
 				if not offer_intent.is_empty():
 					return offer_intent
+			if _bot_has_redeemable_own_stock(bot_id, snapshot, recipe):
+				return {"type": "redeem_all_and_pass_turn"}
 			if _bot_has_redeemable_cards(bot_id, snapshot, recipe):
 				return {"type": "redeem_all_and_pass_turn"}
 			return _round_robin_pass()
@@ -1683,6 +1746,21 @@ func _bot_has_redeemable_cards(bot_id: String, snapshot: Dictionary, recipe: Dic
 		if not _voucher_has_stock(voucher):
 			continue
 		if _useful_requirement_id(recipe, str(voucher.get("ingredientId", ""))) != "":
+			return true
+	return false
+
+
+func _bot_has_redeemable_own_stock(bot_id: String, snapshot: Dictionary, recipe: Dictionary) -> bool:
+	var bot := _snapshot_participant(snapshot, bot_id)
+	var own_ingredient_id := str(bot.get("ingredientId", ""))
+	if own_ingredient_id == "" or int(bot.get("realIngredientStock", 0)) <= 0:
+		return false
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		if str(requirement.get("ingredientId", "")) != own_ingredient_id:
+			continue
+		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
+		if outstanding > 0:
 			return true
 	return false
 
@@ -1901,16 +1979,23 @@ func _needed_ingredient_counts_after_hand(snapshot: Dictionary, recipe: Dictiona
 		var requirement: Dictionary = raw_requirement
 		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
 		if outstanding > 0:
-			var ingredient_id := str(requirement.get("ingredientId", ""))
-			needed[ingredient_id] = int(needed.get(ingredient_id, 0)) + outstanding
+			var needed_ingredient_id := str(requirement.get("ingredientId", ""))
+			needed[needed_ingredient_id] = int(needed.get(needed_ingredient_id, 0)) + outstanding
+	var viewer_id := str(snapshot.get("viewerParticipantId", ""))
+	var viewer := _snapshot_participant(snapshot, viewer_id)
+	var own_ingredient_id := str(viewer.get("ingredientId", ""))
+	if own_ingredient_id != "":
+		var own_need := int(needed.get(own_ingredient_id, 0))
+		if own_need > 0:
+			needed[own_ingredient_id] = maxi(0, own_need - int(viewer.get("realIngredientStock", 0)))
 	for raw_voucher in snapshot.get("ownHand", []):
 		var voucher: Dictionary = raw_voucher
 		if not _voucher_has_stock(voucher):
 			continue
-		var ingredient_id := str(voucher.get("ingredientId", ""))
-		var remaining := int(needed.get(ingredient_id, 0))
+		var hand_ingredient_id := str(voucher.get("ingredientId", ""))
+		var remaining := int(needed.get(hand_ingredient_id, 0))
 		if remaining > 0:
-			needed[ingredient_id] = remaining - 1
+			needed[hand_ingredient_id] = remaining - 1
 	return needed
 
 
@@ -2610,9 +2695,9 @@ func _all_dish_parts_eaten() -> bool:
 	return true
 
 
-func _record_transaction(actor: Dictionary, action: String, counterparty: String, item_out: String, item_back: String, counterparty_id := "") -> void:
+func _record_transaction(actor: Dictionary, action: String, counterparty: String, item_out: String, item_back: String, counterparty_id := "", metadata := {}) -> void:
 	var history: Array = table.get("transactionHistory", [])
-	history.append({
+	var transaction := {
 		"id": "tx_%s" % (history.size() + 1),
 		"turn": int(table.get("turn", 0)),
 		"participantId": actor.get("id", ""),
@@ -2622,7 +2707,10 @@ func _record_transaction(actor: Dictionary, action: String, counterparty: String
 		"counterparty": counterparty,
 		"itemOut": item_out,
 		"itemBack": item_back
-	})
+	}
+	if metadata is Dictionary and not metadata.is_empty():
+		transaction["metadata"] = metadata.duplicate(true)
+	history.append(transaction)
 	table["transactionHistory"] = history
 
 
@@ -2811,18 +2899,24 @@ func _first_surplus_voucher(participant_id_for_bot: String, hand: Array, recipe:
 		var requirement: Dictionary = raw_requirement
 		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
 		if outstanding > 0:
-			var ingredient_id := str(requirement.get("ingredientId", ""))
-			protected_by_ingredient[ingredient_id] = int(protected_by_ingredient.get(ingredient_id, 0)) + outstanding
+			var protected_ingredient_id := str(requirement.get("ingredientId", ""))
+			protected_by_ingredient[protected_ingredient_id] = int(protected_by_ingredient.get(protected_ingredient_id, 0)) + outstanding
+	var participant := _participant_by_id(participant_id_for_bot)
+	var own_ingredient_id := str(participant.get("ingredientId", ""))
+	if own_ingredient_id != "":
+		var protected_own := int(protected_by_ingredient.get(own_ingredient_id, 0))
+		if protected_own > 0:
+			protected_by_ingredient[own_ingredient_id] = maxi(0, protected_own - int(participant.get("realIngredientStock", 0)))
 	var held_by_ingredient := {}
 	for voucher in hand:
 		if not _voucher_has_stock(voucher):
 			continue
-		var ingredient_id := str(voucher.get("ingredientId", ""))
-		if ingredient_id == excluded_ingredient_id:
+		var held_ingredient_id := str(voucher.get("ingredientId", ""))
+		if held_ingredient_id == excluded_ingredient_id:
 			continue
-		var held_count := int(held_by_ingredient.get(ingredient_id, 0)) + 1
-		held_by_ingredient[ingredient_id] = held_count
-		if held_count > int(protected_by_ingredient.get(ingredient_id, 0)):
+		var held_count := int(held_by_ingredient.get(held_ingredient_id, 0)) + 1
+		held_by_ingredient[held_ingredient_id] = held_count
+		if held_count > int(protected_by_ingredient.get(held_ingredient_id, 0)):
 			return voucher
 	return {}
 

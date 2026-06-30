@@ -593,12 +593,13 @@ function decideRedeemAllAndPass(table: Table, botParticipantId: string, snapshot
   const hasUsefulHandVoucher = snapshot.ownHand.some(
     (voucher) => voucherHasStock(snapshot, voucher) && getUsefulRequirementIds(table, botParticipantId, voucher.ingredientId).length > 0
   );
-  if (!recipeComplete && !hasPlacedRedeemable && !hasUsefulHandVoucher) {
+  const hasOwnStockRedeemable = ownStockRedeemableCount(snapshot, botParticipantId) > 0;
+  if (!recipeComplete && !hasPlacedRedeemable && !hasOwnStockRedeemable && !hasUsefulHandVoucher) {
     return undefined;
   }
   return {
     intent: { type: "redeem_all_and_pass_turn" },
-    reason: recipeComplete ? "prepare complete recipe and pass turn" : "redeem useful cards and pass turn"
+    reason: recipeComplete ? "prepare complete recipe and pass turn" : "redeem useful stock/cards and pass turn"
   };
 }
 
@@ -606,7 +607,7 @@ function decidePoolSwap(table: Table, botParticipantId: string, snapshot: Snapsh
   if (!snapshot.ownRecipe) {
     return undefined;
   }
-  const neededIngredients = neededIngredientCountsAfterHand(snapshot);
+  const neededIngredients = neededIngredientCountsAfterHand(snapshot, botParticipantId);
   for (const take of snapshot.platter) {
     if ((neededIngredients.get(take.ingredientId) ?? 0) <= 0 || !voucherHasStock(snapshot, take)) {
       continue;
@@ -675,7 +676,7 @@ function decideCreateOffer(table: Table, botParticipantId: string, snapshot: Sna
   if (!snapshot.ownRecipe) {
     return undefined;
   }
-  const neededIngredients = neededIngredientCountsAfterHand(snapshot);
+  const neededIngredients = neededIngredientCountsAfterHand(snapshot, botParticipantId);
   const needed = offerableNeededIngredients(botParticipantId, snapshot, neededIngredients)[0];
   if (!needed) {
     return undefined;
@@ -699,7 +700,7 @@ function passMissingRecipeDiagnostic(table: Table, botParticipantId: string, sna
   if (!snapshot.ownRecipe) {
     return undefined;
   }
-  const neededIngredients = neededIngredientCountsAfterHand(snapshot);
+  const neededIngredients = neededIngredientCountsAfterHand(snapshot, botParticipantId);
   const missingIngredientIds = [...neededIngredients.entries()]
     .filter(([, missingCount]) => missingCount > 0)
     .map(([ingredientId]) => ingredientId)
@@ -756,12 +757,21 @@ function offerableNeededIngredients(
     .sort((left, right) => left.missingCount - right.missingCount || left.ingredientId.localeCompare(right.ingredientId));
 }
 
-function neededIngredientCountsAfterHand(snapshot: Snapshot): Map<string, number> {
+function neededIngredientCountsAfterHand(snapshot: Snapshot, botParticipantId: string): Map<string, number> {
   const needed = new Map<string, number>();
   for (const requirement of snapshot.ownRecipe?.requirements ?? []) {
     const outstanding = requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length;
     if (outstanding > 0) {
       needed.set(requirement.ingredientId, (needed.get(requirement.ingredientId) ?? 0) + outstanding);
+    }
+  }
+  const bot = snapshot.participants.find((participant) => participant.id === botParticipantId);
+  const ownIngredientId = bot?.ingredientId ?? "";
+  if (ownIngredientId) {
+    const selfStock = Math.max(0, bot?.realIngredientStock ?? 0);
+    const ownNeed = needed.get(ownIngredientId) ?? 0;
+    if (ownNeed > 0 && selfStock > 0) {
+      needed.set(ownIngredientId, Math.max(0, ownNeed - selfStock));
     }
   }
   for (const voucher of snapshot.ownHand) {
@@ -774,6 +784,22 @@ function neededIngredientCountsAfterHand(snapshot: Snapshot): Map<string, number
     }
   }
   return needed;
+}
+
+function ownStockRedeemableCount(snapshot: Snapshot, participantId: string): number {
+  const participant = snapshot.participants.find((candidate) => candidate.id === participantId);
+  const ownIngredientId = participant?.ingredientId ?? "";
+  if (!ownIngredientId) {
+    return 0;
+  }
+  let outstanding = 0;
+  for (const requirement of snapshot.ownRecipe?.requirements ?? []) {
+    if (requirement.ingredientId !== ownIngredientId) {
+      continue;
+    }
+    outstanding += Math.max(0, requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length);
+  }
+  return Math.min(outstanding, Math.max(0, participant?.realIngredientStock ?? 0));
 }
 
 function firstSurplusVoucher(
@@ -789,6 +815,7 @@ function firstSurplusVoucher(
   });
   const recipe = table.recipes[participantId];
   const protectedByIngredient = new Map<string, number>();
+  const participant = table.participants[participantId];
   for (const requirement of recipe?.requirements ?? []) {
     const outstanding = requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length;
     if (outstanding > 0) {
@@ -796,6 +823,12 @@ function firstSurplusVoucher(
         requirement.ingredientId,
         (protectedByIngredient.get(requirement.ingredientId) ?? 0) + outstanding
       );
+    }
+  }
+  if (participant?.ingredientId) {
+    const protectedOwn = protectedByIngredient.get(participant.ingredientId) ?? 0;
+    if (protectedOwn > 0) {
+      protectedByIngredient.set(participant.ingredientId, Math.max(0, protectedOwn - Math.max(0, participant.realIngredientStock ?? 0)));
     }
   }
   const heldByIngredient = new Map<string, number>();

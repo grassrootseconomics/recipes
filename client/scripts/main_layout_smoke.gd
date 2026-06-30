@@ -46,6 +46,19 @@ func _initialize() -> void:
 	_require(start_button.get_theme_color("font_disabled_color").is_equal_approx(Color(0.17, 0.12, 0.07)), "online host waiting button uses dark disabled text")
 	var start_button_font := start_button.get_theme_font("font")
 	_require(start_button_font is SystemFont and (start_button_font as SystemFont).font_weight >= 700, "online host waiting button uses a bold font")
+	var waiting_lobby_inputs: Dictionary = main.get("_lobby_seat_name_inputs")
+	var waiting_host_name_input := waiting_lobby_inputs.get("p1", null) as LineEdit
+	if waiting_host_name_input != null:
+		waiting_host_name_input.grab_focus()
+		waiting_host_name_input.text = "TypingHost"
+	var joined_while_typing_snapshot := _online_lobby_snapshot(true)
+	main.call("_refresh_controls", joined_while_typing_snapshot)
+	await process_frame
+	var focused_start_button := _current_start_button(main)
+	_require(focused_start_button != null and not focused_start_button.disabled and focused_start_button.text == "Start Cooking", "online host Start Cooking button updates while a lobby name field keeps focus")
+	_require(waiting_host_name_input != null and waiting_host_name_input.has_focus() and waiting_host_name_input.text == "TypingHost", "focused host name input is still preserved when the first cook joins")
+	if waiting_host_name_input != null:
+		waiting_host_name_input.release_focus()
 	var recipes_client := root.get_node("/root/RecipesClient")
 	recipes_client.table_code = "JOINME"
 	main.call("_confirm_close_table")

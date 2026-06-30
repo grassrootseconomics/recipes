@@ -114,7 +114,7 @@ const MAX_PENDING_VISUAL_SNAPSHOTS := 32
 const MAX_ANIMATION_QUEUE_ESTIMATED_SECONDS := 12.0
 const PREPARE_ANNOUNCEMENT_HOLD_SECONDS := 2.05
 const COMPLETE_FOOD_ORBIT_MIN_ITEMS := 8
-const COMPLETE_FOOD_ORBIT_MAX_ITEMS := 16
+const COMPLETE_FOOD_ORBIT_MAX_ITEMS := 32
 const COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS := 0.42
 const COMPLETE_ORBIT_LAUNCH_SETTLE_SECONDS := 0.05
 const COMPLETE_ORBIT_LAUNCH_FADE_SECONDS := 0.07
@@ -418,7 +418,7 @@ class FireworksShow:
 class CompleteFoodOrbit:
 	extends Control
 
-	const ITEM_SIZE := Vector2(34, 34)
+	const ITEM_SIZE := Vector2(48, 48)
 	const ORBIT_EDGE_GUTTER := 8.0
 	const ORBIT_EDGE_INSET := ITEM_SIZE.x * 0.5 + ORBIT_EDGE_GUTTER
 	const ORBIT_LEFT_INSET := ORBIT_EDGE_INSET
@@ -449,12 +449,14 @@ class CompleteFoodOrbit:
 			var icon := TextureRect.new()
 			icon.name = "OrbitFood_%s" % index
 			icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			icon.stretch_mode = TextureRect.STRETCH_SCALE
+			icon.clip_contents = true
+			icon.custom_minimum_size = ITEM_SIZE
+			icon.size = ITEM_SIZE
 			icon.texture = texture
 			icon.size = ITEM_SIZE
-			icon.custom_minimum_size = ITEM_SIZE
 			icon.pivot_offset = ITEM_SIZE * 0.5
-			icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			icon.visible = visible_count < 0 or index < visible_count
 			icon.modulate = Color(1.0, 1.0, 1.0, 0.94 if icon.visible else 0.0)
 			add_child(icon)
@@ -474,6 +476,9 @@ class CompleteFoodOrbit:
 		set_meta("orbit_right_margin", ORBIT_RIGHT_INSET)
 		set_meta("orbit_bottom_margin", ORBIT_BOTTOM_INSET)
 		set_process(_items.size() > 0)
+		_position_items()
+
+	func refresh_layout() -> void:
 		_position_items()
 
 	func set_visible_item_count(visible_count := -1) -> void:
@@ -620,6 +625,7 @@ var _complete_food_orbit: Control
 var _complete_food_orbit_key := ""
 var _complete_orbit_transition_active := false
 var _shared_food_orbit_items: Array = []
+var _compacted_complete_orbit_replay_suppression_active := false
 
 
 func _ready() -> void:
@@ -632,6 +638,11 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	_clear_complete_celebration_effects()
 	VisualAssets.clear_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		_layout_complete_food_orbit()
 
 
 func _get_minimum_size() -> Vector2:
@@ -666,7 +677,10 @@ func render(snapshot: Dictionary) -> void:
 			_record_animation_debug(events)
 			_animation_queue.append_array(events)
 			_compact_animation_queue_if_needed()
-			_request_animation_start()
+			if _animation_queue.is_empty():
+				_apply_pending_visual_snapshot_after_layout()
+			else:
+				_request_animation_start()
 			return
 
 	_apply_snapshot(snapshot)
@@ -1110,7 +1124,6 @@ func debug_deposit_animation_anchors() -> Array:
 		})
 	return anchors
 
-
 func debug_animation_path_points(event: Dictionary) -> Dictionary:
 	match str(event.get("type", "")):
 		"deposit":
@@ -1132,6 +1145,11 @@ func debug_animation_path_points(event: Dictionary) -> Dictionary:
 				"takeEnd": _swap_point(event, "takeEndPoint", _swap_take_end_center(event))
 			}
 		"public_redeem":
+			if str(event.get("redemptionSource", "voucher")) == "own_stock":
+				return {
+					"ingredientStart": _redeem_point(event, "stockStartPoint", _participant_avatar_center(str(event.get("participantId", "")))),
+					"ingredientEnd": _redeem_point(event, "ingredientEndPoint", _public_redeem_actor_center(event))
+				}
 			return {
 				"cardStart": _redeem_point(event, "cardStartPoint", _public_redeem_actor_center(event)),
 				"cardEnd": _redeem_point(event, "ownerPoint", _redeem_owner_center(event)),
@@ -1139,6 +1157,11 @@ func debug_animation_path_points(event: Dictionary) -> Dictionary:
 				"ingredientEnd": _redeem_point(event, "ingredientEndPoint", _public_redeem_actor_center(event))
 			}
 		"redeem":
+			if str(event.get("redemptionSource", "voucher")) == "own_stock":
+				return {
+					"ingredientStart": _redeem_point(event, "stockStartPoint", _participant_avatar_center(str(event.get("participantId", _viewer_id())))),
+					"ingredientEnd": _redeem_point(event, "recipeSlotPoint", _redeem_recipe_slot_center(str(event.get("ingredientId", "")), int(event.get("slotIndex", 0))))
+				}
 			return {
 				"cardStart": _redeem_point(event, "cardStartPoint", _redeem_card_start_center(str(event.get("ingredientId", "")))),
 				"cardEnd": _redeem_point(event, "ownerPoint", _redeem_owner_center(event)),
@@ -1168,8 +1191,6 @@ func debug_animation_path_points(event: Dictionary) -> Dictionary:
 			}
 		_:
 			return {}
-
-
 func _build() -> void:
 	add_theme_stylebox_override("panel", _panel_style(TABLE_BG, PANEL_BORDER, 2, 8))
 	clip_contents = false
@@ -2442,6 +2463,7 @@ func _ensure_complete_food_orbit_for_items(items: Array, visible_count := -1) ->
 		return
 	var key := _complete_food_orbit_key_for_items(items)
 	if is_instance_valid(_complete_food_orbit) and _complete_food_orbit_key == key:
+		_layout_complete_food_orbit()
 		if _complete_food_orbit.has_method("set_visible_item_count"):
 			_complete_food_orbit.call("set_visible_item_count", visible_count)
 		debug_stats["completeFoodOrbitCount"] = int(_complete_food_orbit.get_meta("orbit_item_count", items.size()))
@@ -2454,8 +2476,31 @@ func _ensure_complete_food_orbit_for_items(items: Array, visible_count := -1) ->
 	_overlay_layer.move_child(orbit, 0)
 	_complete_food_orbit = orbit
 	_complete_food_orbit_key = key
+	_layout_complete_food_orbit()
 	debug_stats["completeFoodOrbitCount"] = items.size()
 	debug_stats["completeFoodOrbitVisibleCount"] = int(orbit.get_meta("visible_orbit_item_count", items.size()))
+
+
+func _layout_complete_food_orbit() -> void:
+	if not is_instance_valid(_complete_food_orbit) or not is_instance_valid(_overlay_layer):
+		return
+	var panel_rect := get_global_rect()
+	if panel_rect.size.x <= 1.0 or panel_rect.size.y <= 1.0:
+		return
+	var inverse := _overlay_layer.get_global_transform_with_canvas().affine_inverse()
+	var local_top_left: Vector2 = inverse * panel_rect.position
+	var local_bottom_right: Vector2 = inverse * panel_rect.end
+	var local_size := local_bottom_right - local_top_left
+	if local_size.x <= 1.0 or local_size.y <= 1.0:
+		return
+	_complete_food_orbit.set_anchors_preset(Control.PRESET_TOP_LEFT, false)
+	_complete_food_orbit.position = local_top_left
+	_complete_food_orbit.size = local_size
+	_complete_food_orbit.custom_minimum_size = local_size
+	_complete_food_orbit.set_meta("orbit_panel_global_rect", panel_rect)
+	_complete_food_orbit.set_meta("orbit_control_global_rect", _complete_food_orbit.get_global_rect())
+	if _complete_food_orbit.has_method("refresh_layout"):
+		_complete_food_orbit.call("refresh_layout")
 
 
 func _clear_complete_food_orbit(clear_shared_items := true) -> void:
@@ -2466,6 +2511,7 @@ func _clear_complete_food_orbit(clear_shared_items := true) -> void:
 	_complete_orbit_transition_active = false
 	if clear_shared_items:
 		_shared_food_orbit_items.clear()
+		_compacted_complete_orbit_replay_suppression_active = false
 	if debug_stats.has("completeFoodOrbitCount"):
 		debug_stats["completeFoodOrbitCount"] = 0
 	if debug_stats.has("completeFoodOrbitVisibleCount"):
@@ -4765,6 +4811,23 @@ func _should_hold_snapshot_for_animation(previous_snapshot: Dictionary, current_
 		return false
 	if str(previous_snapshot.get("tableCode", "")) == "" or str(previous_snapshot.get("tableCode", "")) != str(current_snapshot.get("tableCode", "")):
 		return false
+	if _complete_snapshot_orbit_already_represented(previous_snapshot, current_snapshot):
+		debug_stats["completeOrbitReplaySuppressed"] = true
+		return false
+	return true
+
+
+func _complete_snapshot_orbit_already_represented(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> bool:
+	if not _compacted_complete_orbit_replay_suppression_active:
+		return false
+	if str(previous_snapshot.get("phase", "")) != "eating" or str(current_snapshot.get("phase", "")) != "complete":
+		return false
+	if _shared_food_orbit_items.is_empty():
+		return false
+	var complete_items := _complete_food_orbit_items_for_snapshot(current_snapshot)
+	if complete_items.is_empty() or _shared_food_orbit_items.size() < complete_items.size():
+		return false
+	_compacted_complete_orbit_replay_suppression_active = false
 	return true
 
 
@@ -4887,7 +4950,10 @@ func _apply_start_setup_transition(current_snapshot: Dictionary) -> void:
 	_record_animation_debug(events)
 	_animation_queue.append_array(events)
 	_compact_animation_queue_if_needed()
-	call_deferred("_play_next_animation_after_layout")
+	if _animation_queue.is_empty():
+		_apply_pending_visual_snapshot_after_layout()
+	else:
+		call_deferred("_play_next_animation_after_layout")
 
 
 func _request_animation_start() -> void:
@@ -5583,19 +5649,66 @@ func _compact_animation_queue_if_needed() -> void:
 		return
 	var compacted: Array = []
 	var removed := 0
+	var compacted_orbit_items: Array = []
+	var compacted_orbit_visible := 0
 	for raw_event in _animation_queue:
 		var event: Dictionary = raw_event
 		if _should_preserve_queued_animation_event(event):
 			compacted.append(event)
 		else:
+			var orbit_payload := _complete_orbit_payload_from_event(event)
+			if not orbit_payload.is_empty():
+				var payload_items: Array = orbit_payload.get("items", [])
+				var payload_visible := int(orbit_payload.get("visible", 0))
+				if payload_visible >= compacted_orbit_visible or payload_items.size() > compacted_orbit_items.size():
+					compacted_orbit_items = payload_items.duplicate(true)
+					compacted_orbit_visible = payload_visible
 			removed += 1
 	if removed <= 0:
 		return
+	if not compacted_orbit_items.is_empty():
+		_merge_compacted_complete_orbit_payload(compacted, compacted_orbit_items, compacted_orbit_visible)
 	_animation_queue = compacted
 	_animation_queue_compaction_count += 1
 	debug_stats["animationQueueEstimatedSeconds"] = _animation_queue_estimated_seconds()
 	debug_stats["animationQueueCompactions"] = _animation_queue_compaction_count
 	debug_stats["animationQueueCompactedEvents"] = removed
+	if not compacted_orbit_items.is_empty():
+		debug_stats["animationQueueCompactedOrbitItemCount"] = compacted_orbit_items.size()
+		debug_stats["animationQueueCompactedOrbitVisibleCount"] = compacted_orbit_visible
+
+
+func _complete_orbit_payload_from_event(event: Dictionary) -> Dictionary:
+	if not bool(event.get("completeOrbit", false)):
+		return {}
+	var items: Array = event.get("completeOrbitItems", [])
+	if items.is_empty():
+		return {}
+	var visible := clampi(int(event.get("completeOrbitRevealCount", items.size())), 0, items.size())
+	return {
+		"items": items.duplicate(true),
+		"visible": visible
+	}
+
+
+func _merge_compacted_complete_orbit_payload(queue: Array, items: Array, visible_count: int) -> void:
+	var normalized_visible := clampi(visible_count, 0, items.size())
+	var target_index := -1
+	for index in range(queue.size()):
+		var event: Dictionary = queue[index]
+		if bool(event.get("completeOrbit", false)):
+			target_index = index
+	if target_index >= 0:
+		var target_event: Dictionary = queue[target_index]
+		var existing_items: Array = target_event.get("completeOrbitItems", [])
+		var existing_visible := int(target_event.get("completeOrbitRevealCount", existing_items.size()))
+		if existing_items.size() < items.size() or existing_visible < normalized_visible:
+			target_event["completeOrbitItems"] = items.duplicate(true)
+			target_event["completeOrbitTotal"] = items.size()
+			target_event["completeOrbitRevealCount"] = normalized_visible
+			queue[target_index] = target_event
+	_remember_shared_food_orbit_items(items, normalized_visible)
+	_compacted_complete_orbit_replay_suppression_active = true
 
 
 func _should_preserve_queued_animation_event(event: Dictionary) -> bool:
@@ -6015,9 +6128,8 @@ func _detect_redeem_events(previous_snapshot: Dictionary, current_snapshot: Dict
 				event["ownerPoint"] = _redeem_owner_center(event)
 				event["recipeSlotPoint"] = _redeem_recipe_slot_center(ingredient_id, index)
 				events.append(event)
-	if _recipe_id(previous_snapshot.get("ownRecipe", {})) != _recipe_id(current_snapshot.get("ownRecipe", {})):
 		var transaction_events := _viewer_redeem_events_from_transactions(previous_snapshot, current_snapshot)
-		if transaction_events.size() > events.size():
+		if transaction_events.size() >= events.size() and not transaction_events.is_empty():
 			events = transaction_events
 	var public_redeems := _public_redeem_events_from_transactions(previous_snapshot, current_snapshot)
 	events.append_array(public_redeems)
@@ -6034,24 +6146,36 @@ func _viewer_redeem_events_from_transactions(previous_snapshot: Dictionary, curr
 		var transaction: Dictionary = raw_transaction
 		if str(transaction.get("action", "")) != "Redeem" or str(transaction.get("participantId", "")) != viewer_id:
 			continue
-		var ingredient_id := _ingredient_id_from_label(str(transaction.get("itemOut", "")))
+		var metadata: Dictionary = transaction.get("metadata", {}) if transaction.get("metadata", {}) is Dictionary else {}
+		var ingredient_id := str(metadata.get("ingredientId", ""))
+		if ingredient_id == "":
+			ingredient_id = _ingredient_id_from_label(str(transaction.get("itemOut", "")))
 		if ingredient_id == "":
 			continue
 		var slot_index := _first_unredeemed_recipe_slot_index(working_recipe, ingredient_id)
 		if slot_index < 0:
 			continue
-		var owner_id := str(transaction.get("counterpartyParticipantId", ""))
+		var owner_id := str(metadata.get("ownerParticipantId", ""))
+		if owner_id == "":
+			owner_id = str(transaction.get("counterpartyParticipantId", ""))
 		if owner_id == "":
 			owner_id = _participant_id_for_ingredient_in_snapshot(previous_snapshot, ingredient_id)
+		var redemption_source := str(metadata.get("redemptionSource", "voucher"))
 		var event := {
 			"type": "redeem",
+			"participantId": viewer_id,
 			"ingredientId": ingredient_id,
 			"ownerParticipantId": owner_id,
 			"slotIndex": slot_index,
+			"redemptionSource": redemption_source,
 			"_transactionId": str(transaction.get("id", ""))
 		}
-		event["cardStartPoint"] = _redeem_card_start_center(ingredient_id)
-		event["ownerPoint"] = _redeem_owner_center(event)
+		if redemption_source == "own_stock":
+			event["stockStartPoint"] = _participant_avatar_center(viewer_id)
+			event["ownerPoint"] = event["stockStartPoint"]
+		else:
+			event["cardStartPoint"] = _redeem_card_start_center(ingredient_id)
+			event["ownerPoint"] = _redeem_owner_center(event)
 		event["recipeSlotPoint"] = _redeem_recipe_slot_center(ingredient_id, slot_index)
 		events.append(event)
 		var recipe_wrapper := {"ownRecipe": working_recipe}
@@ -6082,21 +6206,33 @@ func _public_redeem_events_from_transactions(previous_snapshot: Dictionary, curr
 		var actor_id := str(transaction.get("participantId", ""))
 		if actor_id == "" or actor_id == _viewer_id():
 			continue
-		var ingredient_id := _ingredient_id_from_label(str(transaction.get("itemOut", "")))
+		var metadata: Dictionary = transaction.get("metadata", {}) if transaction.get("metadata", {}) is Dictionary else {}
+		var ingredient_id := str(metadata.get("ingredientId", ""))
+		if ingredient_id == "":
+			ingredient_id = _ingredient_id_from_label(str(transaction.get("itemOut", "")))
 		if ingredient_id == "":
 			continue
-		var owner_id := str(transaction.get("counterpartyParticipantId", ""))
+		var owner_id := str(metadata.get("ownerParticipantId", ""))
+		if owner_id == "":
+			owner_id = str(transaction.get("counterpartyParticipantId", ""))
 		if owner_id == "":
 			owner_id = _participant_id_for_ingredient_in_snapshot(previous_snapshot, ingredient_id)
+		var redemption_source := str(metadata.get("redemptionSource", "voucher"))
 		var event := {
 			"type": "public_redeem",
 			"participantId": actor_id,
 			"ownerParticipantId": owner_id,
-			"ingredientId": ingredient_id
+			"ingredientId": ingredient_id,
+			"redemptionSource": redemption_source
 		}
-		event["cardStartPoint"] = _participant_tile_center(actor_id)
-		event["ownerPoint"] = _redeem_owner_center(event)
-		event["ingredientEndPoint"] = _participant_tile_center(actor_id)
+		if redemption_source == "own_stock":
+			event["stockStartPoint"] = _participant_avatar_center(actor_id)
+			event["ownerPoint"] = event["stockStartPoint"]
+			event["ingredientEndPoint"] = _participant_trade_anchor_center(actor_id, ingredient_id)
+		else:
+			event["cardStartPoint"] = _participant_tile_center(actor_id)
+			event["ownerPoint"] = _redeem_owner_center(event)
+			event["ingredientEndPoint"] = _participant_tile_center(actor_id)
 		events.append(event)
 	return events
 
@@ -6516,10 +6652,18 @@ func _detect_turn_events(previous_snapshot: Dictionary, current_snapshot: Dictio
 
 func _detect_complete_events(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Array:
 	if str(previous_snapshot.get("phase", "")) != "complete" and str(current_snapshot.get("phase", "")) == "complete":
+		if _complete_orbit_transition_active and str(previous_snapshot.get("phase", "")) == "eating" and _snapshot_transaction_position(previous_snapshot) == _snapshot_transaction_position(current_snapshot):
+			return []
 		if _snapshot_has_eating_transition(previous_snapshot, current_snapshot):
 			return []
 		return [{"type": "complete"}]
 	return []
+
+
+func _snapshot_transaction_position(snapshot: Dictionary) -> int:
+	if snapshot.has("transactionCursor"):
+		return int(snapshot.get("transactionCursor", -1))
+	return int(snapshot.get("transactionHistoryTotal", snapshot.get("transactionTotal", -1)))
 
 
 func _snapshot_has_eating_transition(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> bool:
@@ -7017,6 +7161,11 @@ func _animate_redeem_event(event: Dictionary) -> float:
 	var ingredient_id := str(event.get("ingredientId", ""))
 	var speed_scale := _animation_speed_scale(event)
 	var texture := _ingredient_texture(ingredient_id)
+	if str(event.get("redemptionSource", "voucher")) == "own_stock":
+		var stock_start := _redeem_point(event, "stockStartPoint", _participant_avatar_center(str(event.get("participantId", _viewer_id()))))
+		var stock_end := _redeem_point(event, "recipeSlotPoint", _redeem_recipe_slot_center(ingredient_id, int(event.get("slotIndex", 0))))
+		_animate_texture_path(texture, _valid_points([stock_start, stock_end]), 0.0, Vector2(58, 58), speed_scale)
+		return _redeem_finish_seconds(speed_scale)
 	var start := _redeem_point(event, "cardStartPoint", _redeem_card_start_center(ingredient_id))
 	var owner_target := _redeem_point(event, "ownerPoint", _redeem_owner_center(event))
 	var end := _redeem_point(event, "recipeSlotPoint", _redeem_recipe_slot_center(ingredient_id, int(event.get("slotIndex", 0))))
@@ -7029,6 +7178,11 @@ func _animate_public_redeem_event(event: Dictionary) -> float:
 	var ingredient_id := str(event.get("ingredientId", ""))
 	var speed_scale := _animation_speed_scale(event)
 	var texture := _ingredient_texture(ingredient_id)
+	if str(event.get("redemptionSource", "voucher")) == "own_stock":
+		var stock_start := _redeem_point(event, "stockStartPoint", _participant_avatar_center(str(event.get("participantId", ""))))
+		var stock_end := _redeem_point(event, "ingredientEndPoint", _public_redeem_actor_center(event))
+		_animate_texture_path(texture, _valid_points([stock_start, stock_end]), 0.0, Vector2(58, 58), speed_scale)
+		return _redeem_finish_seconds(speed_scale)
 	var actor_center := _redeem_point(event, "cardStartPoint", _public_redeem_actor_center(event))
 	var owner_center := _redeem_point(event, "ownerPoint", _redeem_owner_center(event))
 	var ingredient_end := _redeem_point(event, "ingredientEndPoint", _public_redeem_actor_center(event))
@@ -7289,21 +7443,23 @@ func _animate_texture_to_complete_orbit(texture: Texture2D, global_start: Vector
 	var icon := TextureRect.new()
 	icon.name = "CompleteOrbitFlyingFood"
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_SCALE
+	icon.clip_contents = true
+	icon.custom_minimum_size = icon_size
+	icon.size = icon_size
 	icon.texture = texture
 	icon.size = icon_size
-	icon.custom_minimum_size = icon_size
 	icon.pivot_offset = icon_size * 0.5
-	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.modulate = Color(1.0, 1.0, 1.0, 0.98)
-	icon.scale = Vector2(0.9, 0.9)
+	icon.scale = Vector2(0.82, 0.82)
 	_animation_layer.add_child(icon)
 	icon.position = _animation_local(start) - icon_size * 0.5
 
 	var tween := create_tween()
 	tween.tween_property(icon, "position", _animation_local(finish) - icon_size * 0.5, COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tween.parallel().tween_property(icon, "scale", Vector2(1.12, 1.12), COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS * 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tween.tween_property(icon, "scale", Vector2(0.96, 0.96), COMPLETE_ORBIT_LAUNCH_SETTLE_SECONDS).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tween.parallel().tween_property(icon, "scale", Vector2.ONE, COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS * 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.tween_property(icon, "scale", Vector2(0.92, 0.92), COMPLETE_ORBIT_LAUNCH_SETTLE_SECONDS).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
 	tween.parallel().tween_property(icon, "modulate", Color(1.0, 1.0, 1.0, 0.0), COMPLETE_ORBIT_LAUNCH_FADE_SECONDS)
 	tween.tween_callback(func() -> void:
 		_reveal_complete_orbit_items(reveal_count, orbit_items)
@@ -7910,10 +8066,12 @@ func _animate_texture_path(texture: Texture2D, global_points: Array[Vector2], de
 	debug_stats["lastAnimatedTexturePeakSize"] = icon_size * TEXTURE_LAND_SCALE
 	var icon := TextureRect.new()
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = icon_size
+	icon.size = icon_size
 	icon.texture = texture
 	icon.size = icon_size
-	icon.custom_minimum_size = icon_size
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.modulate = Color(1, 1, 1, 0)
 	icon.scale = Vector2.ONE
 	_animation_layer.add_child(icon)
@@ -7958,9 +8116,12 @@ func _animate_large_dish(texture: Texture2D, dish_name: String, global_start: Ve
 	if texture is Texture2D:
 		var icon := TextureRect.new()
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		icon.texture = texture
-		icon.custom_minimum_size = PREPARE_DISH_ICON_SIZE
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.custom_minimum_size = PREPARE_DISH_ICON_SIZE
+		icon.size = PREPARE_DISH_ICON_SIZE
+		icon.texture = texture
+		icon.size = PREPARE_DISH_ICON_SIZE
 		box.add_child(icon)
 	var label := _card_label(VisualAssets.short_dish_name(dish_name), TEXT_DARK, 14)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE

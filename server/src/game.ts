@@ -26,9 +26,12 @@ import type {
   Participant,
   ParticipantRole,
   PlatterAssetRef,
+  Recipe,
   Table,
   TableIdleState,
+  TransactionMetadata,
   TransactionAction,
+  TransactionRecord,
   Voucher
 } from "./types.js";
 
@@ -1121,6 +1124,7 @@ function redeemUsefulHandVouchersAndPassTurn(table: Table, actor: Participant): 
         requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length
       ])
     );
+    redeemOwnStockForOpenRequirements(table, actor, recipe, outstandingByRequirement, remainingStockByOwner);
     const plannedRedemptions: Array<{ voucherId: string; requirementId: string }> = [];
     const initialHandIds = handVoucherIds(table, actor.id);
     for (const voucherId of initialHandIds) {
@@ -1149,6 +1153,34 @@ function redeemUsefulHandVouchersAndPassTurn(table: Table, actor: Participant): 
     prepareDishIfRecipeComplete(table, actor);
   }
   passTurn(table, actor);
+}
+
+function redeemOwnStockForOpenRequirements(
+  table: Table,
+  actor: Participant,
+  recipe: Recipe,
+  outstandingByRequirement: Map<string, number>,
+  remainingStockByOwner: Map<string, number>
+): void {
+  if (!actor.ingredientId) {
+    return;
+  }
+  for (const requirement of recipe.requirements) {
+    if (requirement.ingredientId !== actor.ingredientId) {
+      continue;
+    }
+    let outstanding = outstandingByRequirement.get(requirement.id) ?? 0;
+    while (outstanding > 0) {
+      const remainingStock = remainingStockByOwner.get(actor.id) ?? actor.realIngredientStock ?? 0;
+      if (remainingStock <= 0) {
+        return;
+      }
+      remainingStockByOwner.set(actor.id, remainingStock - 1);
+      redeemOwnStockForRequirement(table, actor, requirement);
+      outstanding -= 1;
+      outstandingByRequirement.set(requirement.id, outstanding);
+    }
+  }
 }
 
 function pauseTimer(table: Table, nowMs = Date.now()): void {
@@ -1722,7 +1754,45 @@ function redeemVoucher(table: Table, actor: Participant, voucherId: string): voi
     owner.name,
     voucherCardLabel(voucher),
     `Real ${ingredientName(voucher.ingredientId)}`,
-    owner.id
+    owner.id,
+    {
+      redemptionSource: "voucher",
+      ingredientId: voucher.ingredientId,
+      requirementId: requirement.id,
+      ownerParticipantId: owner.id
+    }
+  );
+}
+
+function redeemOwnStockForRequirement(table: Table, actor: Participant, requirement: Recipe["requirements"][number]): void {
+  requirePhase(table, "playing");
+  requireActive(actor);
+  if (!actor.ingredientId || requirement.ingredientId !== actor.ingredientId) {
+    throw new GameError("Own stock can only redeem the participant's primary ingredient.", "ingredient_mismatch");
+  }
+  const outstanding = requirement.requiredQty - requirement.redeemedQty - requirement.placedVoucherIds.length;
+  if (outstanding <= 0) {
+    throw new GameError("Requirement already has enough placed or redeemed ingredients.", "requirement_full");
+  }
+  if ((actor.realIngredientStock ?? 0) <= 0) {
+    throw new GameError("Ingredient owner has no real stock remaining.", "ingredient_stock_depleted");
+  }
+  requirement.redeemedQty += 1;
+  actor.realIngredientStock = (actor.realIngredientStock ?? 0) - 1;
+  recordTransaction(
+    table,
+    actor,
+    "Redeem",
+    actor.name,
+    ingredientName(requirement.ingredientId),
+    `Real ${ingredientName(requirement.ingredientId)}`,
+    actor.id,
+    {
+      redemptionSource: "own_stock",
+      ingredientId: requirement.ingredientId,
+      requirementId: requirement.id,
+      ownerParticipantId: actor.id
+    }
   );
 }
 
@@ -1884,10 +1954,11 @@ function recordTransaction(
   counterparty: string,
   itemOut: string,
   itemBack: string,
-  counterpartyParticipantId?: string
+  counterpartyParticipantId?: string,
+  metadata?: TransactionMetadata
 ): void {
   table.transactionHistory ??= [];
-  table.transactionHistory.push({
+  const transaction: TransactionRecord = {
     id: `tx_${table.transactionHistory.length + 1}`,
     turn: table.turn,
     participantId: participant.id,
@@ -1897,7 +1968,11 @@ function recordTransaction(
     counterparty,
     itemOut,
     itemBack
-  });
+  };
+  if (metadata) {
+    transaction.metadata = metadata;
+  }
+  table.transactionHistory.push(transaction);
 }
 
 function ingredientListLabel(table: Table, voucherIds: string[]): string {

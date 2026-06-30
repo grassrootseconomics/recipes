@@ -436,6 +436,7 @@ func _initialize() -> void:
 	_assert_exchange_paths_are_specific(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _redeem_after(), "redeem", "redeem confirmation queues animation")
 	_assert_animation_count(visual, _snapshot_fixture(), _redeem_all_after(), "redeem", 2, "batch redeem queues one animation per redeemed card")
+	_assert_own_stock_redeem_animates_from_avatar(visual)
 	await _assert_redeem_animation_has_no_dialog_artifacts(visual)
 	_assert_animation_event(visual, _snapshot_fixture(), _public_redeem_after(), "public_redeem", "off-turn public redeem queues animation")
 	_assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual)
@@ -454,6 +455,7 @@ func _initialize() -> void:
 	await _assert_eat_animation_starts_at_held_food_part(visual)
 	await _assert_eat_animation_reanchors_after_food_group_reflow(visual)
 	await _assert_final_eat_starts_orbit_before_congratulations(visual)
+	await _assert_compacted_final_orbit_reveals_all_cooks(visual)
 	_assert_public_final_eat_uses_avatar_source(visual)
 	_assert_animation_event(visual, _complete_before(), _complete_after(), "complete", "complete confirmation queues animation")
 	visual.render(snapshot)
@@ -488,7 +490,7 @@ func _initialize() -> void:
 	visual.debug_play_animation_event({"type": "settlement_swap", "giveKind": "dish_part", "giveDishName": "Bean Dip", "giveUnit": "scoop", "takeKind": "voucher", "takeIngredientId": "beans"})
 	_require(_size_lte(visual.debug_stats.get("lastAnimatedCardPeakSize", Vector2.ZERO), Vector2(98, 92)), "settlement dish-piece card stays within the card-size animation budget")
 	visual.debug_play_animation_event({"type": "eat", "dishName": "Cheese Frittata", "unit": "slice"})
-	_require(_size_lte(visual.debug_stats.get("lastCompleteOrbitFlyingFoodSize", Vector2.ZERO), Vector2(34, 34)), "shared-food launch uses small orbit-sized flying food")
+	_require(_size_lte(visual.debug_stats.get("lastCompleteOrbitFlyingFoodSize", Vector2.ZERO), Vector2(48, 48)), "shared-food launch uses readable orbit-sized flying food")
 	visual.debug_play_animation_event({"type": "complete"})
 
 	_intents.clear()
@@ -994,11 +996,14 @@ func _initialize() -> void:
 	var orbit_left_margin := float(complete_orbit.get_meta("orbit_left_margin", -1.0)) if complete_orbit != null else -1.0
 	var orbit_right_margin := float(complete_orbit.get_meta("orbit_right_margin", -1.0)) if complete_orbit != null else -1.0
 	var orbit_bottom_margin := float(complete_orbit.get_meta("orbit_bottom_margin", 0.0)) if complete_orbit != null else 0.0
-	_require(orbit_margin >= 24.0 and orbit_margin <= 26.0, "complete food orbit follows the inside edge of the main table panel")
-	_require(orbit_top_margin >= 24.0 and orbit_top_margin <= 26.0 and orbit_left_margin >= 24.0 and orbit_left_margin <= 26.0 and orbit_right_margin >= 24.0 and orbit_right_margin <= 26.0, "complete food orbit is inset by the food radius so sprites stay inside the panel")
-	_require(orbit_bottom_margin >= 24.0 and orbit_bottom_margin <= 26.0, "complete food orbit keeps the bottom sprites inside the main table panel")
+	_require(orbit_margin >= 31.0 and orbit_margin <= 33.0, "complete food orbit follows the inside edge of the main table panel")
+	_require(orbit_top_margin >= 31.0 and orbit_top_margin <= 33.0 and orbit_left_margin >= 31.0 and orbit_left_margin <= 33.0 and orbit_right_margin >= 31.0 and orbit_right_margin <= 33.0, "complete food orbit is inset by the food radius so sprites stay inside the panel")
+	_require(orbit_bottom_margin >= 31.0 and orbit_bottom_margin <= 33.0, "complete food orbit keeps the bottom sprites inside the main table panel")
+	_assert_orbit_matches_table_panel(visual, "complete phase")
 	var first_orbit_food := complete_orbit.find_child("OrbitFood_0", true, false) as Control if complete_orbit != null else null
-	_require(first_orbit_food != null and first_orbit_food.custom_minimum_size.x <= 34.0 and first_orbit_food.custom_minimum_size.y <= 34.0, "complete food orbit uses small food sprites that do not dominate the table")
+	_require(first_orbit_food != null and first_orbit_food.custom_minimum_size.x <= 48.0 and first_orbit_food.custom_minimum_size.y <= 48.0, "complete food orbit uses readable food sprites that do not dominate the table")
+	var first_orbit_food_size := first_orbit_food.get_global_rect().size if first_orbit_food != null else Vector2.INF
+	_require(first_orbit_food != null and first_orbit_food_size.x <= 48.0 and first_orbit_food_size.y <= 48.0, "complete food orbit renders sprites at the readable orbit size: %s" % first_orbit_food_size)
 	_require(complete_orbit != null and complete_orbit.find_child("OrbitFoodQuantity", true, false) == null, "complete food orbit hides quantity text on orbiting bunches")
 	_require(int(visual.debug_stats.get("completeAvatarDanceCount", 0)) >= 4, "complete phase makes cook avatars dance")
 	var dancing_avatar := visual.find_child("CookAvatar", true, false) as TextureRect
@@ -1168,6 +1173,10 @@ func _assert_eat_animation_starts_at_held_food_part(visual: Node) -> void:
 	_require(_points_differ(points.get("start", Vector2.INF), rice_card_center), "share-food launch does not fall back to the first ingredient promise card")
 	_require(visual.find_child("CompleteFoodOrbit", true, false) != null, "share-food animation starts the shared food orbit before the next snapshot")
 	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "share-food animation flies the dish piece into orbit")
+	_assert_orbit_matches_table_panel(visual, "eating share-food")
+	var flying_food := visual.find_child("CompleteOrbitFlyingFood", true, false) as Control
+	var flying_food_size := flying_food.get_global_rect().size if flying_food != null else Vector2.INF
+	_require(flying_food != null and flying_food_size.x <= 48.0 and flying_food_size.y <= 48.0, "share-food flying dish sprite renders at the readable orbit size: %s" % flying_food_size)
 	_require(visual.find_child("FlyingFoodQuantity", true, false) == null, "share-food launch hides quantity text on flying food bunches")
 	visual.debug_apply_next_animation_milestone()
 	await process_frame
@@ -1220,12 +1229,45 @@ func _assert_final_eat_starts_orbit_before_congratulations(visual: Node) -> void
 	_require(not visual.debug_stats.get("lastAnimationTypes", []).has("complete"), "final bite transition suppresses the separate complete animation")
 	_require(visual.find_child("CompleteFoodOrbit", true, false) != null, "final bite starts the table food orbit before the complete snapshot")
 	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "final bite flies the dish piece into the orbit")
+	_assert_orbit_matches_table_panel(visual, "final eating")
+	var flying_food := visual.find_child("CompleteOrbitFlyingFood", true, false) as Control
+	var flying_food_size := flying_food.get_global_rect().size if flying_food != null else Vector2.INF
+	_require(flying_food != null and flying_food_size.x <= 48.0 and flying_food_size.y <= 48.0, "final bite flying dish sprite renders at the readable orbit size: %s" % flying_food_size)
 	_require(str(visual.debug_stats.get("phase", "")) == "eating", "congratulations are held until the orbit transition finishes")
 	_require(not bool(visual.debug_stats.get("completeCelebration", true)), "complete celebration is not shown before orbit transition finishes")
-	visual.debug_flush_animations()
+	await create_timer(1.05).timeout
 	await process_frame
 	_require(bool(visual.debug_stats.get("completeCelebration", false)), "complete celebration appears after orbit transition finishes")
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Congratulations!", "final orbit transition lands on the Congratulations recipe panel")
+	var actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(actions.has("Game Stats"), "final orbit transition exposes the Game Stats action")
 	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "final complete snapshot keeps the orbit visible")
+	visual.debug_flush_animations()
+
+
+func _assert_compacted_final_orbit_reveals_all_cooks(visual: Node) -> void:
+	visual.debug_apply_snapshot(_snapshot_fixture())
+	await process_frame
+	visual.debug_apply_snapshot(_all_cooks_final_eating_before())
+	await process_frame
+	visual.render(_all_cooks_final_eating_after())
+	await process_frame
+	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) >= 1, "final all-cook share burst compacts the long orbit queue")
+	_require(int(visual.debug_stats.get("animationQueueCompactedOrbitItemCount", 0)) >= 24, "compacted final orbit carries every cook's dish payload")
+	var guard := 0
+	while bool(visual.call("visual_update_waiting")) and guard < 12:
+		var next_type: String = visual.debug_apply_next_animation_milestone()
+		if next_type == "":
+			break
+		guard += 1
+	await process_frame
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "compacted final orbit lands on the complete screen")
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Congratulations!", "compacted final orbit shows Congratulations")
+	var actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(actions.has("Game Stats"), "compacted final orbit exposes the Game Stats action")
+	_require(int(visual.debug_stats.get("completeFoodOrbitCount", 0)) >= 24, "complete orbit includes every cook's finished dishes")
+	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "compacted complete snapshot shows every orbiting dish")
+	visual.debug_flush_animations()
 
 
 func _assert_public_final_eat_uses_avatar_source(visual: Node) -> void:
@@ -1556,6 +1598,21 @@ func _assert_public_redeem_paths_card_to_owner_and_ingredient_back(visual: Node)
 	visual.debug_flush_animations()
 
 
+func _assert_own_stock_redeem_animates_from_avatar(visual: Node) -> void:
+	visual.debug_apply_snapshot(_own_stock_redeem_before())
+	visual.render(_own_stock_redeem_after())
+	var redeem_event := _first_animation_event_of_type(visual, "redeem")
+	_require(not redeem_event.is_empty(), "own-stock redeem queues a viewer redeem event")
+	_require(str(redeem_event.get("redemptionSource", "")) == "own_stock", "own-stock redeem event preserves transaction source")
+	var points: Dictionary = visual.debug_animation_path_points(redeem_event)
+	_require(points.has("ingredientStart") and points.has("ingredientEnd") and not points.has("cardStart"), "own-stock redeem uses an ingredient-only animation path")
+	var avatar_center := _node_center(visual.find_child("CookAvatar", true, false))
+	var slot_center := _node_center(visual.find_child("RecipeSlot_rice_1", true, false))
+	_require(_points_close(points.get("ingredientStart", Vector2.INF), avatar_center), "own-stock redeem starts at the viewer cook avatar")
+	_require(_points_close(points.get("ingredientEnd", Vector2.INF), slot_center), "own-stock redeem lands in the open recipe slot")
+	visual.debug_flush_animations()
+
+
 func _assert_redeem_paths_ignore_bad_cached_points(visual: Node) -> void:
 	visual.debug_apply_snapshot(_snapshot_fixture())
 	var actor_center := _node_center(visual.find_child("Participant_p2", true, false))
@@ -1765,6 +1822,24 @@ func _size_lte(value, max_size: Vector2) -> bool:
 		return false
 	var size_value: Vector2 = value
 	return size_value.x <= max_size.x + 0.001 and size_value.y <= max_size.y + 0.001
+
+
+func _assert_orbit_matches_table_panel(visual: Node, context: String) -> void:
+	var visual_control := visual as Control
+	var orbit := visual.find_child("CompleteFoodOrbit", true, false) as Control
+	_require(visual_control != null and orbit != null, "%s orbit and table panel controls exist" % context)
+	if visual_control == null or orbit == null:
+		return
+	var table_rect := visual_control.get_global_rect()
+	var orbit_rect := orbit.get_global_rect()
+	_require(_rects_close(orbit_rect, table_rect, 2.0), "%s orbit is centered on the table panel rect: orbit=%s table=%s" % [context, orbit_rect, table_rect])
+	var panel_meta = orbit.get_meta("orbit_panel_global_rect", Rect2())
+	if typeof(panel_meta) == TYPE_RECT2:
+		_require(_rects_close(panel_meta, table_rect, 2.0), "%s orbit stores the table panel rect as its layout target" % context)
+
+
+func _rects_close(left: Rect2, right: Rect2, tolerance: float) -> bool:
+	return left.position.distance_to(right.position) <= tolerance and left.size.distance_to(right.size) <= tolerance
 
 
 func _event_has_randomized_orbit_phase(event: Dictionary) -> bool:
@@ -2497,6 +2572,39 @@ func _redeem_after() -> Dictionary:
 	return snapshot
 
 
+func _own_stock_redeem_before() -> Dictionary:
+	var snapshot := _snapshot_fixture()
+	_remove_voucher(snapshot, "rice_1", "ownHand")
+	_remove_voucher(snapshot, "rice_2", "ownHand")
+	return snapshot
+
+
+func _own_stock_redeem_after() -> Dictionary:
+	var snapshot := _own_stock_redeem_before()
+	snapshot["participants"][0]["realIngredientStock"] = 27
+	snapshot["ownRecipe"]["requirements"][0]["redeemedQty"] = 2
+	snapshot["transactionHistory"] = [
+		{
+			"id": "tx_own_stock_redeem",
+			"turn": 15,
+			"participantId": "p1",
+			"name": "Amina",
+			"action": "Redeem",
+			"counterpartyParticipantId": "p1",
+			"counterparty": "Amina",
+			"itemOut": "Rice",
+			"itemBack": "Real Rice",
+			"metadata": {
+				"redemptionSource": "own_stock",
+				"ingredientId": "rice",
+				"requirementId": "req_rice",
+				"ownerParticipantId": "p1"
+			}
+		}
+	]
+	return snapshot
+
+
 func _redeem_all_after() -> Dictionary:
 	var snapshot := _snapshot_fixture()
 	snapshot["ownRecipe"]["requirements"][0]["redeemedQty"] = 2
@@ -2761,6 +2869,141 @@ func _final_eating_after() -> Dictionary:
 		{"id": "dish_3", "ownerParticipantId": "p1", "name": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "totalParts": 10, "partsRemaining": 0, "partsEaten": 10, "totalBites": 10, "bitesRemaining": 0, "biteCounts": {"p1": 10}}
 	]
 	return snapshot
+
+
+func _all_cooks_final_eating_before() -> Dictionary:
+	var snapshot := _eight_seat_snapshot()
+	snapshot["phase"] = "eating"
+	snapshot["currentTurnParticipantId"] = "p1"
+	snapshot["targetDishCount"] = 3
+	snapshot["transactionHistory"] = []
+	snapshot["transactionTotal"] = 0
+	snapshot["transactionCursor"] = 0
+	snapshot["transactionHistoryTotal"] = 0
+	snapshot["ownRecipe"] = {}
+	snapshot["ownFoodParts"] = []
+	snapshot["dishes"] = []
+	var dish_specs := _all_cooks_final_dish_specs()
+	var participants: Array = snapshot.get("participants", [])
+	for participant_index in range(participants.size()):
+		var participant: Dictionary = participants[participant_index]
+		var participant_id := str(participant.get("id", ""))
+		participant["dishCount"] = 3
+		participant["cleared"] = true
+		var groups: Array = []
+		for dish_index in range(3):
+			var spec: Dictionary = dish_specs[(participant_index * 3 + dish_index) % dish_specs.size()]
+			var dish_id := "dish_all_%s_%s" % [participant_index + 1, dish_index + 1]
+			var dish_name := str(spec.get("name", "Dish"))
+			var unit := str(spec.get("unit", "piece"))
+			var plural := str(spec.get("plural", "%ss" % unit))
+			groups.append({
+				"dishId": dish_id,
+				"dishName": dish_name,
+				"makerParticipantId": participant_id,
+				"unitSingular": unit,
+				"unitPlural": plural,
+				"count": 1
+			})
+			snapshot["dishes"].append({
+				"id": dish_id,
+				"ownerParticipantId": participant_id,
+				"name": dish_name,
+				"unitSingular": unit,
+				"unitPlural": plural,
+				"totalParts": 1,
+				"partsRemaining": 1,
+				"partsEaten": 0,
+				"totalBites": 1,
+				"bitesRemaining": 1,
+				"biteCounts": {}
+			})
+			if participant_id == "p1":
+				snapshot["ownFoodParts"].append({
+					"id": "%s_part_1" % dish_id,
+					"dishId": dish_id,
+					"dishName": dish_name,
+					"unitSingular": unit,
+					"unitPlural": plural,
+					"makerParticipantId": participant_id,
+					"location": {"type": "inventory", "participantId": "p1"}
+				})
+		participant["heldFoodPartCount"] = groups.size()
+		participant["heldFoodPartGroups"] = groups
+		participants[participant_index] = participant
+	snapshot["participants"] = participants
+	snapshot["gameStats"] = {"playerTurnCount": 64, "cycleCount": 8.0, "eatCount": 0}
+	return snapshot
+
+
+func _all_cooks_final_eating_after() -> Dictionary:
+	var snapshot := _all_cooks_final_eating_before()
+	snapshot["phase"] = "complete"
+	snapshot["currentTurnParticipantId"] = ""
+	snapshot["ownFoodParts"] = []
+	snapshot["ownRecipe"] = {}
+	var participants: Array = snapshot.get("participants", [])
+	for index in range(participants.size()):
+		var participant: Dictionary = participants[index]
+		participant["heldFoodPartCount"] = 0
+		participant["heldFoodPartGroups"] = []
+		participants[index] = participant
+	snapshot["participants"] = participants
+	var rows: Array = []
+	var dishes: Array = snapshot.get("dishes", [])
+	for index in range(dishes.size()):
+		var dish: Dictionary = dishes[index]
+		var participant_id := str(dish.get("ownerParticipantId", ""))
+		dish["partsRemaining"] = 0
+		dish["partsEaten"] = 1
+		dish["bitesRemaining"] = 0
+		var bite_counts := {}
+		bite_counts[participant_id] = 1
+		dish["biteCounts"] = bite_counts
+		dishes[index] = dish
+		rows.append({
+			"id": "tx_all_final_share_%s" % index,
+			"turn": 90 + index,
+			"participantId": participant_id,
+			"name": _participant_name_from_snapshot(snapshot, participant_id),
+			"action": "Share",
+			"counterparty": "Table",
+			"itemOut": "%s %s x1" % [str(dish.get("name", "Dish")), str(dish.get("unitSingular", "piece"))],
+			"itemBack": "Shared"
+		})
+	snapshot["dishes"] = dishes
+	snapshot["transactionHistory"] = rows
+	snapshot["transactionTotal"] = rows.size()
+	snapshot["transactionCursor"] = rows.size()
+	snapshot["transactionHistoryTotal"] = rows.size()
+	snapshot["version"] = int(snapshot.get("version", 0)) + 1
+	snapshot["turn"] = int(snapshot.get("turn", 0)) + rows.size()
+	snapshot["gameStats"] = {"playerTurnCount": 64, "cycleCount": 8.0, "eatCount": rows.size()}
+	return snapshot
+
+
+func _all_cooks_final_dish_specs() -> Array:
+	return [
+		{"name": "Cheese Frittata", "unit": "slice", "plural": "slices"},
+		{"name": "Bean Dip", "unit": "scoop", "plural": "scoops"},
+		{"name": "Rice Bean Bowl", "unit": "bowl", "plural": "bowls"},
+		{"name": "Bean Tacos", "unit": "taco", "plural": "tacos"},
+		{"name": "Breakfast Burrito", "unit": "piece", "plural": "pieces"},
+		{"name": "Egg Fried Rice", "unit": "scoop", "plural": "scoops"},
+		{"name": "Herb Dumplings", "unit": "piece", "plural": "pieces"},
+		{"name": "Bean Pupusa", "unit": "piece", "plural": "pieces"},
+		{"name": "Vegetable Flatbread", "unit": "piece", "plural": "pieces"}
+	]
+
+
+func _participant_name_from_snapshot(snapshot: Dictionary, participant_id: String) -> String:
+	for raw_participant in snapshot.get("participants", []):
+		if not raw_participant is Dictionary:
+			continue
+		var participant: Dictionary = raw_participant
+		if str(participant.get("id", "")) == participant_id:
+			return str(participant.get("name", "Cook"))
+	return "Cook"
 
 
 func _public_final_eating_before() -> Dictionary:

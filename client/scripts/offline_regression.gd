@@ -349,14 +349,24 @@ func _regression_redeem_all_and_pass_turn(store: Node) -> void:
 	var before_redeemed := int(requirement.get("redeemedQty", 0))
 	var placed_ids: Array = requirement.get("placedVoucherIds", [])
 	var outstanding: int = int(requirement.get("requiredQty", 0)) - before_redeemed - placed_ids.size()
-	var expected_redeemed := mini(_hand_voucher_count_by_ingredient(store, "p1", ingredient_id), outstanding)
 	var before_stock := int(store.table.get("participants", {}).get("p1", {}).get("realIngredientStock", 0))
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(voucher.get("ingredientId", "")) == ingredient_id and str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == "p1":
+			voucher["location"] = {"type": "hand", "participantId": "p2"}
+	_require(_hand_voucher_count_by_ingredient(store, "p1", ingredient_id) == 0, "redeem-all setup removes own ingredient hand cards")
+	var expected_redeemed := mini(before_stock, outstanding)
 	_require(store.handle_intent({"type": "redeem_all_and_pass_turn"}, "p1", false), "redeem-all pass succeeds: %s" % _last_error)
 	requirement = _requirement_for_ingredient(store, "p1", ingredient_id)
-	_require(int(requirement.get("redeemedQty", 0)) == before_redeemed + expected_redeemed, "redeem-all redeems useful cards once")
-	_require(int(store.table.get("participants", {}).get("p1", {}).get("realIngredientStock", 0)) == before_stock - expected_redeemed, "redeem-all decrements stock once per redeemed card")
+	_require(int(requirement.get("redeemedQty", 0)) == before_redeemed + expected_redeemed, "redeem-all fills own ingredient slots from stock")
+	_require(int(store.table.get("participants", {}).get("p1", {}).get("realIngredientStock", 0)) == before_stock - expected_redeemed, "redeem-all decrements stock once per own-stock redemption")
 	_require(str(store.table.get("currentTurnParticipantId", "")) == "p2", "redeem-all advances to p2")
 	var history: Array = store.table.get("transactionHistory", [])
+	var redeem_rows := history.filter(func(row: Dictionary) -> bool:
+		return str(row.get("action", "")) == "Redeem" and str(row.get("participantId", "")) == "p1"
+	)
+	_require(not redeem_rows.is_empty() and str(redeem_rows[0].get("metadata", {}).get("redemptionSource", "")) == "own_stock", "redeem-all records own-stock redemption metadata")
 	var last: Dictionary = history[history.size() - 1]
 	_require(str(last.get("action", "")) == "Pass Turn", "redeem-all records final pass turn")
 
@@ -385,6 +395,7 @@ func _regression_redeem_pass_auto_prepares(store: Node) -> void:
 	for index in range(before_history_size, history.size()):
 		actions.append(str(history[index].get("action", "")))
 	_require(JSON.stringify(actions) == JSON.stringify(["Redeem", "Prepare", "Pass Turn"]), "redeem-pass records redeem, prepare, pass in order")
+	_require(str(history[before_history_size].get("metadata", {}).get("redemptionSource", "")) == "own_stock", "redeem-pass auto-prepare records own-stock redeem source")
 
 
 func _regression_bot_batches_redeem_and_pass(store: Node) -> void:
@@ -395,19 +406,16 @@ func _regression_bot_batches_redeem_and_pass(store: Node) -> void:
 	bot["botType"] = "pool_only"
 	store.table["currentTurnParticipantId"] = bot_id
 	var recipe: Dictionary = store.table.get("recipes", {}).get(bot_id, {})
-	var needed := {}
-	for raw_requirement in recipe.get("requirements", []):
-		var requirement: Dictionary = raw_requirement
-		var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - requirement.get("placedVoucherIds", []).size()
-		if outstanding > 0:
-			needed[str(requirement.get("ingredientId", ""))] = true
+	recipe["requirements"] = [
+		{"id": "bot-own-stock", "ingredientId": str(bot.get("ingredientId", "")), "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []}
+	]
 	for raw_voucher in store.table.get("vouchers", {}).values():
 		var voucher: Dictionary = raw_voucher
 		var location: Dictionary = voucher.get("location", {})
-		if str(location.get("type", "")) == "platter" and needed.has(str(voucher.get("ingredientId", ""))):
+		if str(voucher.get("ingredientId", "")) == str(bot.get("ingredientId", "")) and str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == bot_id:
 			voucher["location"] = {"type": "hand", "participantId": "p1"}
 	var decision: Dictionary = store._decide_bot_intent(bot_id)
-	_require(str(decision.get("type", "")) == "redeem_all_and_pass_turn", "offline bot batches useful card redemption into turn-ending intent")
+	_require(str(decision.get("type", "")) == "redeem_all_and_pass_turn", "offline bot batches own-stock redemption into turn-ending intent")
 
 
 func _regression_bot_swaps_surplus_before_redeem(store: Node) -> void:
@@ -438,6 +446,7 @@ func _regression_bot_spends_food_piece_for_platter_card(store: Node) -> void:
 	_require(not store.create_table("Amina", "offline-bot-food-piece-for-platter-card").is_empty(), "create bot food-piece platter table")
 	_require(store.handle_host_intent({"type": "start"}), "start bot food-piece platter table: %s" % _last_error)
 	var bot_id := _active_id_by_ingredient(store, "flour")
+	var card_sink_id := _first_other_active_id(store, bot_id)
 	var bot: Dictionary = store.table.get("participants", {}).get(bot_id, {})
 	bot["kind"] = "bot"
 	bot["botType"] = "mixed"
@@ -456,17 +465,23 @@ func _regression_bot_spends_food_piece_for_platter_card(store: Node) -> void:
 		"unitPlural": "slices",
 		"location": {"type": "inventory", "participantId": bot_id}
 	}
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == bot_id:
+			voucher["location"] = {"type": "hand", "participantId": card_sink_id}
 	store.view_as(bot_id)
 	var decision: Dictionary = store._decide_bot_intent(bot_id)
-	_require(str(decision.get("type", "")) == "platter_asset_swap", "offline bot spends food piece for useful platter card")
-	_require(str(decision.get("give", {}).get("kind", "")) == "dish_part", "offline bot gives a food piece")
-	_require(str(store._voucher_by_id(str(decision.get("take", {}).get("id", ""))).get("ingredientId", "")) == "cheese", "offline bot takes needed platter card")
+	_require(str(decision.get("type", "")) == "platter_asset_swap", "offline bot spends food piece for useful platter card: %s" % JSON.stringify(decision))
+	_require(str(decision.get("give", {}).get("kind", "")) == "dish_part", "offline bot gives a food piece: %s" % JSON.stringify(decision))
+	_require(str(store._voucher_by_id(str(decision.get("take", {}).get("id", ""))).get("ingredientId", "")) == "cheese", "offline bot takes needed platter card: %s" % JSON.stringify(decision))
 
 
 func _regression_bot_offer_prefers_smallest_missing_group(store: Node) -> void:
 	_require(not store.create_table("Amina", "offline-bot-offer-smallest-missing").is_empty(), "create bot offer table")
 	_require(store.handle_host_intent({"type": "start"}), "start bot offer table: %s" % _last_error)
 	var bot_id := _active_id_by_ingredient(store, "flour")
+	var card_sink_id := _first_other_active_id(store, bot_id)
 	var bot: Dictionary = store.table.get("participants", {}).get(bot_id, {})
 	bot["kind"] = "bot"
 	bot["botType"] = "barter_only"
@@ -479,10 +494,16 @@ func _regression_bot_offer_prefers_smallest_missing_group(store: Node) -> void:
 		{"id": "vegetables-test", "ingredientId": "vegetables", "requiredQty": 1, "redeemedQty": 0, "placedVoucherIds": []},
 		{"id": "eggs-test", "ingredientId": "eggs", "requiredQty": 1, "redeemedQty": 1, "placedVoucherIds": []}
 	]
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == bot_id and str(voucher.get("ingredientId", "")) != str(bot.get("ingredientId", "")):
+			voucher["location"] = {"type": "hand", "participantId": card_sink_id}
 	store.view_as(bot_id)
 	var decision: Dictionary = store._decide_bot_intent(bot_id)
-	_require(str(decision.get("type", "")) == "create_offer", "offline bot creates offer for missing ingredient")
-	_require(str(decision.get("requestedAsset", {}).get("ingredientId", "")) == "vegetables", "offline bot requests singleton missing ingredient before duplicate group")
+	var decision_context := "decision=%s phase=%s current=%s bot=%s" % [JSON.stringify(decision), str(store.table.get("phase", "")), str(store.table.get("currentTurnParticipantId", "")), bot_id]
+	_require(str(decision.get("type", "")) == "create_offer", "offline bot creates offer for missing ingredient: %s" % decision_context)
+	_require(str(decision.get("requestedAsset", {}).get("ingredientId", "")) == "vegetables", "offline bot requests singleton missing ingredient before duplicate group: %s" % JSON.stringify(decision))
 
 
 func _regression_bot_offers_food_piece_for_missing_card(store: Node) -> void:
@@ -490,6 +511,7 @@ func _regression_bot_offers_food_piece_for_missing_card(store: Node) -> void:
 	_require(store.handle_host_intent({"type": "start"}), "start bot food-piece offer table: %s" % _last_error)
 	var bot_id := _active_id_by_ingredient(store, "flour")
 	var vegetables_owner_id := _active_id_by_ingredient(store, "vegetables")
+	var card_sink_id := _first_other_active_id(store, bot_id)
 	var bot: Dictionary = store.table.get("participants", {}).get(bot_id, {})
 	bot["kind"] = "bot"
 	bot["botType"] = "barter_only"
@@ -508,12 +530,19 @@ func _regression_bot_offers_food_piece_for_missing_card(store: Node) -> void:
 		"unitPlural": "slices",
 		"location": {"type": "inventory", "participantId": bot_id}
 	}
+	for raw_voucher in store.table.get("vouchers", {}).values():
+		var voucher: Dictionary = raw_voucher
+		var location: Dictionary = voucher.get("location", {})
+		if str(location.get("type", "")) == "hand" and str(location.get("participantId", "")) == bot_id:
+			voucher["location"] = {"type": "hand", "participantId": card_sink_id}
 	store.view_as(bot_id)
 	var decision: Dictionary = store._decide_bot_intent(bot_id)
-	_require(str(decision.get("type", "")) == "create_offer", "offline bot creates food-piece offer")
-	_require(str(decision.get("offeredAssets", [])[0].get("kind", "")) == "dish_part", "offline bot offers a food piece")
-	_require(str(decision.get("requestedAsset", {}).get("ingredientId", "")) == "vegetables", "offline bot asks for missing card")
-	_require(str(decision.get("requestedAsset", {}).get("ownerParticipantId", "")) == vegetables_owner_id, "offline bot asks the ingredient owner")
+	var decision_context := "decision=%s phase=%s current=%s bot=%s" % [JSON.stringify(decision), str(store.table.get("phase", "")), str(store.table.get("currentTurnParticipantId", "")), bot_id]
+	_require(str(decision.get("type", "")) == "create_offer", "offline bot creates food-piece offer: %s" % decision_context)
+	var offered_assets: Array = decision.get("offeredAssets", [])
+	_require(not offered_assets.is_empty() and str(offered_assets[0].get("kind", "")) == "dish_part", "offline bot offers a food piece: %s" % JSON.stringify(decision))
+	_require(str(decision.get("requestedAsset", {}).get("ingredientId", "")) == "vegetables", "offline bot asks for missing card: %s" % JSON.stringify(decision))
+	_require(str(decision.get("requestedAsset", {}).get("ownerParticipantId", "")) == vegetables_owner_id, "offline bot asks the ingredient owner: %s" % JSON.stringify(decision))
 
 
 func _regression_goal_complete_bot_accepts_offer(store: Node) -> void:
@@ -920,6 +949,14 @@ func _active_id_by_ingredient(store: Node, ingredient_id: String) -> String:
 		if _participant_ingredient_id(store, str(participant_id)) == ingredient_id:
 			return str(participant_id)
 	_require(false, "expected active participant for %s" % ingredient_id)
+	return ""
+
+
+func _first_other_active_id(store: Node, participant_id: String) -> String:
+	for candidate_id in _active_ids(store.latest_snapshot):
+		if str(candidate_id) != participant_id:
+			return str(candidate_id)
+	_require(false, "expected another active participant")
 	return ""
 
 

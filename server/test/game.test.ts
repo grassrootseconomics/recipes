@@ -562,19 +562,23 @@ describe("catalog and startup", () => {
     });
   });
 
-  it("redeems useful held cards once before passing a round-robin turn", () => {
+  it("redeems own ingredient stock without requiring own held cards before passing a round-robin turn", () => {
     const { table } = startAndDeposit(8, "round-robin-redeem-all-pass", "round_robin");
     const [first, second] = activeParticipants(table);
     const recipe = table.recipes[first.id];
     const ownRequirement = recipe?.requirements.find((requirement) => requirement.ingredientId === first.ingredientId);
     expect(recipe).toBeDefined();
     expect(ownRequirement).toBeDefined();
-    const initialUsefulIds = handVoucherIds(table, first.id).filter(
-      (voucherId) => table.vouchers[voucherId].ingredientId === first.ingredientId
-    );
+    for (const voucher of Object.values(table.vouchers)) {
+      if (voucher.ingredientId === first.ingredientId && voucher.location.type === "hand" && voucher.location.participantId === first.id) {
+        voucher.location = { type: "hand", participantId: second.id };
+      }
+    }
+    const initialUsefulIds = handVoucherIds(table, first.id).filter((voucherId) => table.vouchers[voucherId].ingredientId === first.ingredientId);
+    expect(initialUsefulIds).toHaveLength(0);
     const initialOutstanding =
       (ownRequirement?.requiredQty ?? 0) - (ownRequirement?.redeemedQty ?? 0) - (ownRequirement?.placedVoucherIds.length ?? 0);
-    const expectedRedeemed = Math.min(initialUsefulIds.length, initialOutstanding);
+    const expectedRedeemed = Math.min(first.realIngredientStock ?? 0, initialOutstanding);
     expect(expectedRedeemed).toBeGreaterThan(0);
     const startingStock = first.realIngredientStock;
 
@@ -584,11 +588,61 @@ describe("catalog and startup", () => {
     expect(first.realIngredientStock).toBe((startingStock ?? 0) - expectedRedeemed);
     expect(table.currentTurnParticipantId).toBe(second.id);
     expect(table.transactionHistory.filter((transaction) => transaction.action === "Redeem")).toHaveLength(expectedRedeemed);
+    expect(table.transactionHistory.filter((transaction) => transaction.action === "Redeem")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          itemOut: expect.any(String),
+          itemBack: expect.stringContaining("Real"),
+          metadata: expect.objectContaining({
+            redemptionSource: "own_stock",
+            ingredientId: first.ingredientId,
+            ownerParticipantId: first.id,
+            requirementId: ownRequirement?.id
+          })
+        })
+      ])
+    );
     expect(table.transactionHistory.at(-1)).toMatchObject({
       name: first.name,
       action: "Pass Turn",
       counterparty: second.name
     });
+  });
+
+  it("continues useful hand-card redemptions after own stock fills own ingredient slots", () => {
+    const { table } = startAndDeposit(8, "round-robin-stock-plus-card", "round_robin");
+    const [first] = activeParticipants(table);
+    const recipe = table.recipes[first.id];
+    const ownRequirement = recipe?.requirements.find((requirement) => requirement.ingredientId === first.ingredientId);
+    const foreignRequirement = recipe?.requirements.find((requirement) => requirement.ingredientId !== first.ingredientId);
+    if (!recipe || !ownRequirement || !foreignRequirement) {
+      throw new Error("test setup expected own and foreign recipe requirements");
+    }
+    for (const requirement of recipe.requirements) {
+      requirement.placedVoucherIds = [];
+      requirement.redeemedQty =
+        requirement.id === ownRequirement.id || requirement.id === foreignRequirement.id ? requirement.requiredQty - 1 : requirement.requiredQty;
+    }
+    const foreignVoucher = moveVoucherToHand(table, first.id, foreignRequirement.ingredientId);
+    const beforeRecipeId = recipe.id;
+    const beforeHistoryLength = table.transactionHistory.length;
+
+    applyIntent(table, first.id, { type: "redeem_all_and_pass_turn" });
+
+    expect(ownRequirement.redeemedQty).toBe(ownRequirement.requiredQty);
+    expect(foreignRequirement.redeemedQty).toBe(foreignRequirement.requiredQty);
+    expect(table.recipes[first.id]?.id).not.toBe(beforeRecipeId);
+    expect(table.transactionHistory.slice(beforeHistoryLength).map((transaction) => transaction.action)).toEqual([
+      "Redeem",
+      "Redeem",
+      "Prepare",
+      "Pass Turn"
+    ]);
+    expect(table.transactionHistory.slice(beforeHistoryLength, beforeHistoryLength + 2).map((transaction) => transaction.metadata?.redemptionSource)).toEqual([
+      "own_stock",
+      "voucher"
+    ]);
+    expect(table.vouchers[foreignVoucher.id].location).toEqual({ type: "hand", participantId: foreignVoucher.ownerParticipantId });
   });
 
   it("automatically prepares a completed dish before redeem-pass advances the turn", () => {
@@ -2337,7 +2391,7 @@ describe("platter, offers, and visibility", () => {
     ).toThrow(GameError);
   });
 
-  it("has bots batch redeem useful cards from their own hand before ending a turn", () => {
+  it("has bots batch redeem own ingredient stock before ending a turn", () => {
     const { table } = makeHarness(7, "bot-self-redeem");
     const [bot] = addBots(table, table.hostParticipantId, ["mixed"]);
     applyIntent(table, table.hostParticipantId, { type: "start" });
@@ -2350,6 +2404,7 @@ describe("platter, offers, and visibility", () => {
     expect(ownRequirement?.redeemedQty).toBe(0);
 
     table.currentTurnParticipantId = bot.id;
+    const beforeHistoryLength = table.transactionHistory.length;
     const decisions = runBots(table);
 
     expect(decisions.some((decision) => decision.intent.type === "redeem_all_and_pass_turn")).toBe(true);
@@ -2358,6 +2413,7 @@ describe("platter, offers, and visibility", () => {
     );
     expect(ownRequirement?.redeemedQty).toBe(ownRequirement?.requiredQty);
     expect(ownRequirement?.placedVoucherIds).toHaveLength(0);
+    expect(table.transactionHistory.slice(beforeHistoryLength).some((transaction) => transaction.metadata?.redemptionSource === "own_stock")).toBe(true);
   });
 
   it("has bots trade surplus duplicate cards before turn-ending redemption", () => {
@@ -2444,6 +2500,11 @@ describe("platter, offers, and visibility", () => {
       unitPlural: "slices",
       location: { type: "inventory", participantId: bot.id }
     };
+    for (const voucher of Object.values(table.vouchers)) {
+      if (voucher.location.type === "hand" && voucher.location.participantId === bot.id) {
+        voucher.location = { type: "hand", participantId: table.hostParticipantId };
+      }
+    }
 
     const decision = decideBotIntent(table, bot.id);
     expect(decision?.intent.type).toBe("platter_asset_swap");
@@ -2521,6 +2582,11 @@ describe("platter, offers, and visibility", () => {
       unitPlural: "slices",
       location: { type: "inventory", participantId: bot.id }
     };
+    for (const voucher of Object.values(table.vouchers)) {
+      if (voucher.location.type === "hand" && voucher.location.participantId === bot.id) {
+        voucher.location = { type: "hand", participantId: table.hostParticipantId };
+      }
+    }
 
     const decision = decideBotIntent(table, bot.id);
     expect(decision?.intent.type).toBe("create_offer");

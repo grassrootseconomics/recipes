@@ -3557,7 +3557,7 @@ func _turn_ending_status_message(snapshot: Dictionary, intent: Dictionary) -> St
 		return ""
 	var next_name := _next_turn_participant_name(snapshot)
 	if intent_type == "redeem_all_and_pass_turn":
-		return "Redeeming useful cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
+		return "Redeeming available stock/cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
 	return "Passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
 
 
@@ -4061,6 +4061,15 @@ func _sync_visible_lobby_controls_with_snapshot(snapshot: Dictionary) -> void:
 			var desired_index := 1 if str(participant.get("kind", "human")) == "bot" else 0
 			if toggle.selected != desired_index:
 				toggle.select(desired_index)
+	_sync_visible_lobby_start_button_with_snapshot(snapshot)
+
+
+func _sync_visible_lobby_start_button_with_snapshot(snapshot: Dictionary) -> void:
+	var start_button := find_child("StartCookingButton", true, false) as Button
+	if start_button == null or not is_instance_valid(start_button):
+		return
+	start_button.disabled = not _host_lobby_start_enabled(snapshot)
+	start_button.text = _host_lobby_start_label(snapshot)
 
 
 func _add_lobby_controls(snapshot: Dictionary) -> void:
@@ -4258,13 +4267,17 @@ func _host_lobby_start_label(snapshot: Dictionary) -> String:
 
 func _joined_non_host_human_count(snapshot: Dictionary) -> int:
 	var count := 0
+	var host_participant_id := str(snapshot.get("hostParticipantId", ""))
 	for raw_participant in snapshot.get("participants", []):
 		var participant: Dictionary = raw_participant
 		if str(participant.get("role", "")) != "active":
 			continue
 		if str(participant.get("kind", "")) != "human":
 			continue
-		if bool(participant.get("isHost", false)):
+		var participant_id := str(participant.get("id", ""))
+		if participant_id != "" and participant_id == host_participant_id:
+			continue
+		if host_participant_id == "" and bool(participant.get("isHost", false)):
 			continue
 		count += 1
 	return count
@@ -5141,6 +5154,36 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 		card_group_labels = _voucher_group_labels_from_vouchers(snapshot, hand, true)
 	if not card_group_labels.is_empty():
 		_hand_controls.add_child(_wrapped_label("Cards you hold\n%s" % "\n".join(card_group_labels)))
+	var outstanding_by_requirement := {}
+	for raw_requirement in requirements:
+		var requirement: Dictionary = raw_requirement
+		var placed_ids: Array = requirement.get("placedVoucherIds", [])
+		outstanding_by_requirement[str(requirement.get("id", ""))] = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - placed_ids.size()
+	var actor_id := _pending_offer_guard_actor_id_for_snapshot(snapshot)
+	var actor := _participant_by_id(snapshot, actor_id)
+	var own_ingredient_id := str(actor.get("ingredientId", ""))
+	var own_stock_auto_count := 0
+	var own_stock_remaining := int(actor.get("realIngredientStock", 0))
+	if own_ingredient_id != "" and own_stock_remaining > 0:
+		for raw_requirement in requirements:
+			var requirement: Dictionary = raw_requirement
+			if str(requirement.get("ingredientId", "")) != own_ingredient_id:
+				continue
+			var requirement_id := str(requirement.get("id", ""))
+			var outstanding := int(outstanding_by_requirement.get(requirement_id, 0))
+			if outstanding <= 0:
+				continue
+			var used := mini(outstanding, own_stock_remaining)
+			own_stock_auto_count += used
+			own_stock_remaining -= used
+			outstanding_by_requirement[requirement_id] = outstanding - used
+			if own_stock_remaining <= 0:
+				break
+	if own_stock_auto_count > 0:
+		_hand_controls.add_child(_wrapped_label("%s %s from your stock will fill your recipe when you use Redeem / Pass." % [
+			own_stock_auto_count,
+			_ingredient_display(snapshot, own_ingredient_id)
+		]))
 	if hand.is_empty():
 		_hand_controls.add_child(_wrapped_label("Your hand is empty."))
 		return
@@ -5152,15 +5195,15 @@ func _add_hand_place_controls(snapshot: Dictionary) -> void:
 			var requirement: Dictionary = raw_requirement
 			if str(requirement.get("ingredientId", "")) != ingredient_id:
 				continue
-			var placed_ids: Array = requirement.get("placedVoucherIds", [])
-			var outstanding: int = int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - placed_ids.size()
+			var requirement_id := str(requirement.get("id", ""))
+			var outstanding: int = int(outstanding_by_requirement.get(requirement_id, 0))
 			if outstanding <= 0:
 				continue
 			useful_count += mini(outstanding, int(group.get("count", 1)))
 			break
 	if useful_count > 0:
 		_hand_controls.add_child(_wrapped_label("%s useful held cards will redeem when you use Redeem / Pass." % useful_count))
-	else:
+	elif own_stock_auto_count <= 0:
 		_hand_controls.add_child(_wrapped_label("No held cards match the open recipe slots right now."))
 
 
@@ -5577,7 +5620,7 @@ func _add_pass_turn_button(snapshot: Dictionary) -> void:
 		if is_playing:
 			_send_intent_with_pending_offer_guard(
 				{"type": "redeem_all_and_pass_turn"},
-				"Redeeming useful cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
+				"Redeeming available stock/cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
 			)
 		else:
 			_send_intent_with_pending_offer_guard(
