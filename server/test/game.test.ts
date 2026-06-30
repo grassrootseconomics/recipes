@@ -2775,6 +2775,39 @@ describe("platter, offers, and visibility", () => {
     expect(delta?.append?.dishes).toContainEqual(expect.objectContaining({ ownerParticipantId: participant.id }));
   });
 
+  it("marks ownRecipe deleted when the viewer prepares the final dish in a delta", () => {
+    const { table } = startAndDeposit(8, "final-recipe-delete-delta");
+    const participant = activeParticipants(table)[0] as Participant;
+    table.targetDishCount = 1;
+    const hub = new ConnectionHub();
+    const messages: Array<{
+      type: string;
+      snapshot?: ReturnType<typeof buildSnapshot>;
+      patch?: Record<string, unknown>;
+      append?: { dishes?: unknown[]; transactionHistory?: unknown[] };
+    }> = [];
+    hub.register({
+      tableCode: table.code,
+      participantId: participant.id,
+      send: (payload) => messages.push(JSON.parse(payload))
+    });
+
+    hub.broadcastTable(table);
+    expect(messages.at(-1)?.snapshot?.ownRecipe).toBeDefined();
+    messages.length = 0;
+
+    completeRecipeBySetup(table, participant.id);
+    applyAsTurn(table, participant.id, { type: "prepare" });
+    expect(table.recipes[participant.id]).toBeUndefined();
+
+    hub.broadcastTable(table);
+
+    const delta = messages.at(-1);
+    expect(delta?.type).toBe("delta");
+    expect(delta?.patch?.ownRecipe).toBeNull();
+    expect(delta?.append?.dishes).toContainEqual(expect.objectContaining({ ownerParticipantId: participant.id }));
+  });
+
   it("includes eating food-part decreases in compacted deltas", () => {
     const { table } = startAndDeposit(8, "eating-food-part-decrease-delta");
     const participant = activeParticipants(table)[0] as Participant;

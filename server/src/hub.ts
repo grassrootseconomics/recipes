@@ -203,21 +203,21 @@ function changedParticipantRows(previous: Snapshot | undefined, next: Snapshot):
     .map(cloneParticipant);
 }
 
-function diffSnapshot(previous: Snapshot | undefined, next: Snapshot): Partial<Snapshot> {
+function diffSnapshot(previous: Snapshot | undefined, next: Snapshot): Partial<Snapshot> & Record<string, unknown> {
   if (!previous) {
-    const fullPatch: Partial<Snapshot> = { ...next };
+    const fullPatch: Partial<Snapshot> & Record<string, unknown> = { ...next };
     delete fullPatch.transactionHistory;
     delete fullPatch.ingredients;
     return fullPatch;
   }
 
-  const patch: Partial<Snapshot> = {};
+  const patch: Partial<Snapshot> & Record<string, unknown> = {};
   for (const [key, value] of Object.entries(next) as Array<[keyof Snapshot, Snapshot[keyof Snapshot]]>) {
     if (key === "transactionHistory" || key === "ingredients") {
       continue;
     }
     if (JSON.stringify(previous[key]) !== JSON.stringify(value)) {
-      (patch as Record<string, unknown>)[key] = value;
+      (patch as Record<string, unknown>)[key] = value === undefined ? null : value;
     }
   }
   return patch;

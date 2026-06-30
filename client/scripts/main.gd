@@ -102,12 +102,13 @@ var _transaction_controls: VBoxContainer
 var _confirm_bot_dialog: ConfirmationDialog
 var _confirm_leave_dialog: ConfirmationDialog
 var _confirm_close_dialog: ConfirmationDialog
-var _pending_offer_guard_dialog: ConfirmationDialog
+var _pending_offer_guard_dialog: Control
 var _confirm_offline_end_dialog: ConfirmationDialog
 var _idle_prompt_dialog: Control
 var _table_closure_dialog: AcceptDialog
 var _offline_end_popup: Control
 var _host_close_popup: Control
+var _floating_status_label: Label
 var _history_popup: PopupPanel
 var _history_popup_controls: VBoxContainer
 var _debug_sync_popup: PopupPanel
@@ -508,17 +509,8 @@ func _build_ui() -> void:
 	add_child(_confirm_close_dialog)
 	_configure_confirmation_dialog(_confirm_close_dialog)
 
-	_pending_offer_guard_dialog = ConfirmationDialog.new()
-	_pending_offer_guard_dialog.title = "Pending offers"
-	_pending_offer_guard_dialog.dialog_text = "You have pending offers from other cooks.\n\nAre you sure you want to end your turn?"
-	_pending_offer_guard_dialog.confirmed.connect(_on_pending_offer_guard_confirmed)
-	_pending_offer_guard_dialog.canceled.connect(_on_pending_offer_guard_review)
+	_pending_offer_guard_dialog = _build_pending_offer_popup()
 	add_child(_pending_offer_guard_dialog)
-	_configure_confirmation_dialog(_pending_offer_guard_dialog)
-	_pending_offer_guard_dialog.get_ok_button().text = "End Turn Anyway"
-	_pending_offer_guard_dialog.get_cancel_button().text = "Review Offers"
-	_style_confirmation_button(_pending_offer_guard_dialog.get_ok_button(), true)
-	_style_confirmation_button(_pending_offer_guard_dialog.get_cancel_button(), false)
 
 	_idle_prompt_dialog = _build_idle_prompt_popup()
 	add_child(_idle_prompt_dialog)
@@ -541,6 +533,8 @@ func _build_ui() -> void:
 	add_child(_offline_end_popup)
 	_host_close_popup = _build_host_close_popup()
 	add_child(_host_close_popup)
+	_floating_status_label = _build_floating_status_label()
+	add_child(_floating_status_label)
 
 	_history_popup = _build_history_popup()
 	_configure_persistent_popup(_history_popup)
@@ -1574,6 +1568,10 @@ func _return_to_main_menu() -> void:
 		_table_visual.visible = true
 	if is_instance_valid(_table_visual_holder):
 		_table_visual_holder.visible = false
+	if is_instance_valid(_floating_status_label):
+		_floating_status_label.visible = false
+	if is_instance_valid(_pending_offer_guard_dialog):
+		_pending_offer_guard_dialog.hide()
 	if is_instance_valid(_post_table_controls):
 		_clear(_post_table_controls)
 		_post_table_controls.visible = false
@@ -1999,6 +1997,22 @@ func _configure_persistent_popup(window: Window) -> void:
 	window.set("popup_window", false)
 
 
+func _set_status_message(message: String, visible := true) -> void:
+	if not is_instance_valid(_status_label):
+		return
+	if visible and _game_started(RecipesClient.latest_snapshot):
+		_status_label.text = message
+		_status_label.visible = false
+		if is_instance_valid(_floating_status_label):
+			_floating_status_label.text = message
+			_floating_status_label.visible = message != ""
+		return
+	if is_instance_valid(_floating_status_label):
+		_floating_status_label.visible = false
+	_status_label.text = message
+	_status_label.visible = visible
+
+
 func _build_idle_prompt_popup() -> Control:
 	var overlay := Control.new()
 	overlay.name = "IdlePromptOverlay"
@@ -2229,6 +2243,103 @@ func _build_host_close_popup() -> Control:
 	keep_button.custom_minimum_size = Vector2(136, 42)
 	row.add_child(keep_button)
 	return overlay
+
+
+func _build_pending_offer_popup() -> Control:
+	var overlay := Control.new()
+	overlay.name = "PendingOfferOverlay"
+	overlay.visible = false
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 220
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0.10, 0.07, 0.04, 0.20)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(shade)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.name = "PendingOfferPanel"
+	panel.custom_minimum_size = Vector2(390, 220)
+	panel.add_theme_stylebox_override("panel", _confirmation_panel_style())
+	center.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(box)
+
+	var title := Label.new()
+	title.text = "Pending offers"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(20))
+	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
+	box.add_child(title)
+
+	var message := Label.new()
+	message.text = "You have pending offers from other cooks.\n\nAre you sure you want to end your turn?"
+	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	message.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	message.add_theme_font_size_override("font_size", _scaled_ui_font_size(16))
+	message.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	message.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(message)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+
+	var end_button := _button("End Turn Anyway", func() -> void:
+		overlay.hide()
+		_on_pending_offer_guard_confirmed()
+	)
+	end_button.name = "PendingOfferEndButton"
+	_style_confirmation_button(end_button, true)
+	end_button.custom_minimum_size = Vector2(164, 42)
+	row.add_child(end_button)
+
+	var review_button := _button("Review Offers", func() -> void:
+		overlay.hide()
+		_on_pending_offer_guard_review()
+	)
+	review_button.name = "PendingOfferReviewButton"
+	_style_confirmation_button(review_button, false)
+	review_button.custom_minimum_size = Vector2(144, 42)
+	row.add_child(review_button)
+	return overlay
+
+
+func _build_floating_status_label() -> Label:
+	var label := Label.new()
+	label.name = "FloatingStatusLabel"
+	label.visible = false
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.z_index = 180
+	label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	label.position = Vector2(12, 12)
+	label.custom_minimum_size = Vector2(360, 34)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_font_size_override("font_size", _scaled_ui_font_size(15))
+	label.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	label.add_theme_color_override("font_outline_color", Color(1.0, 0.94, 0.76, 0.88))
+	label.add_theme_constant_override("outline_size", 2)
+	return label
 
 
 func _build_history_popup() -> PopupPanel:
@@ -2716,21 +2827,18 @@ func _close_table_and_return_to_menu() -> void:
 		return
 	if not RecipesClient.is_socket_connected():
 		_close_table_after_reconnect = true
-		_status_label.text = "Reconnecting to close the table..."
-		_status_label.visible = true
+		_set_status_message("Reconnecting to close the table...")
 		RecipesClient.connect_socket()
 		return
 	var sent := RecipesClient.send_host_intent({"type": "close_table"})
 	if not sent:
-		_status_label.text = "Could not send Close Table. Reconnecting..."
-		_status_label.visible = true
+		_set_status_message("Could not send Close Table. Reconnecting...")
 		_close_table_after_reconnect = true
 		RecipesClient.connect_socket()
 		return
 	_close_table_after_reconnect = false
 	_return_to_menu_after_close_table = true
-	_status_label.text = "Closing table..."
-	_status_label.visible = true
+	_set_status_message("Closing table...")
 	get_tree().create_timer(0.35).timeout.connect(func() -> void:
 		if _return_to_menu_after_close_table:
 			_return_to_main_menu()
@@ -2959,6 +3067,8 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 		_status_label.visible = false
 	else:
 		_status_label.text = "Choose offline pass-and-play or connect to an online Recipes server."
+	if not game_started and is_instance_valid(_floating_status_label):
+		_floating_status_label.visible = false
 	_refresh_connection_buttons(snapshot)
 	_set_lobby_ui_visible(table_exists)
 	_set_gameplay_ui_visible(game_started)
@@ -3062,8 +3172,7 @@ func _handle_table_closure_snapshot(snapshot: Dictionary) -> void:
 			_table_closure_dialog.hide()
 		_return_to_main_menu()
 		_table_closure_returning = false
-		_status_label.text = message
-		_status_label.visible = true
+		_set_status_message(message)
 		return
 	if str(closure.get("reason", "")) == "idle_declined":
 		if is_instance_valid(_table_closure_dialog):
@@ -3074,8 +3183,7 @@ func _handle_table_closure_snapshot(snapshot: Dictionary) -> void:
 	if is_instance_valid(_table_closure_dialog):
 		_table_closure_dialog.dialog_text = message
 		_table_closure_dialog.popup_centered()
-	_status_label.text = message
-	_status_label.visible = true
+	_set_status_message(message)
 	var delay_seconds := 2.0
 	var return_to_menu_at_ms := int(closure.get("returnToMenuAtMs", 0))
 	if return_to_menu_at_ms > 0:
@@ -3093,8 +3201,7 @@ func _return_to_main_menu_after_table_closure(closure_key: String, message: Stri
 		_table_closure_dialog.hide()
 	_return_to_main_menu()
 	_table_closure_returning = false
-	_status_label.text = message
-	_status_label.visible = true
+	_set_status_message(message)
 
 
 func _update_platter_summary_label(snapshot: Dictionary) -> void:
@@ -3119,15 +3226,14 @@ func _on_error_received(error: Dictionary) -> void:
 		show_plain_message = true
 		if not RecipesClient.offline_mode:
 			RecipesClient.connect_socket()
-	_status_label.text = description if show_plain_message or description.begins_with("The server") else "Error: %s" % description
-	_status_label.visible = true
+	_set_status_message(description if show_plain_message or description.begins_with("The server") else "Error: %s" % description)
 	_summary_label.text = "Last error: %s" % description
 	_refresh_online_setup_ready_state()
 
 
 func _on_connection_changed(status: String) -> void:
 	if status == "open":
-		_status_label.text = "Connection open."
+		_set_status_message("Connection open.")
 		_refresh_connection_buttons(RecipesClient.latest_snapshot)
 		_set_lobby_ui_visible(_table_exists(RecipesClient.latest_snapshot))
 		_set_gameplay_ui_visible(_game_started(RecipesClient.latest_snapshot))
@@ -3136,12 +3242,12 @@ func _on_connection_changed(status: String) -> void:
 	elif status == "closed":
 		var snapshot := RecipesClient.latest_snapshot
 		if _table_exists(snapshot):
-			_status_label.text = "Connection closed. Showing last table state."
+			_set_status_message("Connection closed. Showing last table state.")
 			_refresh_connection_buttons(snapshot)
 			_set_lobby_ui_visible(true)
 			_set_gameplay_ui_visible(_game_started(snapshot))
 		else:
-			_status_label.text = "Connection: %s" % status
+			_set_status_message("Connection: %s" % status)
 			_set_lobby_ui_visible(false)
 			_set_gameplay_ui_visible(false)
 			if is_instance_valid(_table_visual):
@@ -3152,14 +3258,14 @@ func _on_connection_changed(status: String) -> void:
 	elif status == "reconnecting":
 		var close_detail := RecipesClient.last_close_description
 		var detail := "" if close_detail == "" else " (%s)" % close_detail
-		_status_label.text = "Connection lost%s. Reconnecting, attempt %s..." % [detail, RecipesClient.reconnect_attempt()]
+		_set_status_message("Connection lost%s. Reconnecting, attempt %s..." % [detail, RecipesClient.reconnect_attempt()])
 		var snapshot := RecipesClient.latest_snapshot
 		if _table_exists(snapshot):
 			_refresh_connection_buttons(snapshot)
 			_set_lobby_ui_visible(true)
 			_set_gameplay_ui_visible(_game_started(snapshot))
 	else:
-		_status_label.text = "Connection: %s" % status
+		_set_status_message("Connection: %s" % status)
 
 
 func _table_exists(snapshot: Dictionary) -> bool:
@@ -3410,13 +3516,12 @@ func _send_intent_with_pending_offer_guard(intent: Dictionary, status_message :=
 			_incoming_pending_offer_count(snapshot, actor_id),
 			str(snapshot.get("version", "?"))
 		]
-		_status_label.text = "Pending offers need your attention before ending the turn."
-		_status_label.visible = true
-		_pending_offer_guard_dialog.popup_centered()
+		_set_status_message("Pending offers need your attention before ending the turn.")
+		_pending_offer_guard_dialog.show()
+		_pending_offer_guard_dialog.move_to_front()
 		return false
 	if status_message != "":
-		_status_label.text = status_message
-		_status_label.visible = true
+		_set_status_message(status_message)
 	return RecipesClient.send_intent(intent)
 
 
@@ -3465,8 +3570,7 @@ func _on_pending_offer_guard_confirmed() -> void:
 	_pending_offer_guard_actor_id = ""
 	_last_pending_offer_guard_decision = "ended anyway actor=%s version=%s" % [actor_id, str(RecipesClient.latest_snapshot.get("version", "?"))]
 	if status_message != "":
-		_status_label.text = status_message
-		_status_label.visible = true
+		_set_status_message(status_message)
 	if not intent.is_empty():
 		RecipesClient.send_intent(intent)
 
@@ -3477,9 +3581,8 @@ func _on_pending_offer_guard_review() -> void:
 	_pending_offer_guard_status = ""
 	_pending_offer_guard_actor_id = ""
 	_last_pending_offer_guard_decision = "review offers actor=%s version=%s" % [actor_id, str(RecipesClient.latest_snapshot.get("version", "?"))]
-	_status_label.text = "Review pending offers before ending your turn."
-	_status_label.visible = true
-	if is_instance_valid(_offer_section):
+	_set_status_message("Review pending offers before ending your turn.")
+	if not _game_started(RecipesClient.latest_snapshot) and is_instance_valid(_offer_section):
 		_offer_section.visible = true
 		_set_section_collapsed(_offer_section, false)
 		call_deferred("_scroll_to_offer_section")
@@ -3498,7 +3601,7 @@ func _on_table_visual_view_requested(participant_id: String) -> void:
 
 
 func _on_table_visual_status_requested(message: String) -> void:
-	_status_label.text = message
+	_set_status_message(message)
 
 
 func _on_table_visual_menu_requested(action: String) -> void:

@@ -402,7 +402,7 @@ export interface SnapshotDelta {
   viewerParticipantId?: string;
   baseVersion: number;
   version: number;
-  patch: Partial<Snapshot>;
+  patch: Partial<Snapshot> & Record<string, unknown>;
   append: {
     transactionHistory?: TransactionRecord[];
     dishes?: Dish[];

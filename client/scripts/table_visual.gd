@@ -53,6 +53,11 @@ const LANDSCAPE_MIN_ASPECT := 1.25
 const BASKET_BACKDROP_SIZE := Vector2(668, 230)
 const CARD_TILE_SIZE := Vector2(96, 90)
 const BASKET_SLOT_SIZE := CARD_TILE_SIZE
+const ANIMATED_CARD_TILE_SIZE := BASKET_SLOT_SIZE
+const PREPARE_DISH_PANEL_SIZE := Vector2(122, 134)
+const PREPARE_DISH_ICON_SIZE := Vector2(82, 82)
+const PREPARE_DISH_POP_SCALE := Vector2(1.08, 1.08)
+const PREPARE_DISH_LAND_SCALE := Vector2(0.30, 0.30)
 const BASKET_COMPACT_SLOT_SIZE := Vector2(92, 52)
 const BASKET_GRID_GAP := 7
 const BASKET_COMPACT_GRID_GAP := 5
@@ -413,12 +418,13 @@ class FireworksShow:
 class CompleteFoodOrbit:
 	extends Control
 
-	const ITEM_SIZE := Vector2(44, 44)
-	const ORBIT_EDGE_INSET := 4.0
+	const ITEM_SIZE := Vector2(34, 34)
+	const ORBIT_EDGE_GUTTER := 8.0
+	const ORBIT_EDGE_INSET := ITEM_SIZE.x * 0.5 + ORBIT_EDGE_GUTTER
 	const ORBIT_LEFT_INSET := ORBIT_EDGE_INSET
 	const ORBIT_TOP_INSET := ORBIT_EDGE_INSET
 	const ORBIT_RIGHT_INSET := ORBIT_EDGE_INSET
-	const ORBIT_BOTTOM_INSET := ITEM_SIZE.y * 0.5
+	const ORBIT_BOTTOM_INSET := ITEM_SIZE.y * 0.5 + ORBIT_EDGE_GUTTER
 	const ORBIT_INSET := ORBIT_BOTTOM_INSET
 	const SECONDS_PER_LAP := 18.0
 	const BOB_PIXELS := 4.0
@@ -1154,6 +1160,8 @@ func debug_animation_path_points(event: Dictionary) -> Dictionary:
 			}
 		"public_prepare":
 			var public_center := _participant_tile_center(str(event.get("participantId", "")))
+			if public_center == Vector2.INF:
+				public_center = _control_global_center(_participant_row)
 			return {
 				"start": public_center,
 				"end": public_center + Vector2(0, -8) if public_center != Vector2.INF else Vector2.INF
@@ -7271,7 +7279,8 @@ func _animate_texture_to_complete_orbit(texture: Texture2D, global_start: Vector
 	if not is_instance_valid(_animation_layer) or not texture is Texture2D:
 		_reveal_complete_orbit_items(reveal_count, orbit_items)
 		return
-	var icon_size := Vector2(54, 54)
+	var icon_size := CompleteFoodOrbit.ITEM_SIZE
+	debug_stats["lastCompleteOrbitFlyingFoodSize"] = icon_size
 	var start := global_start
 	var finish := global_end
 	if not _is_usable_animation_point(start) or not _is_usable_animation_point(finish):
@@ -7856,10 +7865,11 @@ func _animate_dish_part_card_path(dish_name: String, unit: String, global_points
 func _animate_visual_tile_path(meta: Dictionary, label: String, global_points: Array[Vector2], delay := 0.0, start_visible := true, duration_scale := 1.0) -> void:
 	if global_points.size() < 2 or not is_instance_valid(_animation_layer):
 		return
-	var tile_size := BASKET_SLOT_SIZE
+	var tile_size := ANIMATED_CARD_TILE_SIZE
 	var tile := Button.new()
 	tile.name = "AnimatedCard_%s" % label.replace(" ", "_")
 	debug_stats["lastAnimatedCardSize"] = tile_size
+	debug_stats["lastAnimatedCardPeakSize"] = tile_size * CARD_TILE_LAND_SCALE
 	tile.text = ""
 	tile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tile.focus_mode = Control.FOCUS_NONE
@@ -7896,6 +7906,8 @@ func _animate_visual_tile_path(meta: Dictionary, label: String, global_points: A
 func _animate_texture_path(texture: Texture2D, global_points: Array[Vector2], delay := 0.0, icon_size := Vector2(46, 46), duration_scale := 1.0) -> void:
 	if global_points.size() < 2 or not is_instance_valid(_animation_layer) or not texture is Texture2D:
 		return
+	debug_stats["lastAnimatedTextureSize"] = icon_size
+	debug_stats["lastAnimatedTexturePeakSize"] = icon_size * TEXTURE_LAND_SCALE
 	var icon := TextureRect.new()
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon.texture = texture
@@ -7928,13 +7940,16 @@ func _animate_large_dish(texture: Texture2D, dish_name: String, global_start: Ve
 		return
 	var wrapper := PanelContainer.new()
 	wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrapper.size = Vector2(148, 162)
+	wrapper.size = PREPARE_DISH_PANEL_SIZE
 	wrapper.pivot_offset = wrapper.size * 0.5
 	wrapper.modulate = Color(1, 1, 1, 0)
 	wrapper.scale = Vector2(0.45, 0.45)
 	wrapper.add_theme_stylebox_override("panel", _prepare_dish_style())
 	_animation_layer.add_child(wrapper)
 	wrapper.position = _animation_local(global_start) - wrapper.size * 0.5
+	debug_stats["lastPrepareLargeDishSize"] = PREPARE_DISH_PANEL_SIZE
+	debug_stats["lastPrepareLargeDishPeakSize"] = PREPARE_DISH_PANEL_SIZE * PREPARE_DISH_POP_SCALE
+	debug_stats["lastPrepareLargeDishIconSize"] = PREPARE_DISH_ICON_SIZE
 
 	var box := VBoxContainer.new()
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -7944,10 +7959,10 @@ func _animate_large_dish(texture: Texture2D, dish_name: String, global_start: Ve
 		var icon := TextureRect.new()
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.texture = texture
-		icon.custom_minimum_size = Vector2(108, 108)
+		icon.custom_minimum_size = PREPARE_DISH_ICON_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		box.add_child(icon)
-	var label := _card_label(VisualAssets.short_dish_name(dish_name), TEXT_DARK, 16)
+	var label := _card_label(VisualAssets.short_dish_name(dish_name), TEXT_DARK, 14)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(label)
 
@@ -7955,10 +7970,10 @@ func _animate_large_dish(texture: Texture2D, dish_name: String, global_start: Ve
 	if delay > 0.0:
 		tween.tween_interval(delay)
 	tween.tween_property(wrapper, "modulate", Color(1, 1, 1, 1), 0.12)
-	tween.parallel().tween_property(wrapper, "scale", Vector2(1.15, 1.15), 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(wrapper, "scale", PREPARE_DISH_POP_SCALE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tween.tween_interval(0.44)
 	tween.tween_property(wrapper, "position", _animation_local(global_end) - wrapper.size * 0.5, 0.28).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tween.parallel().tween_property(wrapper, "scale", Vector2(0.28, 0.28), 0.28)
+	tween.parallel().tween_property(wrapper, "scale", PREPARE_DISH_LAND_SCALE, 0.28)
 	tween.parallel().tween_property(wrapper, "modulate", Color(1, 1, 1, 0), 0.28)
 	tween.tween_callback(wrapper.queue_free)
 

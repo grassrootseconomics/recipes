@@ -475,7 +475,10 @@ func _handle_delta_message(message: Dictionary) -> void:
 		call_deferred("connect_socket")
 		return
 	for key in patch.keys():
-		latest_snapshot[key] = patch[key]
+		if patch[key] == null:
+			latest_snapshot.erase(key)
+		else:
+			latest_snapshot[key] = patch[key]
 	if append.has("transactionHistory"):
 		var history: Array = latest_snapshot.get("transactionHistory", [])
 		for raw_transaction in append.get("transactionHistory", []):

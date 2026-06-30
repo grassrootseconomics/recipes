@@ -130,15 +130,39 @@ func _initialize() -> void:
 	_require(str(recipes_client.last_heartbeat.get("currentTurnParticipantId", "")) == "p2", "online heartbeat stores current turn metadata without applying a snapshot")
 	_require(recipes_client.last_heartbeat_age_ms() >= 0, "online heartbeat exposes freshness age")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 0, false, 0)) == "none", "online active table watchdog stays quiet while heartbeats are fresh")
+	var recipe_delete_snapshot := _online_playing_snapshot()
+	recipe_delete_snapshot["version"] = 20
+	recipe_delete_snapshot["transactionCursor"] = 50
+	recipe_delete_snapshot["ownRecipe"] = {"id": "recipe_old", "name": "Old Fried Rice", "requirements": []}
+	recipes_client.latest_snapshot = recipe_delete_snapshot
+	recipes_client.call("_handle_socket_message", JSON.stringify({
+		"type": "delta",
+		"tableCode": "JOINME",
+		"viewerParticipantId": "p1",
+		"baseVersion": 20,
+		"version": 21,
+		"patch": {"ownRecipe": null, "transactionCursor": 51},
+		"append": {"transactionHistory": []}
+	}))
+	_require(not recipes_client.latest_snapshot.has("ownRecipe"), "online delta null patch removes stale ownRecipe after final prepare")
 	var pending_offer_snapshot := _pending_offer_playing_snapshot()
 	recipes_client.latest_snapshot = pending_offer_snapshot
 	recipes_client.acting_participant_id = "p1"
 	main.call("_send_intent_with_pending_offer_guard", {"type": "pass_turn"}, "Passing turn.")
 	await process_frame
-	var pending_offer_dialog := main.get("_pending_offer_guard_dialog") as ConfirmationDialog
+	var pending_offer_dialog := main.get("_pending_offer_guard_dialog") as Control
+	var pending_offer_end_button := pending_offer_dialog.find_child("PendingOfferEndButton", true, false) as Button if pending_offer_dialog != null else null
+	var pending_offer_review_button := pending_offer_dialog.find_child("PendingOfferReviewButton", true, false) as Button if pending_offer_dialog != null else null
+	var status_label := _control_from_property(main, "_status_label")
+	var floating_status_label := _control_from_property(main, "_floating_status_label")
 	_require(pending_offer_dialog != null and pending_offer_dialog.visible, "pending offers prompt before ending a turn")
-	_require(pending_offer_dialog != null and pending_offer_dialog.get_ok_button().text == "End Turn Anyway", "pending offers prompt has an explicit end-turn confirmation")
-	_require(pending_offer_dialog != null and pending_offer_dialog.get_cancel_button().text == "Review Offers", "pending offers prompt has a review-offers cancellation")
+	_require(pending_offer_dialog != null and pending_offer_dialog.name == "PendingOfferOverlay", "pending offers prompt uses the themed in-tree overlay")
+	_require(pending_offer_end_button != null and pending_offer_end_button.text == "End Turn Anyway", "pending offers prompt has an explicit end-turn confirmation")
+	_require(pending_offer_review_button != null and pending_offer_review_button.text == "Review Offers", "pending offers prompt has a review-offers cancellation")
+	_require(pending_offer_end_button != null and pending_offer_end_button.custom_minimum_size.x >= 164.0, "pending offers end-turn button is wide enough for readable text")
+	_require(pending_offer_review_button != null and pending_offer_review_button.custom_minimum_size.x >= 144.0, "pending offers review button is wide enough for readable text")
+	_require(status_label != null and not status_label.visible, "pending-offer active-game prompt does not reveal the layout status label")
+	_require(floating_status_label != null and floating_status_label.visible, "pending-offer active-game prompt uses floating status text")
 	if pending_offer_dialog != null:
 		pending_offer_dialog.hide()
 	var controlled_offer_snapshot := _pending_offer_playing_snapshot()

@@ -465,12 +465,17 @@ func _initialize() -> void:
 	visual.debug_play_animation_event({"type": "prepare", "dishName": "Cheese Frittata", "unit": "slice"})
 	_require(str(visual.debug_stats.get("lastPrepareAnnouncement", "")) == "Amina prepared Cheese Frittata!", "viewer prepare animation announces player and exact dish name")
 	_require(float(visual.debug_stats.get("lastPrepareAnnouncementHoldSeconds", 0.0)) >= 2.0, "prepare announcement stays visible one second longer")
+	_require(_size_lte(visual.debug_stats.get("lastAnimatedCardSize", Vector2.ZERO), Vector2(96, 90)), "viewer prepare dish-piece card stays within the normal tile size")
+	_require(_size_lte(visual.debug_stats.get("lastAnimatedCardPeakSize", Vector2.ZERO), Vector2(98, 92)), "viewer prepare dish-piece card pulse does not grow into a large food overlay")
+	_require(_size_lte(visual.debug_stats.get("lastPrepareLargeDishPeakSize", Vector2.ZERO), Vector2(132, 145)), "viewer prepare dish splash is capped below the oversized HD overlay")
+	_require(_size_lte(visual.debug_stats.get("lastPrepareLargeDishIconSize", Vector2.ZERO), Vector2(82, 82)), "viewer prepare splash uses bounded dish art")
 	var viewer_prepare_center: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementGlobalCenter", Vector2.INF)
 	var viewer_prepare_table_center: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementTableCenter", Vector2.ZERO)
 	_require(viewer_prepare_center.distance_to(viewer_prepare_table_center) <= 1.0, "viewer prepare announcement is centered on the table screen")
 	var viewer_prepare_size: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementSize", Vector2.ZERO)
 	visual.debug_play_animation_event({"type": "public_prepare", "participantId": "p2", "participantName": "Ben", "dishName": "Bean Tacos", "unit": "taco"})
 	_require(str(visual.debug_stats.get("lastPrepareAnnouncement", "")) == "Ben prepared Bean Tacos!", "public prepare animation announces cook and dish name")
+	_require(_size_lte(visual.debug_stats.get("lastPrepareLargeDishPeakSize", Vector2.ZERO), Vector2(132, 145)), "public prepare dish splash is capped for non-viewing cooks")
 	var public_prepare_center: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementGlobalCenter", Vector2.INF)
 	var public_prepare_table_center: Vector2 = visual.debug_stats.get("lastPrepareAnnouncementTableCenter", Vector2.ZERO)
 	_require(public_prepare_center.distance_to(public_prepare_table_center) <= 1.0, "public prepare announcement is centered on the table screen")
@@ -481,7 +486,9 @@ func _initialize() -> void:
 	_require(long_prepare_size.x > viewer_prepare_size.x, "prepare announcement width grows with message character count")
 	visual.debug_play_animation_event({"type": "offer", "participantId": "p2", "indicator": "!"})
 	visual.debug_play_animation_event({"type": "settlement_swap", "giveKind": "dish_part", "giveDishName": "Bean Dip", "giveUnit": "scoop", "takeKind": "voucher", "takeIngredientId": "beans"})
+	_require(_size_lte(visual.debug_stats.get("lastAnimatedCardPeakSize", Vector2.ZERO), Vector2(98, 92)), "settlement dish-piece card stays within the card-size animation budget")
 	visual.debug_play_animation_event({"type": "eat", "dishName": "Cheese Frittata", "unit": "slice"})
+	_require(_size_lte(visual.debug_stats.get("lastCompleteOrbitFlyingFoodSize", Vector2.ZERO), Vector2(34, 34)), "shared-food launch uses small orbit-sized flying food")
 	visual.debug_play_animation_event({"type": "complete"})
 
 	_intents.clear()
@@ -987,9 +994,11 @@ func _initialize() -> void:
 	var orbit_left_margin := float(complete_orbit.get_meta("orbit_left_margin", -1.0)) if complete_orbit != null else -1.0
 	var orbit_right_margin := float(complete_orbit.get_meta("orbit_right_margin", -1.0)) if complete_orbit != null else -1.0
 	var orbit_bottom_margin := float(complete_orbit.get_meta("orbit_bottom_margin", 0.0)) if complete_orbit != null else 0.0
-	_require(orbit_margin > 0.0 and orbit_margin <= 22.5, "complete food orbit follows the main table edge while staying visible")
-	_require(orbit_top_margin > 0.0 and orbit_top_margin <= 4.5 and orbit_left_margin > 0.0 and orbit_left_margin <= 4.5 and orbit_right_margin > 0.0 and orbit_right_margin <= 4.5, "complete food orbit reaches close to the top, left, and right table edges without using origin points")
-	_require(orbit_bottom_margin > 0.0 and orbit_bottom_margin <= 22.5, "complete food orbit keeps the bottom edge at the prior visible inset")
+	_require(orbit_margin >= 24.0 and orbit_margin <= 26.0, "complete food orbit follows the inside edge of the main table panel")
+	_require(orbit_top_margin >= 24.0 and orbit_top_margin <= 26.0 and orbit_left_margin >= 24.0 and orbit_left_margin <= 26.0 and orbit_right_margin >= 24.0 and orbit_right_margin <= 26.0, "complete food orbit is inset by the food radius so sprites stay inside the panel")
+	_require(orbit_bottom_margin >= 24.0 and orbit_bottom_margin <= 26.0, "complete food orbit keeps the bottom sprites inside the main table panel")
+	var first_orbit_food := complete_orbit.find_child("OrbitFood_0", true, false) as Control if complete_orbit != null else null
+	_require(first_orbit_food != null and first_orbit_food.custom_minimum_size.x <= 34.0 and first_orbit_food.custom_minimum_size.y <= 34.0, "complete food orbit uses small food sprites that do not dominate the table")
 	_require(complete_orbit != null and complete_orbit.find_child("OrbitFoodQuantity", true, false) == null, "complete food orbit hides quantity text on orbiting bunches")
 	_require(int(visual.debug_stats.get("completeAvatarDanceCount", 0)) >= 4, "complete phase makes cook avatars dance")
 	var dancing_avatar := visual.find_child("CookAvatar", true, false) as TextureRect
@@ -1749,6 +1758,13 @@ func _points_close(left: Vector2, right: Vector2) -> bool:
 
 func _is_finite_point(point: Vector2) -> bool:
 	return point != Vector2.INF and not is_nan(point.x) and not is_nan(point.y) and not is_inf(point.x) and not is_inf(point.y)
+
+
+func _size_lte(value, max_size: Vector2) -> bool:
+	if typeof(value) != TYPE_VECTOR2:
+		return false
+	var size_value: Vector2 = value
+	return size_value.x <= max_size.x + 0.001 and size_value.y <= max_size.y + 0.001
 
 
 func _event_has_randomized_orbit_phase(event: Dictionary) -> bool:
