@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.49"
+const APP_VERSION := "0.0.50"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -107,6 +107,7 @@ var _confirm_offline_end_dialog: ConfirmationDialog
 var _idle_prompt_dialog: Control
 var _table_closure_dialog: AcceptDialog
 var _offline_end_popup: Control
+var _host_close_popup: Control
 var _history_popup: PopupPanel
 var _history_popup_controls: VBoxContainer
 var _debug_sync_popup: PopupPanel
@@ -534,6 +535,8 @@ func _build_ui() -> void:
 
 	_offline_end_popup = _build_offline_end_popup()
 	add_child(_offline_end_popup)
+	_host_close_popup = _build_host_close_popup()
+	add_child(_host_close_popup)
 
 	_history_popup = _build_history_popup()
 	_configure_persistent_popup(_history_popup)
@@ -652,6 +655,7 @@ func _build_home_panel() -> PanelContainer:
 	box.add_child(_version_label)
 
 	_quit_button = _home_footer_button("Quit", _quit_game)
+	_quit_button.visible = _should_show_quit_button()
 	box.add_child(_quit_button)
 
 	return panel
@@ -1674,7 +1678,33 @@ func _open_grassroots_economics() -> void:
 
 
 func _quit_game() -> void:
+	if OS.get_name() == "Web":
+		if _is_web_standalone_pwa():
+			JavaScriptBridge.eval("window.close();", true)
+			if is_instance_valid(_status_label):
+				_status_label.visible = true
+				_status_label.text = "Close this app window to quit Recipes."
+		return
 	get_tree().quit()
+
+
+func _should_show_quit_button() -> bool:
+	if OS.get_name() != "Web":
+		return true
+	return _is_web_standalone_pwa()
+
+
+func _is_web_standalone_pwa() -> bool:
+	if OS.get_name() != "Web":
+		return false
+	return _web_display_mode_is_standalone(JavaScriptBridge.eval(
+		"Boolean(window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true)",
+		true
+	))
+
+
+func _web_display_mode_is_standalone(value: Variant) -> bool:
+	return bool(value)
 
 
 func _home_panel_style() -> StyleBoxFlat:
@@ -2106,6 +2136,84 @@ func _build_offline_end_popup() -> Control:
 	no_button.custom_minimum_size = Vector2(108, 34)
 	_style_confirmation_button(no_button, false)
 	row.add_child(no_button)
+	return overlay
+
+
+func _build_host_close_popup() -> Control:
+	var overlay := Control.new()
+	overlay.name = "HostCloseOverlay"
+	overlay.visible = false
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 210
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0.10, 0.07, 0.04, 0.22)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(shade)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.name = "HostClosePanel"
+	panel.custom_minimum_size = Vector2(360, 168)
+	panel.add_theme_stylebox_override("panel", _confirmation_panel_style())
+	center.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(box)
+
+	var title := Label.new()
+	title.text = "Close table?"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(20))
+	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
+	box.add_child(title)
+
+	var message := Label.new()
+	message.text = "Stop cooking and send everyone back to the Main Menu?"
+	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	message.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	message.add_theme_font_size_override("font_size", _scaled_ui_font_size(16))
+	message.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	box.add_child(message)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+
+	var close_button := _button("Close Table", func() -> void:
+		overlay.hide()
+		_on_confirm_close_table()
+	)
+	close_button.name = "HostCloseConfirmButton"
+	_style_confirmation_button(close_button, true)
+	close_button.custom_minimum_size = Vector2(136, 42)
+	row.add_child(close_button)
+
+	var keep_button := _button("Keep Cooking", func() -> void:
+		overlay.hide()
+	)
+	keep_button.name = "HostCloseCancelButton"
+	_style_confirmation_button(keep_button, false)
+	keep_button.custom_minimum_size = Vector2(136, 42)
+	row.add_child(keep_button)
 	return overlay
 
 
@@ -2573,7 +2681,11 @@ func _on_confirm_leave_table() -> void:
 func _confirm_close_table() -> void:
 	if RecipesClient.table_code == "":
 		return
-	_confirm_close_dialog.popup_centered()
+	if is_instance_valid(_host_close_popup):
+		_host_close_popup.show()
+		_host_close_popup.move_to_front()
+	else:
+		_confirm_close_dialog.popup_centered()
 
 
 func _on_confirm_close_table() -> void:
@@ -2871,11 +2983,16 @@ func _respond_to_idle_prompt(still_cooking: bool) -> void:
 	_answered_idle_prompt_ids[prompt_id] = true
 	if is_instance_valid(_idle_prompt_dialog):
 		_idle_prompt_dialog.hide()
-	RecipesClient.send_intent({
+	var sent := RecipesClient.send_intent({
 		"type": "idle_response",
 		"promptId": prompt_id,
 		"response": "yes" if still_cooking else "no"
 	})
+	if sent and not still_cooking:
+		_table_closure_returning = true
+		_active_table_closure_key = "idle_declined:%s" % prompt_id
+		_return_to_main_menu()
+		_table_closure_returning = false
 
 
 func _handle_table_closure_snapshot(snapshot: Dictionary) -> void:
@@ -2890,6 +3007,12 @@ func _handle_table_closure_snapshot(snapshot: Dictionary) -> void:
 	var message := str(closure.get("message", "The table has closed."))
 	if is_instance_valid(_idle_prompt_dialog):
 		_idle_prompt_dialog.hide()
+	if str(closure.get("reason", "")) == "idle_declined":
+		if is_instance_valid(_table_closure_dialog):
+			_table_closure_dialog.hide()
+		_return_to_main_menu()
+		_table_closure_returning = false
+		return
 	if is_instance_valid(_table_closure_dialog):
 		_table_closure_dialog.dialog_text = message
 		_table_closure_dialog.popup_centered()
@@ -3915,11 +4038,14 @@ func _lobby_title(text: String) -> Label:
 
 
 func _style_start_cooking_button(button: Button) -> void:
+	var bold_font := SystemFont.new()
+	bold_font.font_weight = 700
 	button.add_theme_font_size_override("font_size", _scaled_ui_font_size(18 if _is_compact_lobby() else 24))
+	button.add_theme_font_override("font", bold_font)
 	button.add_theme_color_override("font_color", Color(1.0, 0.92, 0.70))
 	button.add_theme_color_override("font_hover_color", Color(1.0, 0.98, 0.82))
 	button.add_theme_color_override("font_pressed_color", Color(1.0, 0.86, 0.58))
-	button.add_theme_color_override("font_disabled_color", Color(0.76, 0.68, 0.52, 0.75))
+	button.add_theme_color_override("font_disabled_color", Color(0.17, 0.12, 0.07))
 	button.add_theme_color_override("font_outline_color", Color(0.18, 0.09, 0.03, 0.80))
 	button.add_theme_constant_override("outline_size", 2)
 	button.add_theme_stylebox_override("normal", _warm_button_style(Color(0.42, 0.22, 0.10), Color(0.92, 0.68, 0.28), 2))
@@ -3957,8 +4083,6 @@ func _joined_non_host_human_count(snapshot: Dictionary) -> int:
 		if bool(participant.get("isHost", false)):
 			continue
 		if not bool(participant.get("connected", false)):
-			continue
-		if str(participant.get("controllerParticipantId", "")) != "":
 			continue
 		count += 1
 	return count
@@ -4694,7 +4818,7 @@ func _add_host_admin_controls(snapshot: Dictionary) -> void:
 				if bool(RecipesClient.latest_snapshot.get("offline", false)) or RecipesClient.offline_mode:
 					_confirm_offline_end_game()
 				else:
-					RecipesClient.send_host_intent({"type": "stop"})
+					_confirm_close_table()
 			))
 
 	var selected := _participant_by_id(snapshot, _selected_participant_id)

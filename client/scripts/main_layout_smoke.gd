@@ -8,6 +8,8 @@ func _initialize() -> void:
 	await process_frame
 	var app_tablecloth := main.find_child("AppTableclothBackground", true, false) as Control
 	_require(app_tablecloth != null and app_tablecloth.mouse_filter == Control.MOUSE_FILTER_IGNORE, "main scene renders a tiled tablecloth outside the table panel")
+	_require(bool(main.call("_web_display_mode_is_standalone", true)), "web standalone helper accepts installed PWA display mode")
+	_require(not bool(main.call("_web_display_mode_is_standalone", false)), "web standalone helper rejects normal browser tab display mode")
 
 	var original_window_size := root.size
 	root.size = Vector2i(360, 740)
@@ -41,6 +43,20 @@ func _initialize() -> void:
 	_require(back_to_setup != null and back_to_setup.visible, "Back to Create/Join Table is visible in online lobby")
 	var start_button := _current_start_button(main)
 	_require(start_button != null and start_button.disabled and start_button.text == "Waiting for Cooks", "online host Start Cooking button is disabled and relabeled before another cook joins")
+	_require(start_button.get_theme_color("font_disabled_color").is_equal_approx(Color(0.17, 0.12, 0.07)), "online host waiting button uses dark disabled text")
+	var start_button_font := start_button.get_theme_font("font")
+	_require(start_button_font is SystemFont and (start_button_font as SystemFont).font_weight >= 700, "online host waiting button uses a bold font")
+	var recipes_client := root.get_node("/root/RecipesClient")
+	recipes_client.table_code = "JOINME"
+	main.call("_confirm_close_table")
+	await process_frame
+	var host_close_overlay := _control_from_property(main, "_host_close_popup")
+	var host_close_confirm := host_close_overlay.find_child("HostCloseConfirmButton", true, false) as Button if host_close_overlay != null else null
+	var host_close_cancel := host_close_overlay.find_child("HostCloseCancelButton", true, false) as Button if host_close_overlay != null else null
+	_require(host_close_overlay != null and host_close_overlay.visible, "online host close table confirmation uses themed in-tree overlay")
+	_require(host_close_confirm != null and host_close_confirm.text == "Close Table" and host_close_confirm.custom_minimum_size.x >= 136.0, "host close overlay has a full-size Close Table button")
+	_require(host_close_cancel != null and host_close_cancel.text == "Keep Cooking" and host_close_cancel.custom_minimum_size.x >= 136.0, "host close overlay has a full-size Keep Cooking button")
+	host_close_overlay.hide()
 	var online_ready_snapshot := _online_lobby_snapshot(true)
 	_require(str(main.call("_host_lobby_start_label", online_ready_snapshot)) == "Start Cooking", "online host lobby start label restores after another cook joins")
 	_require(bool(main.call("_host_lobby_start_enabled", online_ready_snapshot)), "online host lobby enables start after another cook joins")
@@ -63,7 +79,6 @@ func _initialize() -> void:
 	_require(idle_no != null and idle_no.text == "No" and idle_no.get_global_rect().size.x >= 120.0, "idle cooking prompt has a clear No button")
 	idle_overlay.hide()
 
-	var recipes_client := root.get_node("/root/RecipesClient")
 	recipes_client.latest_snapshot = online_waiting_snapshot.duplicate(true)
 	main.call("_remember_lobby_seat_name_edit", "p1", "FastHost")
 	var name_publish_timer := main.get("_lobby_name_publish_timer") as Timer
@@ -298,6 +313,20 @@ func _initialize() -> void:
 	_require(saw_jjj_transaction, "renamed bot jjj_b produces visible transaction history after pass")
 	_require(saw_bot_animation, "renamed bot jjj_b produces visual bot-turn animation events after pass")
 	_require(str(recipes_client.latest_snapshot.get("currentTurnParticipantId", "")) == "p1", "renamed bot visual smoke returns turn to Amina")
+	var idle_declined_snapshot := _online_playing_snapshot()
+	idle_declined_snapshot["tableClosure"] = {
+		"reason": "idle_declined",
+		"message": "The table closed because someone stopped cooking.",
+		"createdAtMs": 424242,
+		"returnToMenuAtMs": 424242
+	}
+	recipes_client.table_code = "IDLE"
+	main.call("_handle_table_closure_snapshot", idle_declined_snapshot)
+	await process_frame
+	var home_panel := _control_from_property(main, "_home_panel")
+	var table_closure_dialog := _control_from_property(main, "_table_closure_dialog")
+	_require(home_panel != null and home_panel.visible, "idle No closure returns directly to the title page")
+	_require(table_closure_dialog == null or not table_closure_dialog.visible, "idle No closure suppresses the table-closed popup")
 	print("main layout smoke ok")
 	quit(0)
 
@@ -351,6 +380,7 @@ func _online_lobby_snapshot(joined_cook: bool) -> Dictionary:
 			"kind": "human" if is_host or is_joined else "bot",
 			"isHost": is_host,
 			"connected": is_host or is_joined,
+			"controllerParticipantId": "p1" if is_joined else "",
 			"ingredientId": ingredients[index],
 			"dishCount": 0,
 			"depositedInitial": false,
