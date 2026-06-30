@@ -9,6 +9,16 @@ const MAX_AUTOMATION_DIAGNOSTICS = 32;
 export interface BotDecision {
   intent: Intent;
   reason: string;
+  diagnostic?: BotDecisionDiagnostic;
+}
+
+interface BotDecisionDiagnostic {
+  missingIngredientIds?: string[];
+  platterAvailableIngredientIds?: string[];
+  offerTargetParticipantId?: string;
+  offerTargetName?: string;
+  targetOfferableQty?: number;
+  noOfferReason?: string;
 }
 
 export function decideBotIntent(table: Table, botParticipantId: string): BotDecision | undefined {
@@ -51,14 +61,14 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
     return undefined;
   }
 
-  const poolDecision = participant.botType !== "barter_only" ? decidePoolSwap(table, botParticipantId, snapshot) : undefined;
-  if (poolDecision) {
-    return poolDecision;
-  }
-
   const acceptDecision = decideAcceptOffer(snapshot);
   if (acceptDecision) {
     return acceptDecision;
+  }
+
+  const poolDecision = participant.botType !== "barter_only" ? decidePoolSwap(table, botParticipantId, snapshot) : undefined;
+  if (poolDecision) {
+    return poolDecision;
   }
 
   if (participant.botType !== "pool_only") {
@@ -73,11 +83,11 @@ export function decideBotIntent(table: Table, botParticipantId: string): BotDeci
     return redeemAndPassDecision;
   }
 
-  return roundRobinPass();
+  return roundRobinPass(passMissingRecipeDiagnostic(table, botParticipantId, snapshot));
 }
 
-function roundRobinPass(): BotDecision {
-  return { intent: { type: "pass_turn" }, reason: "no useful turn action" };
+function roundRobinPass(diagnostic?: BotDecisionDiagnostic): BotDecision {
+  return { intent: { type: "pass_turn" }, reason: "no useful turn action", diagnostic };
 }
 
 export function runBotTurn(table: Table, botParticipantId: string): BotDecision | undefined {
@@ -142,6 +152,9 @@ function runBotTurnSafely(table: Table, botParticipantId: string, onDiagnostic?:
     if (!decision) {
       return undefined;
     }
+    if (decision.intent.type === "pass_turn" && decision.diagnostic?.missingIngredientIds?.length) {
+      recordAutomationDiagnostic(table, botParticipantId, "pass_missing_ingredients", decision, undefined, onDiagnostic);
+    }
     applyIntent(table, botParticipantId, decision.intent);
     return decision;
   } catch (error) {
@@ -202,6 +215,12 @@ function recordAutomationDiagnostic(
     status,
     reason: decision?.reason,
     intentType: decision?.intent.type,
+    missingIngredientIds: decision?.diagnostic?.missingIngredientIds,
+    platterAvailableIngredientIds: decision?.diagnostic?.platterAvailableIngredientIds,
+    offerTargetParticipantId: decision?.diagnostic?.offerTargetParticipantId,
+    offerTargetName: decision?.diagnostic?.offerTargetName,
+    targetOfferableQty: decision?.diagnostic?.targetOfferableQty,
+    noOfferReason: decision?.diagnostic?.noOfferReason,
     ...automationErrorFields(error)
   };
   table.automationDiagnostics ??= [];
@@ -619,12 +638,19 @@ function firstSpendableFoodPart(snapshot: Snapshot): DishPart | undefined {
 }
 
 function offerGiveAsset(table: Table, botParticipantId: string, snapshot: Snapshot, neededIngredientId: string): PlatterAssetRef | undefined {
+  const ownSurplusVoucher = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand, neededIngredientId, botParticipantId);
+  if (ownSurplusVoucher) {
+    return { kind: "voucher", id: ownSurplusVoucher.id };
+  }
+  const foodPart = firstSpendableFoodPart(snapshot);
+  if (foodPart) {
+    return { kind: "dish_part", id: foodPart.id };
+  }
   const giveVoucher = firstSurplusVoucher(table, botParticipantId, snapshot.ownHand, neededIngredientId);
   if (giveVoucher) {
     return { kind: "voucher", id: giveVoucher.id };
   }
-  const foodPart = firstSpendableFoodPart(snapshot);
-  return foodPart ? { kind: "dish_part", id: foodPart.id } : undefined;
+  return undefined;
 }
 
 function offerIntentForAsset(give: PlatterAssetRef, target: PublicParticipant, neededIngredientId: string): Intent {
@@ -669,6 +695,47 @@ function decideCreateOffer(table: Table, botParticipantId: string, snapshot: Sna
   };
 }
 
+function passMissingRecipeDiagnostic(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecisionDiagnostic | undefined {
+  if (!snapshot.ownRecipe) {
+    return undefined;
+  }
+  const neededIngredients = neededIngredientCountsAfterHand(snapshot);
+  const missingIngredientIds = [...neededIngredients.entries()]
+    .filter(([, missingCount]) => missingCount > 0)
+    .map(([ingredientId]) => ingredientId)
+    .sort();
+  if (missingIngredientIds.length === 0) {
+    return undefined;
+  }
+  const platterAvailableIngredientIds = missingIngredientIds
+    .filter((ingredientId) =>
+      snapshot.platter.some((voucher) => voucher.ingredientId === ingredientId && voucherHasStock(snapshot, voucher))
+    )
+    .sort();
+  const existingPending = snapshot.offers.some((offer) => offer.status === "pending" && offer.fromParticipantId === botParticipantId);
+  const candidates = offerableNeededIngredients(botParticipantId, snapshot, neededIngredients);
+  const candidate = candidates[0];
+  const give = candidate ? offerGiveAsset(table, botParticipantId, snapshot, candidate.ingredientId) : undefined;
+  let noOfferReason = "no_offerable_target";
+  if (table.participants[botParticipantId]?.botType === "pool_only") {
+    noOfferReason = "bot_type_pool_only";
+  } else if (existingPending) {
+    noOfferReason = "existing_pending_offer";
+  } else if (candidate && !give) {
+    noOfferReason = "no_offerable_give_asset";
+  } else if (candidate && give) {
+    noOfferReason = "offer_available_but_not_chosen";
+  }
+  return {
+    missingIngredientIds,
+    platterAvailableIngredientIds,
+    offerTargetParticipantId: candidate?.target.id,
+    offerTargetName: candidate?.target.name,
+    targetOfferableQty: candidate?.target.offerableOwnIngredientQty,
+    noOfferReason
+  };
+}
+
 function offerableNeededIngredients(
   botParticipantId: string,
   snapshot: Snapshot,
@@ -709,7 +776,13 @@ function neededIngredientCountsAfterHand(snapshot: Snapshot): Map<string, number
   return needed;
 }
 
-function firstSurplusVoucher(table: Table, participantId: string, hand: Voucher[], excludedIngredientId = ""): Voucher | undefined {
+function firstSurplusVoucher(
+  table: Table,
+  participantId: string,
+  hand: Voucher[],
+  excludedIngredientId = "",
+  preferredOwnerParticipantId = ""
+): Voucher | undefined {
   const backedHand = hand.filter((voucher) => {
     const owner = table.participants[voucher.ownerParticipantId];
     return (owner?.realIngredientStock ?? 0) > 0;
@@ -726,7 +799,11 @@ function firstSurplusVoucher(table: Table, participantId: string, hand: Voucher[
     }
   }
   const heldByIngredient = new Map<string, number>();
-  for (const voucher of backedHand) {
+  const candidates =
+    preferredOwnerParticipantId === ""
+      ? backedHand
+      : backedHand.filter((voucher) => voucher.ownerParticipantId === preferredOwnerParticipantId);
+  for (const voucher of candidates) {
     if (voucher.ingredientId === excludedIngredientId) {
       continue;
     }

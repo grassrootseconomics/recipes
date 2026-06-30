@@ -102,6 +102,7 @@ var _transaction_controls: VBoxContainer
 var _confirm_bot_dialog: ConfirmationDialog
 var _confirm_leave_dialog: ConfirmationDialog
 var _confirm_close_dialog: ConfirmationDialog
+var _pending_offer_guard_dialog: ConfirmationDialog
 var _confirm_offline_end_dialog: ConfirmationDialog
 var _idle_prompt_dialog: Control
 var _table_closure_dialog: AcceptDialog
@@ -165,6 +166,10 @@ var _history_popup_visible_rows := TRANSACTION_VISIBLE_ROWS
 var _pending_controlled_deposit_actor_id := ""
 var _last_controlled_turn_participant_id := ""
 var _pending_controlled_follow_participant_id := ""
+var _pending_offer_guard_intent := {}
+var _pending_offer_guard_status := ""
+var _pending_offer_guard_actor_id := ""
+var _last_pending_offer_guard_decision := ""
 var _last_popup_close_key := ""
 var _last_popup_close_ms := -1
 var _active_idle_prompt_id := ""
@@ -497,6 +502,18 @@ func _build_ui() -> void:
 	_confirm_close_dialog.confirmed.connect(_on_confirm_close_table)
 	add_child(_confirm_close_dialog)
 	_configure_confirmation_dialog(_confirm_close_dialog)
+
+	_pending_offer_guard_dialog = ConfirmationDialog.new()
+	_pending_offer_guard_dialog.title = "Pending offers"
+	_pending_offer_guard_dialog.dialog_text = "You have pending offers from other cooks.\n\nAre you sure you want to end your turn?"
+	_pending_offer_guard_dialog.confirmed.connect(_on_pending_offer_guard_confirmed)
+	_pending_offer_guard_dialog.canceled.connect(_on_pending_offer_guard_review)
+	add_child(_pending_offer_guard_dialog)
+	_configure_confirmation_dialog(_pending_offer_guard_dialog)
+	_pending_offer_guard_dialog.get_ok_button().text = "End Turn Anyway"
+	_pending_offer_guard_dialog.get_cancel_button().text = "Review Offers"
+	_style_confirmation_button(_pending_offer_guard_dialog.get_ok_button(), true)
+	_style_confirmation_button(_pending_offer_guard_dialog.get_cancel_button(), false)
 
 	_idle_prompt_dialog = _build_idle_prompt_popup()
 	add_child(_idle_prompt_dialog)
@@ -3181,7 +3198,102 @@ func _apply_default_section_collapse(snapshot: Dictionary) -> void:
 func _on_table_visual_intent_requested(intent: Dictionary) -> void:
 	if str(intent.get("type", "")) == "deposit" or str(intent.get("type", "")) == "deposit_ingredient":
 		_pending_controlled_deposit_actor_id = str(RecipesClient.latest_snapshot.get("viewerParticipantId", ""))
-	RecipesClient.send_intent(intent)
+	_send_intent_with_pending_offer_guard(intent, _turn_ending_status_message(RecipesClient.latest_snapshot, intent))
+
+
+func _send_intent_with_pending_offer_guard(intent: Dictionary, status_message := "") -> bool:
+	var snapshot := RecipesClient.latest_snapshot
+	var actor_id := _pending_offer_guard_actor_id_for_snapshot(snapshot)
+	if _turn_ending_intent_has_pending_offers(snapshot, intent, actor_id):
+		_pending_offer_guard_intent = intent.duplicate(true)
+		_pending_offer_guard_status = status_message
+		_pending_offer_guard_actor_id = actor_id
+		_last_pending_offer_guard_decision = "prompted actor=%s count=%s version=%s" % [
+			actor_id,
+			_incoming_pending_offer_count(snapshot, actor_id),
+			str(snapshot.get("version", "?"))
+		]
+		_status_label.text = "Pending offers need your attention before ending the turn."
+		_status_label.visible = true
+		_pending_offer_guard_dialog.popup_centered()
+		return false
+	if status_message != "":
+		_status_label.text = status_message
+		_status_label.visible = true
+	return RecipesClient.send_intent(intent)
+
+
+func _pending_offer_guard_actor_id_for_snapshot(snapshot: Dictionary) -> String:
+	if RecipesClient.acting_participant_id != "":
+		return RecipesClient.acting_participant_id
+	return str(snapshot.get("viewerParticipantId", ""))
+
+
+func _turn_ending_intent_has_pending_offers(snapshot: Dictionary, intent: Dictionary, actor_id: String) -> bool:
+	var intent_type := str(intent.get("type", ""))
+	if intent_type != "pass_turn" and intent_type != "redeem_all_and_pass_turn":
+		return false
+	if actor_id == "":
+		return false
+	return _incoming_pending_offer_count(snapshot, actor_id) > 0
+
+
+func _incoming_pending_offer_count(snapshot: Dictionary, actor_id: String) -> int:
+	if actor_id == "":
+		return 0
+	var count := 0
+	for raw_offer in snapshot.get("offers", []):
+		var offer: Dictionary = raw_offer
+		if str(offer.get("status", "")) == "pending" and str(offer.get("toParticipantId", "")) == actor_id:
+			count += 1
+	return count
+
+
+func _turn_ending_status_message(snapshot: Dictionary, intent: Dictionary) -> String:
+	var intent_type := str(intent.get("type", ""))
+	if intent_type != "pass_turn" and intent_type != "redeem_all_and_pass_turn":
+		return ""
+	var next_name := _next_turn_participant_name(snapshot)
+	if intent_type == "redeem_all_and_pass_turn":
+		return "Redeeming useful cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
+	return "Passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
+
+
+func _on_pending_offer_guard_confirmed() -> void:
+	var intent := _pending_offer_guard_intent.duplicate(true)
+	var status_message := _pending_offer_guard_status
+	var actor_id := _pending_offer_guard_actor_id
+	_pending_offer_guard_intent = {}
+	_pending_offer_guard_status = ""
+	_pending_offer_guard_actor_id = ""
+	_last_pending_offer_guard_decision = "ended anyway actor=%s version=%s" % [actor_id, str(RecipesClient.latest_snapshot.get("version", "?"))]
+	if status_message != "":
+		_status_label.text = status_message
+		_status_label.visible = true
+	if not intent.is_empty():
+		RecipesClient.send_intent(intent)
+
+
+func _on_pending_offer_guard_review() -> void:
+	var actor_id := _pending_offer_guard_actor_id
+	_pending_offer_guard_intent = {}
+	_pending_offer_guard_status = ""
+	_pending_offer_guard_actor_id = ""
+	_last_pending_offer_guard_decision = "review offers actor=%s version=%s" % [actor_id, str(RecipesClient.latest_snapshot.get("version", "?"))]
+	_status_label.text = "Review pending offers before ending your turn."
+	_status_label.visible = true
+	if is_instance_valid(_offer_section):
+		_offer_section.visible = true
+		_set_section_collapsed(_offer_section, false)
+		call_deferred("_scroll_to_offer_section")
+	if is_instance_valid(_table_visual) and _table_visual.has_method("highlight_incoming_offers_for_viewer"):
+		_table_visual.call("highlight_incoming_offers_for_viewer")
+
+
+func _scroll_to_offer_section() -> void:
+	if not is_instance_valid(_root_scroll) or not is_instance_valid(_offer_section) or not _offer_section.visible:
+		return
+	_root_scroll.scroll_vertical = maxi(0, int(_offer_section.get_global_rect().position.y - _root_scroll.get_global_rect().position.y) - 12)
 
 
 func _on_table_visual_view_requested(participant_id: String) -> void:
@@ -3314,6 +3426,8 @@ func _debug_sync_report() -> String:
 	lines.append("Own food parts: %s" % snapshot.get("ownFoodParts", []).size())
 	lines.append("Own food groups: %s" % str(snapshot.get("ownFoodPartGroups", [])))
 	lines.append("Viewer public held food: %s" % _debug_viewer_held_food_count(snapshot))
+	lines.append("Acting incoming pending offers: %s" % _incoming_pending_offer_count(snapshot, _pending_offer_guard_actor_id_for_snapshot(snapshot)))
+	lines.append("Last pending-offer prompt: %s" % ("(none)" if _last_pending_offer_guard_decision == "" else _last_pending_offer_guard_decision))
 	lines.append("Last tx: %s" % _debug_last_transaction(snapshot))
 	lines.append("")
 	lines.append("Visual")
@@ -5134,11 +5248,15 @@ func _add_pass_turn_button(snapshot: Dictionary) -> void:
 	var label := "Redeem / Pass" if is_playing else ("Pass Turn" if next_name == "" else "Pass Turn to %s" % next_name)
 	_phase_controls.add_child(_button(label, func() -> void:
 		if is_playing:
-			_status_label.text = "Redeeming useful cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
-			RecipesClient.send_intent({"type": "redeem_all_and_pass_turn"})
+			_send_intent_with_pending_offer_guard(
+				{"type": "redeem_all_and_pass_turn"},
+				"Redeeming useful cards and passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
+			)
 		else:
-			_status_label.text = "Passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
-			RecipesClient.send_intent({"type": "pass_turn"})
+			_send_intent_with_pending_offer_guard(
+				{"type": "pass_turn"},
+				"Passing turn%s." % ("" if next_name == "" else " to %s" % next_name)
+			)
 	))
 
 

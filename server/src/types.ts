@@ -250,7 +250,12 @@ export interface TableIdleState {
   closure?: TableClosure;
 }
 
-export type AutomationDiagnosticStatus = "error" | "fallback_pass" | "fallback_failed" | "budget_pass";
+export type AutomationDiagnosticStatus =
+  | "error"
+  | "fallback_pass"
+  | "fallback_failed"
+  | "budget_pass"
+  | "pass_missing_ingredients";
 
 export interface AutomationDiagnostic {
   atMs: number;
@@ -264,6 +269,12 @@ export interface AutomationDiagnostic {
   status: AutomationDiagnosticStatus;
   reason?: string;
   intentType?: string;
+  missingIngredientIds?: string[];
+  platterAvailableIngredientIds?: string[];
+  offerTargetParticipantId?: string;
+  offerTargetName?: string;
+  targetOfferableQty?: number;
+  noOfferReason?: string;
   errorCode?: string;
   message?: string;
 }

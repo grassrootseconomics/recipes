@@ -13,6 +13,7 @@
     "generate:icons": "python3 scripts/generate-web-icons.py",
     "generate:recipes": "npm --workspace server run generate:recipes",
     "generate:art": "python3 art/dish_art_gen.py",
+    "analyze:transactions": "node scripts/analyze-transactions.mjs",
     "analyze:economics": "node --import tsx analysis/economic-time/monte_carlo.ts",
     "analyze:economics:render": "node --import tsx analysis/economic-time/render_latest.ts",
     "simulate:game": "npm --workspace server run simulate:game --",

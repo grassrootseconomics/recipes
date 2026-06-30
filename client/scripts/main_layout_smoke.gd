@@ -96,6 +96,23 @@ func _initialize() -> void:
 	_require(str(recipes_client.last_heartbeat.get("currentTurnParticipantId", "")) == "p2", "online heartbeat stores current turn metadata without applying a snapshot")
 	_require(recipes_client.last_heartbeat_age_ms() >= 0, "online heartbeat exposes freshness age")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 0, false, 0)) == "none", "online active table watchdog stays quiet while heartbeats are fresh")
+	var pending_offer_snapshot := _pending_offer_playing_snapshot()
+	recipes_client.latest_snapshot = pending_offer_snapshot
+	recipes_client.acting_participant_id = "p1"
+	main.call("_send_intent_with_pending_offer_guard", {"type": "pass_turn"}, "Passing turn.")
+	await process_frame
+	var pending_offer_dialog := main.get("_pending_offer_guard_dialog") as ConfirmationDialog
+	_require(pending_offer_dialog != null and pending_offer_dialog.visible, "pending offers prompt before ending a turn")
+	_require(pending_offer_dialog != null and pending_offer_dialog.get_ok_button().text == "End Turn Anyway", "pending offers prompt has an explicit end-turn confirmation")
+	_require(pending_offer_dialog != null and pending_offer_dialog.get_cancel_button().text == "Review Offers", "pending offers prompt has a review-offers cancellation")
+	if pending_offer_dialog != null:
+		pending_offer_dialog.hide()
+	var controlled_offer_snapshot := _pending_offer_playing_snapshot()
+	controlled_offer_snapshot["viewerParticipantId"] = "p1"
+	controlled_offer_snapshot["controlledParticipantIds"] = ["p2"]
+	controlled_offer_snapshot["offers"][0]["toParticipantId"] = "p2"
+	_require(int(main.call("_incoming_pending_offer_count", controlled_offer_snapshot, "p2")) == 1, "pending-offer guard counts offers for a controlled acting seat")
+	_require(bool(main.call("_turn_ending_intent_has_pending_offers", controlled_offer_snapshot, {"type": "pass_turn"}, "p2")), "pending-offer guard checks the acting seat rather than only the viewer")
 	recipes_client.start_offline_table("", "")
 	await process_frame
 	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ben"})
@@ -365,6 +382,23 @@ func _online_playing_snapshot() -> Dictionary:
 	snapshot["currentTurnParticipantId"] = "p2"
 	snapshot["viewerParticipantId"] = "p1"
 	snapshot["connectionParticipantId"] = "p1"
+	return snapshot
+
+
+func _pending_offer_playing_snapshot() -> Dictionary:
+	var snapshot := _online_playing_snapshot()
+	snapshot["currentTurnParticipantId"] = "p1"
+	snapshot["offers"] = [
+		{
+			"id": "offer_pending_review",
+			"status": "pending",
+			"fromParticipantId": "p2",
+			"toParticipantId": "p1",
+			"offeredVoucherIds": ["beans_1"],
+			"offeredVouchers": [{"id": "beans_1", "ingredientId": "beans"}],
+			"requested": {"ingredientId": "rice", "quantity": 1}
+		}
+	]
 	return snapshot
 
 

@@ -768,6 +768,26 @@ func debug_press_offer_hand_voucher(ingredient_id: String, owner_participant_id:
 		button.pressed.emit()
 
 
+func highlight_incoming_offers_for_viewer() -> void:
+	var viewer_id := _viewer_id()
+	var first_sender_id := ""
+	for raw_offer in _snapshot.get("offers", []):
+		var offer: Dictionary = raw_offer
+		if str(offer.get("status", "")) != "pending" or str(offer.get("toParticipantId", "")) != viewer_id:
+			continue
+		var sender_id := str(offer.get("fromParticipantId", ""))
+		if sender_id == "":
+			continue
+		if first_sender_id == "":
+			first_sender_id = sender_id
+		var participant_node := find_child("Participant_%s" % sender_id, true, false) as Control
+		if is_instance_valid(participant_node):
+			_pulse_control(participant_node, Color(1.0, 0.74, 0.18))
+			_animate_offer_badge_arrival(participant_node, "!", Color(0.82, 0.12, 0.10))
+	if first_sender_id != "":
+		_open_offer_popup(first_sender_id)
+
+
 func debug_selected_hand_ingredient() -> String:
 	return _selected_hand_ingredient_id
 

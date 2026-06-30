@@ -197,6 +197,67 @@ function recipeRequirementSignature(recipe: { requirements: Array<{ ingredientId
     .join("|");
 }
 
+function eggs37HeadlineFixtureCsv(): string {
+  const rows: string[][] = [];
+  const deposits: Array<[string, string]> = [
+    ["Will", "Spices"],
+    ["Njambi", "Flour"],
+    ["Amina", "Herbs"],
+    ["Aude", "Eggs"],
+    ["joyce", "Vegetables"],
+    ["Leo_b", "Cheese"],
+    ["Mia_b", "Rice"],
+    ["Yan_b", "Beans"]
+  ];
+  for (const [name, ingredient] of deposits) {
+    rows.push(["10", name, "Deposit", "Platter", ingredient, "None"]);
+    rows.push(["10", name, "Deposit", "Platter", ingredient, "None"]);
+  }
+  const prepareTurns: Array<[number, string]> = [
+    [66, "Will"],
+    [67, "Njambi"],
+    [69, "Amina"],
+    [72, "Aude"],
+    [75, "joyce"],
+    [76, "Leo_b"],
+    [77, "Mia_b"],
+    [79, "Yan_b"],
+    [112, "Leo_b"],
+    [124, "Njambi"],
+    [126, "Amina"],
+    [136, "joyce"],
+    [142, "Mia_b"],
+    [148, "Will"],
+    [160, "Amina"],
+    [162, "Aude"],
+    [167, "joyce"],
+    [198, "Leo_b"],
+    [199, "Mia_b"],
+    [202, "Yan_b"],
+    [207, "Will"],
+    [234, "Aude"],
+    [269, "Njambi"],
+    [299, "Yan_b"]
+  ];
+  const humanExchangeActors = ["Will", "Njambi", "Amina", "Aude", "joyce"];
+  for (let index = 0; index < 40; index += 1) {
+    rows.push([String(20 + index), humanExchangeActors[index % humanExchangeActors.length], "Exchange", "Leo_b", "Rice", "Cheese"]);
+  }
+  const botExchangeActors = ["Leo_b", "Mia_b"];
+  for (let index = 0; index < 8; index += 1) {
+    rows.push([String(100 + index), botExchangeActors[index % botExchangeActors.length], "Exchange", "Will", "Cheese", "Spices"]);
+  }
+  for (const [turn, name] of prepareTurns) {
+    rows.push([String(turn), name, "Prepare", "Table", "Recipe ingredients", "Dish"]);
+  }
+  rows.sort((left, right) => Number(left[0]) - Number(right[0]) || left[1].localeCompare(right[1]) || left[2].localeCompare(right[2]));
+  return ["Turn,Name,Action,Counterparty,Item out,Item back", ...rows.map((row) => row.map(csvCell).join(","))].join("\n");
+}
+
+function csvCell(value: string): string {
+  return /[",\n]/.test(value) ? `"${value.replace(/"/g, "\"\"")}"` : value;
+}
+
 describe("catalog and startup", () => {
   it("defines 8 unique ingredient sets with visual metadata", () => {
     expect(INGREDIENTS).toHaveLength(8);
@@ -1775,6 +1836,23 @@ describe("platter, offers, and visibility", () => {
     expect(snapshot.gameStats).toEqual(stats);
   });
 
+  it("analyzes EGGS37-style recipe fulfillment and exchange timing from CSV", async () => {
+    const analyzer = await import("../../scripts/analyze-transactions.mjs");
+    const catalog = JSON.parse(readFileSync("../client/data/recipe_catalog.json", "utf8"));
+    const analysis = analyzer.analyzeTransactionCsv(eggs37HeadlineFixtureCsv(), catalog);
+
+    expect(analysis.prepareTiming.byCook.Yan_b[1].turn).toBe(202);
+    expect(analysis.prepareTiming.byCook.Yan_b[2].turn).toBe(299);
+    expect(analysis.prepareTiming.byCook.Njambi[2].turn).toBe(269);
+    expect(analysis.exchanges).toMatchObject({
+      total: 48,
+      humanInitiated: 40,
+      botInitiated: 8
+    });
+    expect(analysis.exchanges.byCook.Yan_b ?? 0).toBe(0);
+    expect(analysis.limitation).toContain("pending offer");
+  });
+
   it("includes offered card details in filtered offer snapshots", () => {
     const { table } = startAndDeposit(8);
     const from = activeParticipants(table)[0] as Participant;
@@ -2308,6 +2386,36 @@ describe("platter, offers, and visibility", () => {
     expect(table.recipes[bot.id]?.requirements.some((requirement) => requirement.ingredientId === take.ingredientId)).toBe(true);
   });
 
+  it("has bots accept incoming offers before taking useful basket swaps", () => {
+    const { table } = startAndDeposit(8, "bot-accept-before-basket");
+    const bot = activeParticipantByIngredient(table, "beans");
+    const sender = activeParticipantByIngredient(table, "rice");
+    bot.kind = "bot";
+    bot.botType = "mixed";
+    table.currentTurnParticipantId = bot.id;
+
+    const offeredVoucherId = handVoucherIds(table, sender.id).find(
+      (voucherId) => table.vouchers[voucherId].ownerParticipantId !== bot.id
+    );
+    expect(offeredVoucherId).toBeDefined();
+    if (!offeredVoucherId) {
+      throw new Error("Expected sender voucher");
+    }
+    applyAsTurn(table, sender.id, {
+      type: "create_offer",
+      toParticipantId: bot.id,
+      offeredVoucherIds: [offeredVoucherId],
+      requested: { ingredientId: bot.ingredientId as string, quantity: 1 }
+    });
+    table.currentTurnParticipantId = bot.id;
+
+    const decision = decideBotIntent(table, bot.id);
+    expect(decision?.intent).toMatchObject({
+      type: "respond_offer",
+      response: "accept"
+    });
+  });
+
   it("has bots spend dish pieces to take needed cards from the platter", () => {
     const { table } = startAndDeposit(8, "bot-food-piece-for-platter-card");
     const bot = activeParticipantByIngredient(table, "flour");
@@ -2425,6 +2533,97 @@ describe("platter, offers, and visibility", () => {
       ingredientId: "vegetables",
       ownerParticipantId: vegetablesOwner.id,
       quantity: 1
+    });
+  });
+
+  it("has mixed bots make one-short direct offers when the basket cannot help", () => {
+    const { table } = startAndDeposit(8, "bot-one-short-direct-offer");
+    const bot = activeParticipantByIngredient(table, "beans");
+    const spicesOwner = activeParticipantByIngredient(table, "spices");
+    bot.kind = "bot";
+    bot.botType = "mixed";
+    table.currentTurnParticipantId = bot.id;
+
+    const recipe = table.recipes[bot.id];
+    expect(recipe).toBeDefined();
+    if (!recipe) {
+      throw new Error("Expected bot recipe");
+    }
+    table.recipes[bot.id] = {
+      ...recipe,
+      name: "Bean Burrito",
+      requirements: [
+        { id: "beans-complete", ingredientId: "beans", requiredQty: 1, redeemedQty: 1, placedVoucherIds: [] },
+        { id: "spices-needed", ingredientId: "spices", requiredQty: 1, redeemedQty: 0, placedVoucherIds: [] }
+      ]
+    };
+    for (const voucher of Object.values(table.vouchers)) {
+      if (
+        voucher.ingredientId === "spices" &&
+        (voucher.location.type === "platter" || voucher.location.participantId === bot.id)
+      ) {
+        voucher.location = { type: "hand", participantId: spicesOwner.id };
+      }
+    }
+
+    const decision = decideBotIntent(table, bot.id);
+    expect(decision?.intent.type).toBe("create_offer");
+    if (decision?.intent.type !== "create_offer") {
+      throw new Error(`Expected create_offer, got ${decision?.intent.type ?? "none"}`);
+    }
+    expect(decision.intent.requestedAsset).toEqual({
+      kind: "voucher",
+      ingredientId: "spices",
+      ownerParticipantId: spicesOwner.id,
+      quantity: 1
+    });
+    const offeredVoucherId = decision.intent.offeredVoucherIds?.[0];
+    expect(offeredVoucherId).toBeDefined();
+    if (offeredVoucherId) {
+      expect(table.vouchers[offeredVoucherId].ownerParticipantId).toBe(bot.id);
+    }
+  });
+
+  it("diagnoses one-short bot passes when requested cards are already reserved", () => {
+    const { table } = startAndDeposit(8, "bot-one-short-reserved");
+    const bot = activeParticipantByIngredient(table, "beans");
+    bot.kind = "bot";
+    bot.botType = "mixed";
+    table.currentTurnParticipantId = bot.id;
+
+    const recipe = table.recipes[bot.id];
+    expect(recipe).toBeDefined();
+    if (!recipe) {
+      throw new Error("Expected bot recipe");
+    }
+    table.recipes[bot.id] = {
+      ...recipe,
+      name: "Bean Burrito",
+      requirements: [
+        { id: "beans-complete", ingredientId: "beans", requiredQty: 1, redeemedQty: 1, placedVoucherIds: [] },
+        { id: "spices-needed", ingredientId: "spices", requiredQty: 1, redeemedQty: 0, placedVoucherIds: [] }
+      ]
+    };
+    for (const voucher of Object.values(table.vouchers)) {
+      if (voucher.ingredientId === "spices") {
+        voucher.location = { type: "offer_lock", offerId: "reserved_spices" };
+      }
+    }
+
+    const diagnostics: Table["automationDiagnostics"] = [];
+    const decisions = runBots(
+      table,
+      1,
+      undefined,
+      (diagnostic) => diagnostics.push(diagnostic)
+    );
+    expect(decisions[0]?.intent.type).toBe("pass_turn");
+    expect(diagnostics[0]).toMatchObject({
+      status: "pass_missing_ingredients",
+      botParticipantId: bot.id,
+      missingIngredientIds: ["spices"],
+      platterAvailableIngredientIds: [],
+      noOfferReason: "no_offerable_target"
     });
   });
 

@@ -201,6 +201,12 @@ func _initialize() -> void:
 	await process_frame
 	participant_tile = visual.find_child("Participant_p2", true, false)
 	_require(participant_tile.find_child("OfferBadgeIncoming", true, false) != null, "incoming offers render a visible pulsing badge")
+	visual.call("highlight_incoming_offers_for_viewer")
+	await process_frame
+	var offer_review_popup := visual.find_child("OfferPopup", true, false) as PopupPanel
+	_require(offer_review_popup != null and offer_review_popup.visible, "reviewing pending offers opens the existing offer popup")
+	_require(_has_text_containing(visual, "Offers with Ben"), "pending-offer review opens the incoming cook's offer details")
+	offer_review_popup.hide()
 	var outgoing_tile := visual.find_child("Participant_p3", true, false)
 	_require(outgoing_tile != null and outgoing_tile.find_child("OfferBadgeOutgoing", true, false) != null, "outgoing offers render a visible pulsing badge")
 	var viewer_tile_for_turn := visual.find_child("Participant_p1", true, false)

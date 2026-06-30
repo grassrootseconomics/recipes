@@ -10,6 +10,10 @@
 - Modes: offline pass-and-play with local GDScript rules, and online play with the authoritative Node server.
 - Release platforms: Android through Google Play first, Web as a companion build, desktop for testing only.
 
+## Deployment Notes
+
+- 2026-06-30: Pushed annotated Git tag `v0.2.0` with message `server rebuild v0.2.0` for the server sync/bot-stall recovery rebuild.
+
 ## Phase 1 - Server Rules And Protocol
 
 - [x] Scaffold monorepo docs and Node TypeScript server workspace.
