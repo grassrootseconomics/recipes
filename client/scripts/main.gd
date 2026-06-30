@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.50"
+const APP_VERSION := "0.0.51"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -189,6 +189,10 @@ var _public_tables_request_quiet := false
 var _deferred_lobby_controls_refresh := false
 var _native_lobby_name_prompt_active := false
 var _native_invite_code_prompt_active := false
+var _active_game_scroll_reset_key := ""
+var _active_game_auto_scroll_key := ""
+var _close_table_after_reconnect := false
+var _return_to_menu_after_close_table := false
 
 
 func _ready() -> void:
@@ -1554,6 +1558,10 @@ func _return_to_main_menu() -> void:
 		RecipesClient.disconnect_local()
 	_home_choice = ""
 	_clear_lobby_edit_state()
+	_active_game_scroll_reset_key = ""
+	_active_game_auto_scroll_key = ""
+	_close_table_after_reconnect = false
+	_return_to_menu_after_close_table = false
 	_active_idle_prompt_id = ""
 	_answered_idle_prompt_ids.clear()
 	if not _table_closure_returning:
@@ -1678,6 +1686,12 @@ func _open_grassroots_economics() -> void:
 
 
 func _quit_game() -> void:
+	if _table_exists(RecipesClient.latest_snapshot):
+		if not RecipesClient.offline_mode and _current_viewer_is_host():
+			_confirm_close_table()
+		else:
+			_return_to_main_menu()
+		return
 	if OS.get_name() == "Web":
 		if _is_web_standalone_pwa():
 			JavaScriptBridge.eval("window.close();", true)
@@ -2689,7 +2703,38 @@ func _confirm_close_table() -> void:
 
 
 func _on_confirm_close_table() -> void:
-	RecipesClient.send_host_intent({"type": "close_table"})
+	_close_table_and_return_to_menu()
+
+
+func _close_table_and_return_to_menu() -> void:
+	if RecipesClient.table_code == "":
+		_return_to_main_menu()
+		return
+	if bool(RecipesClient.latest_snapshot.get("offline", false)) or RecipesClient.offline_mode:
+		RecipesClient.send_host_intent({"type": "close_table"})
+		_return_to_main_menu()
+		return
+	if not RecipesClient.is_socket_connected():
+		_close_table_after_reconnect = true
+		_status_label.text = "Reconnecting to close the table..."
+		_status_label.visible = true
+		RecipesClient.connect_socket()
+		return
+	var sent := RecipesClient.send_host_intent({"type": "close_table"})
+	if not sent:
+		_status_label.text = "Could not send Close Table. Reconnecting..."
+		_status_label.visible = true
+		_close_table_after_reconnect = true
+		RecipesClient.connect_socket()
+		return
+	_close_table_after_reconnect = false
+	_return_to_menu_after_close_table = true
+	_status_label.text = "Closing table..."
+	_status_label.visible = true
+	get_tree().create_timer(0.35).timeout.connect(func() -> void:
+		if _return_to_menu_after_close_table:
+			_return_to_main_menu()
+	)
 
 
 func _confirm_offline_end_game() -> void:
@@ -2926,7 +2971,12 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 		_fit_table_visual_to_window()
 		call_deferred("_fit_table_visual_after_layout")
 		if game_started:
-			call_deferred("_scroll_to_visual_table")
+			var active_game_key := _active_game_scroll_key(snapshot)
+			if _active_game_auto_scroll_key != active_game_key:
+				_active_game_auto_scroll_key = active_game_key
+				call_deferred("_scroll_to_visual_table")
+		else:
+			_active_game_auto_scroll_key = ""
 	_summary_label.text = "Table %s\n%s%s. %s active seats. Turn %s.\nMode: %s\nWinners: %s" % [
 		snapshot.get("tableCode", ""),
 		_phase_label(str(snapshot.get("phase", "unknown"))),
@@ -3007,6 +3057,14 @@ func _handle_table_closure_snapshot(snapshot: Dictionary) -> void:
 	var message := str(closure.get("message", "The table has closed."))
 	if is_instance_valid(_idle_prompt_dialog):
 		_idle_prompt_dialog.hide()
+	if _return_to_menu_after_close_table and str(closure.get("reason", "")) == "host_stopped":
+		if is_instance_valid(_table_closure_dialog):
+			_table_closure_dialog.hide()
+		_return_to_main_menu()
+		_table_closure_returning = false
+		_status_label.text = message
+		_status_label.visible = true
+		return
 	if str(closure.get("reason", "")) == "idle_declined":
 		if is_instance_valid(_table_closure_dialog):
 			_table_closure_dialog.hide()
@@ -3044,6 +3102,8 @@ func _update_platter_summary_label(snapshot: Dictionary) -> void:
 
 
 func _on_error_received(error: Dictionary) -> void:
+	_close_table_after_reconnect = false
+	_return_to_menu_after_close_table = false
 	var description := str(error.get("description", JSON.stringify(error)))
 	var error_code := str(error.get("errorCode", ""))
 	var show_plain_message := false
@@ -3071,6 +3131,8 @@ func _on_connection_changed(status: String) -> void:
 		_refresh_connection_buttons(RecipesClient.latest_snapshot)
 		_set_lobby_ui_visible(_table_exists(RecipesClient.latest_snapshot))
 		_set_gameplay_ui_visible(_game_started(RecipesClient.latest_snapshot))
+		if _close_table_after_reconnect:
+			call_deferred("_close_table_and_return_to_menu")
 	elif status == "closed":
 		var snapshot := RecipesClient.latest_snapshot
 		if _table_exists(snapshot):
@@ -3107,6 +3169,13 @@ func _table_exists(snapshot: Dictionary) -> bool:
 func _game_started(snapshot: Dictionary) -> bool:
 	var phase := str(snapshot.get("phase", "lobby"))
 	return phase != "lobby" and phase != ""
+
+
+func _active_game_scroll_key(snapshot: Dictionary) -> String:
+	var table_code := str(snapshot.get("tableCode", RecipesClient.table_code))
+	if table_code == "":
+		table_code = "local"
+	return "%s:%s" % [table_code, str(snapshot.get("phase", ""))]
 
 
 func _current_viewer_is_host() -> bool:
@@ -3184,7 +3253,12 @@ func _apply_layout_density(compact_table: bool, game_started := false) -> void:
 	if is_instance_valid(_root_scroll):
 		_root_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED if game_started else (ScrollContainer.SCROLL_MODE_DISABLED if compact_table else ScrollContainer.SCROLL_MODE_AUTO)
 		if game_started:
-			_root_scroll.scroll_vertical = 0
+			var active_game_key := _active_game_scroll_key(RecipesClient.latest_snapshot)
+			if _active_game_scroll_reset_key != active_game_key:
+				_active_game_scroll_reset_key = active_game_key
+				_root_scroll.scroll_vertical = 0
+		else:
+			_active_game_scroll_reset_key = ""
 
 
 func _set_lobby_ui_visible(visible: bool) -> void:
@@ -3436,6 +3510,11 @@ func _on_table_visual_menu_requested(action: String) -> void:
 		"Catch Up":
 			_catch_up_visuals()
 		"Main Menu":
+			if not RecipesClient.offline_mode and _current_viewer_is_host() and _table_exists(RecipesClient.latest_snapshot):
+				_confirm_close_table()
+			else:
+				_return_to_main_menu()
+		"Quit Game":
 			if not RecipesClient.offline_mode and _current_viewer_is_host() and _table_exists(RecipesClient.latest_snapshot):
 				_confirm_close_table()
 			else:
@@ -3986,6 +4065,8 @@ func _lobby_waiting_on_host_label() -> Label:
 func _back_to_online_setup() -> void:
 	RecipesClient.disconnect_local()
 	_home_choice = "online"
+	_active_game_scroll_reset_key = ""
+	_active_game_auto_scroll_key = ""
 	_mark_server_unconnected()
 	if is_instance_valid(_code_input):
 		_code_input.text = ""
@@ -4081,8 +4162,6 @@ func _joined_non_host_human_count(snapshot: Dictionary) -> int:
 		if str(participant.get("kind", "")) != "human":
 			continue
 		if bool(participant.get("isHost", false)):
-			continue
-		if not bool(participant.get("connected", false)):
 			continue
 		count += 1
 	return count

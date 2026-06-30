@@ -168,6 +168,15 @@ func _initialize() -> void:
 	_require(table_main_menu_button != null and not table_main_menu_button.visible, "table hides the direct Main Menu button until the game is over")
 	var root_scroll := _control_from_property(main, "_root_scroll") as ScrollContainer
 	_require(root_scroll != null and root_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED, "main table view disables root page scrolling during play")
+	if root_scroll != null:
+		var active_scroll_key := str(main.call("_active_game_scroll_key", recipes_client.latest_snapshot))
+		_require(str(main.get("_active_game_scroll_reset_key")) == active_scroll_key, "active table scroll reset is keyed after the first game render")
+		_require(str(main.get("_active_game_auto_scroll_key")) == active_scroll_key, "active table auto-scroll is keyed after the first game render")
+		main.call("_render_snapshot", recipes_client.latest_snapshot.duplicate(true))
+		for _scroll_stability_frame in range(4):
+			await process_frame
+		_require(str(main.get("_active_game_scroll_reset_key")) == active_scroll_key, "active table snapshots do not create a new scroll reset")
+		_require(str(main.get("_active_game_auto_scroll_key")) == active_scroll_key, "active table snapshots do not create a new deferred auto-scroll")
 	var offline_end_overlay := _control_from_property(main, "_offline_end_popup")
 	_require(offline_end_overlay != null, "offline stop cooking popup is an in-tree overlay")
 	_require(_window_property_false(main, "_history_popup", "popup_window"), "history popup does not auto-dismiss on focus loss")
@@ -281,6 +290,36 @@ func _initialize() -> void:
 	_require(table_menu_button != null and not table_menu_button.visible, "table hamburger menu hides on the title screen")
 	_require(table_main_menu_button != null and not table_main_menu_button.visible, "table Main Menu overlay hides on the title screen")
 
+	recipes_client.start_offline_table("", "close-table-menu")
+	await process_frame
+	recipes_client.send_host_intent({"type": "start"})
+	for _close_setup_frame in range(12):
+		await process_frame
+	main.call("_confirm_close_table")
+	await process_frame
+	var active_close_overlay := _control_from_property(main, "_host_close_popup")
+	var active_close_confirm := active_close_overlay.find_child("HostCloseConfirmButton", true, false) as Button if active_close_overlay != null else null
+	_require(active_close_overlay != null and active_close_overlay.visible, "active table Close Table opens the themed confirmation")
+	_require(active_close_confirm != null, "active table Close Table confirmation has a confirm button")
+	if active_close_confirm != null:
+		active_close_confirm.pressed.emit()
+	for _close_return_frame in range(6):
+		await process_frame
+	_require(str(recipes_client.table_code) == "", "Close Table confirmation returns the host to the main menu")
+	var close_home_panel := _control_from_property(main, "_home_panel")
+	_require(close_home_panel != null and close_home_panel.visible, "Close Table confirmation shows the title page")
+
+	recipes_client.start_offline_table("", "quit-game-menu")
+	await process_frame
+	recipes_client.send_host_intent({"type": "start"})
+	for _quit_setup_frame in range(12):
+		await process_frame
+	main.call("_quit_game")
+	await process_frame
+	_require(str(recipes_client.table_code) == "", "Quit Game returns an active table to the main menu")
+	var quit_home_panel := _control_from_property(main, "_home_panel")
+	_require(quit_home_panel != null and quit_home_panel.visible, "Quit Game shows the title page")
+
 	recipes_client.start_offline_table("", "renamed-bot-visual")
 	await process_frame
 	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "jjj_b"})
@@ -379,7 +418,7 @@ func _online_lobby_snapshot(joined_cook: bool) -> Dictionary:
 			"role": "active",
 			"kind": "human" if is_host or is_joined else "bot",
 			"isHost": is_host,
-			"connected": is_host or is_joined,
+			"connected": is_host,
 			"controllerParticipantId": "p1" if is_joined else "",
 			"ingredientId": ingredients[index],
 			"dishCount": 0,
