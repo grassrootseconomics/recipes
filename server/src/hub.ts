@@ -12,8 +12,19 @@ export interface HubConnection {
   lastSnapshot?: Snapshot;
 }
 
+export interface BroadcastMetadata {
+  sentAtMs: number;
+  tableCode: string;
+  version: number;
+  transactionCursor: number;
+  phase: string;
+  currentTurnParticipantId?: string;
+  connectionCount: number;
+}
+
 export class ConnectionHub {
   private readonly tableConnections = new Map<string, Map<string, HubConnection>>();
+  private readonly lastBroadcasts = new Map<string, BroadcastMetadata>();
   private nextId = 1;
 
   register(connection: Omit<HubConnection, "id" | "connectionParticipantId"> & { connectionParticipantId?: string }): HubConnection {
@@ -58,6 +69,7 @@ export class ConnectionHub {
       connection.lastTransactionCursor = table.transactionHistory?.length ?? 0;
       connection.lastSnapshot = snapshot;
     }
+    this.lastBroadcasts.set(table.code.toUpperCase(), broadcastMetadata(table, connections.size));
   }
 
   connectionCount(tableCode: string): number {
@@ -84,6 +96,41 @@ export class ConnectionHub {
     connection.lastTransactionCursor = table.transactionHistory?.length ?? 0;
     connection.lastSnapshot = snapshot;
   }
+
+  sendHeartbeat(table: Table): void {
+    const connections = this.tableConnections.get(table.code.toUpperCase());
+    if (!connections) {
+      return;
+    }
+    const payload = JSON.stringify({
+      type: "heartbeat",
+      tableCode: table.code,
+      version: table.version,
+      transactionCursor: table.transactionHistory?.length ?? 0,
+      phase: table.phase,
+      currentTurnParticipantId: table.currentTurnParticipantId,
+      sentAtMs: Date.now()
+    });
+    for (const connection of connections.values()) {
+      connection.send(payload);
+    }
+  }
+
+  lastBroadcastMetadata(tableCode: string): BroadcastMetadata | undefined {
+    return this.lastBroadcasts.get(tableCode.toUpperCase());
+  }
+}
+
+function broadcastMetadata(table: Table, connectionCount: number): BroadcastMetadata {
+  return {
+    sentAtMs: Date.now(),
+    tableCode: table.code,
+    version: table.version,
+    transactionCursor: table.transactionHistory?.length ?? 0,
+    phase: table.phase,
+    currentTurnParticipantId: table.currentTurnParticipantId,
+    connectionCount
+  };
 }
 
 function shouldSendSnapshot(connection: HubConnection, table: Table): boolean {

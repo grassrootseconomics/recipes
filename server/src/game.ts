@@ -141,6 +141,7 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
     idle: {
       lastActivityAtMs: Date.now()
     },
+    automationDiagnostics: [],
     turn: 0,
     nextId: 2
   };
@@ -781,6 +782,7 @@ function resetTable(table: Table, actor: Participant): void {
   table.transactionHistory = [];
   table.scarcityPressureByIngredient = {};
   table.winnerParticipantIds = [];
+  table.automationDiagnostics = [];
   table.currentTurnParticipantId = undefined;
   clearTimerRuntime(table);
   table.idle = {
@@ -1525,7 +1527,7 @@ function validateOfferAssetRequest(table: Table, recipient: Participant, request
   }
 }
 
-function offerableAssetQty(table: Table, participantId: string, requested: OfferAssetRequest): number {
+export function offerableAssetQty(table: Table, participantId: string, requested: OfferAssetRequest): number {
   if (requested.kind === "voucher") {
     const participant = table.participants[participantId];
     if ((participant?.realIngredientStock ?? 0) <= 0) {
@@ -1549,7 +1551,7 @@ function offerableAssetQty(table: Table, participantId: string, requested: Offer
   ).length;
 }
 
-function offerableUnreservedAssetQty(table: Table, participantId: string, requested: OfferAssetRequest): number {
+export function offerableUnreservedAssetQty(table: Table, participantId: string, requested: OfferAssetRequest): number {
   const rawAvailable = offerableAssetQty(table, participantId, requested);
   const pendingRequested = Object.values(table.offers)
     .filter((offer) => offer.status === "pending" && offer.toParticipantId === participantId)

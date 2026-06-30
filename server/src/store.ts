@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { runBots } from "./bots.js";
 import {
   addHumanParticipant,
+  activeParticipants,
   advanceIdleState,
   applyIntent,
   createEmptyTable,
@@ -9,13 +10,15 @@ import {
   expireTimer,
   GameError,
   markTableActivity,
-  nextIdleDeadlineMs
+  nextIdleDeadlineMs,
+  platterAccountForParticipant
 } from "./game.js";
 import { buildSnapshot } from "./snapshots.js";
-import type { CreateTableResult, Intent, JoinTableResult, Participant, PublicTableSummary, Snapshot, Table, TransactionRecord } from "./types.js";
+import type { AutomationDiagnostic, CreateTableResult, Intent, JoinTableResult, Participant, PublicTableSummary, Snapshot, Table, TransactionRecord } from "./types.js";
 
 export class TableStore {
   readonly tables = new Map<string, Table>();
+  private readonly botMaintenanceRunning = new Set<string>();
 
   createTable(hostName: string, seed?: string, requestedCode?: string, isPublic = true): CreateTableResult {
     const code = requestedCode ? this.reserveRequestedCode(requestedCode) : this.nextCode();
@@ -96,6 +99,43 @@ export class TableStore {
     return [...(table.transactionHistory ?? [])];
   }
 
+  getDebugByToken(code: string, seatToken: string) {
+    const table = this.requireTable(code);
+    const participant = this.requireParticipantByToken(table, seatToken);
+    const pendingOffers = Object.values(table.offers)
+      .filter((offer) => offer.status === "pending")
+      .map((offer) => ({
+        id: offer.id,
+        fromParticipantId: offer.fromParticipantId,
+        toParticipantId: offer.toParticipantId,
+        offeredAssetCount: offer.offeredAssets.length,
+        requestedAsset: offer.requestedAsset,
+        createdTurn: offer.createdTurn
+      }));
+    return {
+      tableCode: table.code,
+      version: table.version,
+      phase: table.phase,
+      turn: table.turn,
+      currentTurnParticipantId: table.currentTurnParticipantId,
+      transactionCursor: table.transactionHistory?.length ?? 0,
+      connectionParticipantId: participant.id,
+      paused: table.paused,
+      participants: activeParticipants(table).map((activeParticipant) => ({
+        id: activeParticipant.id,
+        name: activeParticipant.name,
+        kind: activeParticipant.kind,
+        role: activeParticipant.role,
+        botType: activeParticipant.botType,
+        connected: activeParticipant.connected,
+        ...platterAccountForParticipant(table, activeParticipant.id)
+      })),
+      pendingOfferCount: pendingOffers.length,
+      pendingOffers,
+      automationDiagnostics: [...(table.automationDiagnostics ?? [])]
+    };
+  }
+
   getSnapshotForParticipantId(code: string, participantId: string): Snapshot {
     const table = this.requireTable(code);
     if (!table.participants[participantId]) {
@@ -120,9 +160,36 @@ export class TableStore {
     applyIntent(table, actor.id, intent);
     onMutation?.(table);
     if (runBotTurns && !table.paused && shouldRunBotsAfterIntent(intent)) {
-      runBots(table, undefined, () => onMutation?.(table));
+      this.runBotMaintenance(table.code, onMutation);
     }
     return buildSnapshot(table, actor.id, connectionParticipant.id);
+  }
+
+  runBotMaintenance(code: string, onMutation?: (table: Table) => void, onDiagnostic?: (diagnostic: AutomationDiagnostic) => void): boolean {
+    const normalizedCode = code.toUpperCase();
+    if (this.botMaintenanceRunning.has(normalizedCode)) {
+      return false;
+    }
+    const table = this.requireTable(normalizedCode);
+    if (table.paused) {
+      return false;
+    }
+    this.botMaintenanceRunning.add(normalizedCode);
+    let mutated = false;
+    try {
+      runBots(
+        table,
+        undefined,
+        () => {
+          mutated = true;
+          onMutation?.(table);
+        },
+        onDiagnostic
+      );
+      return mutated;
+    } finally {
+      this.botMaintenanceRunning.delete(normalizedCode);
+    }
   }
 
   connectParticipantByToken(code: string, seatToken: string): Participant {

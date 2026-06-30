@@ -473,6 +473,9 @@ async function runSimulation(baseUrl: string, simulationOptions: SimulationOptio
           continue;
         }
       }
+      if (table.phase !== "settlement") {
+        return;
+      }
 
       const directReturn = controllableParticipants
         .flatMap((holder) =>

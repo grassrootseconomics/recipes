@@ -125,6 +125,7 @@ func _initialize() -> void:
 	_require(not visual.debug_table_menu_visible(), "table menu closes when clicking away")
 	var menu_actions: Array = visual.debug_stats.get("menuActions", [])
 	_require(menu_actions.has("View History"), "table menu exposes transaction history")
+	_require(menu_actions.has("Catch Up"), "table menu exposes manual visual catch-up")
 	_require(menu_actions.has("Fast Bots"), "table menu exposes Fast Bots toggle by default")
 	_require(menu_actions.has("End Game"), "host table menu exposes End Game")
 	_require(menu_actions.has("Main Menu"), "table menu exposes Main Menu")
@@ -407,6 +408,7 @@ func _initialize() -> void:
 	_assert_multi_redeem_pass_auto_prepare_waits_for_prepare_animation(visual)
 	_assert_stale_visual_turn_watchdog_flushes(visual)
 	_assert_pending_visual_backlog_preserves_animation_sequence(visual)
+	_assert_visual_backlog_coalesces_bot_only_events(visual)
 	_assert_in_place_delta_redeem_pass_waits_for_animation(visual)
 	_assert_redeem_pass_and_public_turns_apply_in_order(visual)
 	_assert_deposits_update_basket_one_by_one(visual)
@@ -1947,6 +1949,27 @@ func _assert_pending_visual_backlog_preserves_animation_sequence(visual: Node) -
 	_require(str(visual.debug_apply_next_animation_milestone()) == "turn", "preserved backlog still plays turn milestone")
 	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p4", "visual backlog lands on the latest queued turn after animations finish")
 	_require(_visible_food_part_count(visual, "Rice Bean Bowl") == 1, "prepared dish remains visible after queued turn snapshots apply")
+	visual.debug_flush_animations()
+
+
+func _assert_visual_backlog_coalesces_bot_only_events(visual: Node) -> void:
+	visual.debug_apply_snapshot(_eight_seat_snapshot())
+	var events: Array = []
+	for index in range(80):
+		events.append({"type": "settlement_swap", "actorParticipantId": "p2"})
+	events.append({"type": "turn", "participantId": "p1"})
+	events.append({"type": "public_prepare", "participantId": "p3", "dishName": "Bean Tacos", "unit": "piece"})
+	visual.set("_animation_queue", events)
+	visual.call("_compact_animation_queue_if_needed")
+	var queue: Array = visual.get("_animation_queue")
+	var event_types: Array = []
+	for raw_event in queue:
+		var event: Dictionary = raw_event
+		event_types.append(str(event.get("type", "")))
+	_require(queue.size() < events.size(), "visual backlog coalesces stale bot-only animations")
+	_require(event_types.has("turn") and event_types.has("public_prepare"), "visual backlog preserves turn and prepare events")
+	_require(float(visual.debug_stats.get("animationQueueEstimatedSeconds", 999.0)) <= 12.0, "visual backlog estimate is bounded after compaction")
+	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) >= 1, "visual backlog records compaction diagnostics")
 	visual.debug_flush_animations()
 
 

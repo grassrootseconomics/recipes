@@ -121,6 +121,7 @@ const viewEnvelopeSchema = z.object({
 });
 
 const IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
+const HEARTBEAT_INTERVAL_MS = 5 * 1000;
 
 export interface AppOptions {
   store?: TableStore;
@@ -136,6 +137,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   const idleHandles = new Map<string, ReturnType<typeof setTimeout>>();
   const closedTableCleanupHandles = new Map<string, ReturnType<typeof setTimeout>>();
   let idleSweepHandle: ReturnType<typeof setInterval> | undefined;
+  let heartbeatHandle: ReturnType<typeof setInterval> | undefined;
 
   app.addHook("onRequest", (request, reply, done) => {
     const origin = request.headers.origin;
@@ -244,6 +246,20 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       .send(transactionsToCsv(transactions));
   });
 
+  app.get("/tables/:code/debug", async (request) => {
+    const params = z.object({ code: z.string() }).parse(request.params);
+    const query = z.object({ seatToken: z.string() }).parse(request.query);
+    const tableCode = params.code.toUpperCase();
+    return {
+      ok: true,
+      result: {
+        ...store.getDebugByToken(tableCode, query.seatToken),
+        connectionCount: hub.connectionCount(tableCode),
+        lastBroadcast: hub.lastBroadcastMetadata(tableCode)
+      }
+    };
+  });
+
   app.get("/tables/:code/socket", { websocket: true }, (socket, request) => {
     const params = z.object({ code: z.string() }).parse(request.params);
     const query = z.object({ seatToken: z.string() }).parse(request.query);
@@ -263,7 +279,10 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         send: (payload) => socket.send(payload)
       });
       connectionId = connection.id;
-      hub.broadcastTable(store.requireTable(tableCode));
+      const maintained = runBotMaintenanceAndBroadcast(tableCode);
+      if (!maintained) {
+        hub.broadcastTable(store.requireTable(tableCode));
+      }
       scheduleIdle(tableCode);
     } catch (error) {
       socket.send(JSON.stringify(errorPayload(error)));
@@ -278,13 +297,14 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         const envelope = parseSocketIntent(parsed);
         clientIntentId = "clientIntentId" in envelope ? envelope.clientIntentId : undefined;
         if ("viewParticipantId" in envelope) {
-          const snapshot = store.getSnapshotByToken(tableCode, query.seatToken, envelope.viewParticipantId);
-          const table = store.requireTable(tableCode);
+          store.getSnapshotByToken(tableCode, query.seatToken, envelope.viewParticipantId);
           if (connection) {
             connection.participantId = envelope.viewParticipantId;
-            hub.sendSnapshot(table, connection);
+            runBotMaintenanceAndBroadcast(tableCode);
+            hub.sendSnapshot(store.requireTable(tableCode), connection);
           } else {
-            socket.send(JSON.stringify({ type: "snapshot", snapshot }));
+            runBotMaintenanceAndBroadcast(tableCode);
+            socket.send(JSON.stringify({ type: "snapshot", snapshot: store.getSnapshotByToken(tableCode, query.seatToken, envelope.viewParticipantId) }));
           }
           return;
         }
@@ -351,9 +371,14 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       clearInterval(idleSweepHandle);
       idleSweepHandle = undefined;
     }
+    if (heartbeatHandle) {
+      clearInterval(heartbeatHandle);
+      heartbeatHandle = undefined;
+    }
   });
 
   startIdleSweep();
+  startHeartbeat();
   scheduleAllTableMaintenance();
 
   function scheduleTimer(tableCode: string): void {
@@ -458,6 +483,22 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     (idleSweepHandle as { unref?: () => void }).unref?.();
   }
 
+  function startHeartbeat(): void {
+    heartbeatHandle = setInterval(() => {
+      for (const tableCode of [...store.tables.keys()]) {
+        try {
+          const maintained = runBotMaintenanceAndBroadcast(tableCode);
+          if (!maintained) {
+            hub.sendHeartbeat(store.requireTable(tableCode));
+          }
+        } catch {
+          // Heartbeats must not fail the server because one table disappeared.
+        }
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+    (heartbeatHandle as { unref?: () => void }).unref?.();
+  }
+
   function scheduleAllTableMaintenance(): void {
     for (const tableCode of store.tables.keys()) {
       scheduleTimer(tableCode);
@@ -473,6 +514,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         if (changed) {
           hub.broadcastTable(store.requireTable(tableCode));
         }
+        runBotMaintenanceAndBroadcast(tableCode);
         scheduleTimer(tableCode);
         scheduleIdle(tableCode);
         scheduleClosedTableCleanup(tableCode);
@@ -480,6 +522,20 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         // Periodic maintenance must not fail the server because one table is malformed or gone.
       }
     }
+  }
+
+  function runBotMaintenanceAndBroadcast(tableCode: string): boolean {
+    return store.runBotMaintenance(
+      tableCode,
+      (table) => {
+        hub.broadcastTable(table);
+      },
+      (diagnostic) => {
+        if (diagnostic.status === "error" || diagnostic.status === "fallback_failed") {
+          app.log.warn({ diagnostic }, "bot automation diagnostic");
+        }
+      }
+    );
   }
 
   return app;

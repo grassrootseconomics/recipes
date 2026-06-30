@@ -90,6 +90,12 @@ func _initialize() -> void:
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, true, 9000)) == "reconnect", "online active table watchdog reconnects when a full snapshot request gets no response")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, false, 0, true)) == "none", "online active table watchdog waits while visual updates are still busy")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", online_waiting_snapshot, true, 21000, false, 0)) == "none", "online lobby watchdog does not poll active-game snapshots")
+	recipes_client.table_code = "JOINME"
+	recipes_client.call("_handle_socket_message", JSON.stringify({"type": "heartbeat", "tableCode": "JOINME", "version": 12, "transactionCursor": 45, "phase": "playing", "currentTurnParticipantId": "p2", "sentAtMs": 123}))
+	_require(str(recipes_client.last_socket_message_type) == "heartbeat", "online heartbeat counts as socket activity")
+	_require(str(recipes_client.last_heartbeat.get("currentTurnParticipantId", "")) == "p2", "online heartbeat stores current turn metadata without applying a snapshot")
+	_require(recipes_client.last_heartbeat_age_ms() >= 0, "online heartbeat exposes freshness age")
+	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 0, false, 0)) == "none", "online active table watchdog stays quiet while heartbeats are fresh")
 	recipes_client.start_offline_table("", "")
 	await process_frame
 	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ben"})

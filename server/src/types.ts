@@ -250,6 +250,24 @@ export interface TableIdleState {
   closure?: TableClosure;
 }
 
+export type AutomationDiagnosticStatus = "error" | "fallback_pass" | "fallback_failed" | "budget_pass";
+
+export interface AutomationDiagnostic {
+  atMs: number;
+  tableCode: string;
+  phase: TablePhase;
+  turn: number;
+  version: number;
+  botParticipantId: string;
+  botName: string;
+  botType?: BotType;
+  status: AutomationDiagnosticStatus;
+  reason?: string;
+  intentType?: string;
+  errorCode?: string;
+  message?: string;
+}
+
 export interface Table {
   code: string;
   seed: string;
@@ -274,6 +292,7 @@ export interface Table {
   currentTurnParticipantId?: string;
   timer?: TableTimer;
   idle: TableIdleState;
+  automationDiagnostics: AutomationDiagnostic[];
   turn: number;
   nextId: number;
 }

@@ -1,9 +1,10 @@
-import { applyIntent, getUsefulRequirementIds, handVoucherIds, platterVoucherIds } from "./game.js";
+import { applyIntent, getUsefulRequirementIds, handVoucherIds, offerableUnreservedAssetQty, platterVoucherIds } from "./game.js";
 import { hashString } from "./rng.js";
 import { buildSnapshot } from "./snapshots.js";
-import type { DishPart, Intent, PlatterAssetRef, PublicParticipant, Snapshot, Table, Voucher } from "./types.js";
+import type { AutomationDiagnostic, DishPart, Intent, OfferAssetRequest, PlatterAssetRef, PublicParticipant, Snapshot, Table, Voucher } from "./types.js";
 
 const DEFAULT_BOT_RUN_BUDGET = 300;
+const MAX_AUTOMATION_DIAGNOSTICS = 32;
 
 export interface BotDecision {
   intent: Intent;
@@ -88,13 +89,18 @@ export function runBotTurn(table: Table, botParticipantId: string): BotDecision 
   return decision;
 }
 
-export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET, onStep?: (decision: BotDecision) => void): BotDecision[] {
+export function runBots(
+  table: Table,
+  maxTurns = DEFAULT_BOT_RUN_BUDGET,
+  onStep?: (decision: BotDecision) => void,
+  onDiagnostic?: (diagnostic: AutomationDiagnostic) => void
+): BotDecision[] {
   const decisions: BotDecision[] = [];
   for (let turn = 0; turn < maxTurns; turn += 1) {
     let progressed = false;
     const botIds = table.participantOrder.filter((participantId) => table.participants[participantId]?.kind === "bot");
     for (const botId of botIds) {
-      const decision = runBotTurn(table, botId);
+      const decision = runBotTurnSafely(table, botId, onDiagnostic);
       if (decision) {
         decisions.push(decision);
         onStep?.(decision);
@@ -115,12 +121,109 @@ export function runBots(table: Table, maxTurns = DEFAULT_BOT_RUN_BUDGET, onStep?
       break;
     }
     const passIntent: Intent = { type: "pass_turn" };
-    applyIntent(table, current.id, passIntent);
-    const decision = { intent: passIntent, reason: "bot run budget exhausted; pass turn to avoid stalling" };
-    decisions.push(decision);
-    onStep?.(decision);
+    try {
+      applyIntent(table, current.id, passIntent);
+      const decision = { intent: passIntent, reason: "bot run budget exhausted; pass turn to avoid stalling" };
+      decisions.push(decision);
+      recordAutomationDiagnostic(table, current.id, "budget_pass", decision, undefined, onDiagnostic);
+      onStep?.(decision);
+    } catch (error) {
+      recordAutomationDiagnostic(table, current.id, "fallback_failed", { intent: passIntent, reason: "budget fallback pass failed" }, error, onDiagnostic);
+      break;
+    }
   }
   return decisions;
+}
+
+function runBotTurnSafely(table: Table, botParticipantId: string, onDiagnostic?: (diagnostic: AutomationDiagnostic) => void): BotDecision | undefined {
+  let decision: BotDecision | undefined;
+  try {
+    decision = decideBotIntent(table, botParticipantId);
+    if (!decision) {
+      return undefined;
+    }
+    applyIntent(table, botParticipantId, decision.intent);
+    return decision;
+  } catch (error) {
+    recordAutomationDiagnostic(table, botParticipantId, "error", decision, error, onDiagnostic);
+    return fallbackPassCurrentBot(table, botParticipantId, decision, error, onDiagnostic);
+  }
+}
+
+function fallbackPassCurrentBot(
+  table: Table,
+  botParticipantId: string,
+  failedDecision: BotDecision | undefined,
+  cause: unknown,
+  onDiagnostic?: (diagnostic: AutomationDiagnostic) => void
+): BotDecision | undefined {
+  const current = table.currentTurnParticipantId ? table.participants[table.currentTurnParticipantId] : undefined;
+  if (
+    (table.phase !== "playing" && table.phase !== "settlement") ||
+    !current ||
+    current.id !== botParticipantId ||
+    current.kind !== "bot" ||
+    current.role !== "active"
+  ) {
+    return undefined;
+  }
+  const fallbackDecision: BotDecision = {
+    intent: { type: "pass_turn" },
+    reason: failedDecision ? `fallback after failed ${failedDecision.intent.type}` : "fallback after bot decision failure"
+  };
+  try {
+    applyIntent(table, botParticipantId, fallbackDecision.intent);
+    recordAutomationDiagnostic(table, botParticipantId, "fallback_pass", fallbackDecision, cause, onDiagnostic);
+    return fallbackDecision;
+  } catch (fallbackError) {
+    recordAutomationDiagnostic(table, botParticipantId, "fallback_failed", fallbackDecision, fallbackError, onDiagnostic);
+    return undefined;
+  }
+}
+
+function recordAutomationDiagnostic(
+  table: Table,
+  botParticipantId: string,
+  status: AutomationDiagnostic["status"],
+  decision?: BotDecision,
+  error?: unknown,
+  onDiagnostic?: (diagnostic: AutomationDiagnostic) => void
+): void {
+  const participant = table.participants[botParticipantId];
+  const diagnostic: AutomationDiagnostic = {
+    atMs: Date.now(),
+    tableCode: table.code,
+    phase: table.phase,
+    turn: table.turn,
+    version: table.version,
+    botParticipantId,
+    botName: participant?.name ?? botParticipantId,
+    botType: participant?.botType,
+    status,
+    reason: decision?.reason,
+    intentType: decision?.intent.type,
+    ...automationErrorFields(error)
+  };
+  table.automationDiagnostics ??= [];
+  table.automationDiagnostics.push(diagnostic);
+  while (table.automationDiagnostics.length > MAX_AUTOMATION_DIAGNOSTICS) {
+    table.automationDiagnostics.shift();
+  }
+  onDiagnostic?.(diagnostic);
+}
+
+function automationErrorFields(error: unknown): Pick<AutomationDiagnostic, "errorCode" | "message"> {
+  if (!error) {
+    return {};
+  }
+  if (typeof error === "object" && error !== null) {
+    const maybeError = error as { code?: unknown; message?: unknown };
+    return {
+      errorCode: typeof maybeError.code === "string" ? maybeError.code : undefined,
+      message: typeof maybeError.message === "string" ? maybeError.message : "Unknown bot automation error."
+    };
+  }
+  return { message: String(error) };
 }
 
 function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
@@ -152,7 +255,7 @@ function decideSettlementSwap(table: Table, botParticipantId: string, snapshot: 
     return shortfallSwap;
   }
 
-  const directSettlementOffer = decideSettlementDirectOffer(botParticipantId, snapshot);
+  const directSettlementOffer = decideSettlementDirectOffer(table, botParticipantId, snapshot);
   if (directSettlementOffer) {
     return directSettlementOffer;
   }
@@ -290,7 +393,7 @@ function settlementFoodPartForForeignCard(
   return anyPart ? platterFoodParts.find((part) => part.id === anyPart.id) : undefined;
 }
 
-function decideSettlementDirectOffer(botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
+function decideSettlementDirectOffer(table: Table, botParticipantId: string, snapshot: Snapshot): BotDecision | undefined {
   if (snapshot.offers.some((offer) => offer.status === "pending" && offer.fromParticipantId === botParticipantId)) {
     return undefined;
   }
@@ -305,12 +408,16 @@ function decideSettlementDirectOffer(botParticipantId: string, snapshot: Snapsho
         )
     );
     if (holder) {
+      const requestedAsset: OfferAssetRequest = { kind: "voucher", ingredientId: bot.ingredientId, ownerParticipantId: botParticipantId, quantity: 1 };
+      if (offerableUnreservedAssetQty(table, holder.id, requestedAsset) < requestedAsset.quantity) {
+        return undefined;
+      }
       return {
         intent: {
           type: "create_offer",
           toParticipantId: holder.id,
           offeredAssets: [{ kind: "dish_part", id: ownFoodPart.id }],
-          requestedAsset: { kind: "voucher", ingredientId: bot.ingredientId, ownerParticipantId: botParticipantId, quantity: 1 }
+          requestedAsset
         },
         reason: "offer food piece directly for own stranded promise card"
       };
@@ -327,12 +434,16 @@ function decideSettlementDirectOffer(botParticipantId: string, snapshot: Snapsho
   if (!returnCandidate?.owner) {
     return undefined;
   }
+  const requestedAsset: OfferAssetRequest = { kind: "dish_part", quantity: 1 };
+  if (offerableUnreservedAssetQty(table, returnCandidate.owner.id, requestedAsset) < requestedAsset.quantity) {
+    return undefined;
+  }
   return {
     intent: {
       type: "create_offer",
       toParticipantId: returnCandidate.owner.id,
       offeredVoucherIds: [returnCandidate.voucher.id],
-      requestedAsset: { kind: "dish_part", quantity: 1 }
+      requestedAsset
     },
     reason: "offer foreign promise card directly for any food piece during settlement"
   };

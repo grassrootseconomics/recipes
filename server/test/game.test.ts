@@ -163,6 +163,24 @@ function restoreDishPartsToInventoryForLegacyEating(table: Table, holderId: stri
   return partIds;
 }
 
+function setupBarterOnlySettlementBotShortfall(table: Table): { host: Participant; bot: Participant; hostFoodPart: string } {
+  const host = table.participants[table.hostParticipantId];
+  const bot = activeParticipants(table).find((participant) => participant.kind === "bot") as Participant;
+  bot.botType = "barter_only";
+  const botOwnPlatterVoucher = platterVoucherIds(table).find((voucherId) => table.vouchers[voucherId].ownerParticipantId === bot.id) as string;
+  const hostDish = Object.values(table.dishes).find((dish) => dish.ownerParticipantId === host.id);
+  const botDish = Object.values(table.dishes).find((dish) => dish.ownerParticipantId === bot.id);
+  if (!hostDish || !botDish || !botOwnPlatterVoucher) {
+    throw new Error("Missing settlement fallback fixture assets");
+  }
+  const hostFoodPart = restoreDishPartsToInventoryForLegacyEating(table, host.id, hostDish.id)[0] as string;
+  restoreDishPartsToInventoryForLegacyEating(table, bot.id, botDish.id);
+  table.vouchers[botOwnPlatterVoucher].location = { type: "hand", participantId: bot.id };
+  table.dishParts[hostFoodPart].location = { type: "platter" };
+  table.phase = "settlement";
+  return { host, bot, hostFoodPart };
+}
+
 function validQuantityShape(quantities: number[]): boolean {
   const sorted = [...quantities].sort((left, right) => right - left);
   return (
@@ -614,6 +632,52 @@ describe("catalog and startup", () => {
       action: "Pass Turn",
       counterparty: created.participant.name
     });
+  });
+
+  it("falls back to a bot pass when a generated bot settlement intent fails after a human pass", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "bot-error-fallback");
+    store.handleIntent(created.table.code, created.seatToken, { type: "set_target_dish_count", count: 1 }, false);
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+    for (const participant of activeParticipants(created.table)) {
+      completeRecipeBySetup(created.table, participant.id);
+      applyAsTurn(created.table, participant.id, { type: "prepare" });
+    }
+    const { host, bot } = setupBarterOnlySettlementBotShortfall(created.table);
+    created.table.currentTurnParticipantId = host.id;
+
+    expect(() => store.handleIntent(created.table.code, created.seatToken, { type: "pass_turn" })).not.toThrow();
+
+    expect(created.table.currentTurnParticipantId).not.toBe(bot.id);
+    expect(created.table.transactionHistory.slice(-2).map((transaction) => transaction.action)).toEqual(["Pass Turn", "Pass Turn"]);
+    expect(created.table.automationDiagnostics.map((diagnostic) => diagnostic.status)).toEqual(
+      expect.arrayContaining(["error", "fallback_pass"])
+    );
+    expect(created.table.automationDiagnostics.at(-1)).toMatchObject({
+      botParticipantId: bot.id,
+      intentType: "pass_turn"
+    });
+  });
+
+  it("bot maintenance recovers a table already stuck on a bot settlement turn", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "bot-maintenance-recovery");
+    store.handleIntent(created.table.code, created.seatToken, { type: "set_target_dish_count", count: 1 }, false);
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+    for (const participant of activeParticipants(created.table)) {
+      completeRecipeBySetup(created.table, participant.id);
+      applyAsTurn(created.table, participant.id, { type: "prepare" });
+    }
+    const { bot } = setupBarterOnlySettlementBotShortfall(created.table);
+    created.table.currentTurnParticipantId = bot.id;
+
+    const changed = store.runBotMaintenance(created.table.code);
+
+    expect(changed).toBe(true);
+    expect(created.table.currentTurnParticipantId).not.toBe(bot.id);
+    expect(created.table.automationDiagnostics.map((diagnostic) => diagnostic.status)).toEqual(
+      expect.arrayContaining(["error", "fallback_pass"])
+    );
   });
 
   it("generates default participant names and bot names", () => {
@@ -3309,6 +3373,50 @@ describe("winning and eating", () => {
     expect(harness.table.phase).toBe("complete");
   });
 
+  it("does not create settlement direct offers against assets already reserved by pending offers", () => {
+    const harness = makeHarness(1, "bot-settlement-reserved-food-piece");
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
+    harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "start" }, false);
+    const [owner, holder, requester] = activeParticipants(harness.table);
+    holder.kind = "bot";
+    holder.botType = "mixed";
+    for (const participant of activeParticipants(harness.table)) {
+      completeRecipeBySetup(harness.table, participant.id);
+      applyAsTurn(harness.table, participant.id, { type: "prepare" });
+    }
+
+    const ownerHandVoucher = handVoucherIds(harness.table, owner.id).find(
+      (voucherId) => harness.table.vouchers[voucherId].ownerParticipantId === owner.id
+    ) as string;
+    const ownerDish = Object.values(harness.table.dishes).find((dish) => dish.ownerParticipantId === owner.id);
+    if (!ownerDish) {
+      throw new Error("Missing owner dish");
+    }
+    restoreDishPartsToInventoryForLegacyEating(harness.table, owner.id, ownerDish.id);
+    for (const partId of inventoryDishPartIds(harness.table, owner.id).slice(1)) {
+      harness.table.dishParts[partId].location = { type: "eaten", participantId: owner.id };
+    }
+    harness.table.vouchers[ownerHandVoucher].location = { type: "hand", participantId: holder.id };
+    harness.table.offers.reserved_food = {
+      id: "reserved_food",
+      fromParticipantId: requester.id,
+      toParticipantId: owner.id,
+      offeredAssets: [],
+      offeredVoucherIds: [],
+      requestedAsset: { kind: "dish_part", quantity: 1 },
+      acceptedAssets: [],
+      acceptedVoucherIds: [],
+      status: "pending",
+      createdTurn: harness.table.turn
+    };
+    harness.table.phase = "settlement";
+    harness.table.currentTurnParticipantId = holder.id;
+
+    const decision = decideBotIntent(harness.table, holder.id);
+
+    expect(decision?.intent).toEqual({ type: "pass_turn" });
+  });
+
   it("has settlement bots recover own stranded cards before seeding basket food", () => {
     const harness = makeHarness(1, "bot-settlement-seed-food-for-food");
     harness.store.handleIntent(harness.table.code, harness.hostToken, { type: "set_target_dish_count", count: 1 }, false);
@@ -3503,6 +3611,39 @@ describe("HTTP app", () => {
     await app.close();
   });
 
+  it("sends table heartbeat messages over websocket connections", async () => {
+    const store = new TableStore();
+    const hub = new ConnectionHub();
+    const app = await buildApp({ store, hub });
+    const created = store.createTable("Host", "heartbeat-ws");
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+    await app.ready();
+
+    const messages: unknown[] = [];
+    const socket = await app.injectWS(`/tables/${created.table.code}/socket?seatToken=${created.seatToken}`);
+    socket.on("message", (payload) => {
+      messages.push(JSON.parse(payload.toString()));
+    });
+    expect(hub.connectionCount(created.table.code)).toBe(1);
+
+    hub.sendHeartbeat(created.table);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "heartbeat",
+          tableCode: created.table.code,
+          version: created.table.version,
+          phase: created.table.phase,
+          currentTurnParticipantId: created.table.currentTurnParticipantId
+        })
+      ])
+    );
+    socket.terminate();
+    await app.close();
+  });
+
   it("exports the full transaction history as authorized CSV", async () => {
     const store = new TableStore();
     const app = await buildApp({ store });
@@ -3525,6 +3666,67 @@ describe("HTTP app", () => {
     const forbidden = await app.inject({
       method: "GET",
       url: `/tables/${created.table.code}/transactions.csv?seatToken=bad-token`
+    });
+    expect(forbidden.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("returns seat-token protected public-safe table diagnostics", async () => {
+    const store = new TableStore();
+    const hub = new ConnectionHub();
+    const app = await buildApp({ store, hub });
+    const created = store.createTable("Host", "debug-json");
+    store.handleIntent(created.table.code, created.seatToken, { type: "start" }, false);
+    created.table.automationDiagnostics.push({
+      atMs: 123,
+      tableCode: created.table.code,
+      phase: created.table.phase,
+      turn: created.table.turn,
+      version: created.table.version,
+      botParticipantId: "p2",
+      botName: "Jim_b",
+      botType: "mixed",
+      status: "fallback_pass",
+      reason: "test",
+      intentType: "pass_turn"
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/tables/${created.table.code}/debug?seatToken=${created.seatToken}`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.result).toMatchObject({
+      tableCode: created.table.code,
+      phase: created.table.phase,
+      currentTurnParticipantId: created.table.currentTurnParticipantId,
+      connectionParticipantId: created.participant.id,
+      connectionCount: 0,
+      pendingOfferCount: 0
+    });
+    expect(body.result.participants[0]).toEqual(
+      expect.objectContaining({
+        id: created.participant.id,
+        name: created.participant.name,
+        kind: "human",
+        cleared: expect.any(Boolean),
+        platterShortfall: expect.any(Number)
+      })
+    );
+    expect(body.result.automationDiagnostics).toEqual([
+      expect.objectContaining({
+        botParticipantId: "p2",
+        botName: "Jim_b",
+        status: "fallback_pass",
+        intentType: "pass_turn"
+      })
+    ]);
+
+    const forbidden = await app.inject({
+      method: "GET",
+      url: `/tables/${created.table.code}/debug?seatToken=bad-token`
     });
     expect(forbidden.statusCode).toBe(400);
     await app.close();

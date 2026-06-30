@@ -106,6 +106,7 @@ const VIEWER_ANIMATION_SCALE := 1.35
 const BASKET_SWAP_QUEUE_TIMEOUT_MS := 5000
 const VISUAL_TURN_LAG_FLUSH_MS := 3000
 const MAX_PENDING_VISUAL_SNAPSHOTS := 32
+const MAX_ANIMATION_QUEUE_ESTIMATED_SECONDS := 12.0
 const PREPARE_ANNOUNCEMENT_HOLD_SECONDS := 2.05
 const COMPLETE_FOOD_ORBIT_MIN_ITEMS := 8
 const COMPLETE_FOOD_ORBIT_MAX_ITEMS := 16
@@ -552,6 +553,7 @@ var _pending_visual_snapshot: Dictionary = {}
 var _has_pending_visual_snapshot := false
 var _pending_visual_snapshots: Array = []
 var _pending_visual_compaction_count := 0
+var _animation_queue_compaction_count := 0
 var _visual_turn_lag_started_msec := 0
 var _visual_turn_lag_key := ""
 var _last_visual_turn_lag_flush := ""
@@ -657,6 +659,7 @@ func render(snapshot: Dictionary) -> void:
 			_queue_pending_visual_snapshot(snapshot)
 			_record_animation_debug(events)
 			_animation_queue.append_array(events)
+			_compact_animation_queue_if_needed()
 			_request_animation_start()
 			return
 
@@ -1581,7 +1584,7 @@ func _position_menu_button() -> void:
 
 
 func _table_menu_actions() -> Array[String]:
-	var actions: Array[String] = ["View History", "Debug Sync", _bot_speed_menu_label()]
+	var actions: Array[String] = ["View History", "Debug Sync", "Catch Up", _bot_speed_menu_label()]
 	var phase := str(_snapshot.get("phase", ""))
 	if bool(_snapshot.get("viewerCanUseHostControls", false)) and phase != "complete" and phase != "lobby":
 		actions.append("End Game")
@@ -4761,6 +4764,8 @@ func pending_visual_debug_state() -> Dictionary:
 		"latestPendingTurn": str(latest_pending.get("currentTurnParticipantId", "")),
 		"pendingViewer": str(_pending_visual_snapshot.get("viewerParticipantId", "")),
 		"pendingCompactions": _pending_visual_compaction_count,
+		"queueEstimatedSeconds": _animation_queue_estimated_seconds(),
+		"animationQueueCompactions": _animation_queue_compaction_count,
 		"visualTurnLagMs": _visual_turn_lag_elapsed_msec(),
 		"lastVisualTurnLagFlush": _last_visual_turn_lag_flush
 	}
@@ -4853,6 +4858,7 @@ func _apply_start_setup_transition(current_snapshot: Dictionary) -> void:
 	_queue_pending_visual_snapshot(current_snapshot)
 	_record_animation_debug(events)
 	_animation_queue.append_array(events)
+	_compact_animation_queue_if_needed()
 	call_deferred("_play_next_animation_after_layout")
 
 
@@ -5537,6 +5543,78 @@ func _record_animation_debug(events: Array) -> void:
 	debug_stats["lastAnimationTypes"] = _last_animation_types.duplicate()
 	debug_stats["lastAnimationEvents"] = event_summaries
 	debug_stats["lastDepositBasketSlots"] = deposit_slots
+	debug_stats["animationQueueEstimatedSeconds"] = _animation_queue_estimated_seconds()
+	debug_stats["animationQueueCompactions"] = _animation_queue_compaction_count
+
+
+func _compact_animation_queue_if_needed() -> void:
+	var estimated := _animation_queue_estimated_seconds()
+	debug_stats["animationQueueEstimatedSeconds"] = estimated
+	debug_stats["animationQueueCompactions"] = _animation_queue_compaction_count
+	if estimated <= MAX_ANIMATION_QUEUE_ESTIMATED_SECONDS:
+		return
+	var compacted: Array = []
+	var removed := 0
+	for raw_event in _animation_queue:
+		var event: Dictionary = raw_event
+		if _should_preserve_queued_animation_event(event):
+			compacted.append(event)
+		else:
+			removed += 1
+	if removed <= 0:
+		return
+	_animation_queue = compacted
+	_animation_queue_compaction_count += 1
+	debug_stats["animationQueueEstimatedSeconds"] = _animation_queue_estimated_seconds()
+	debug_stats["animationQueueCompactions"] = _animation_queue_compaction_count
+	debug_stats["animationQueueCompactedEvents"] = removed
+
+
+func _should_preserve_queued_animation_event(event: Dictionary) -> bool:
+	if _event_involves_viewer(event):
+		return true
+	match str(event.get("type", "")):
+		"prepare", "public_prepare", "complete", "turn":
+			return true
+		_:
+			return false
+
+
+func _animation_queue_estimated_seconds() -> float:
+	var total := 0.0
+	if _animation_running and _animation_deadline_msec > 0:
+		total += maxf(0.0, float(_animation_deadline_msec - Time.get_ticks_msec()) / 1000.0)
+	for raw_event in _animation_queue:
+		var event: Dictionary = raw_event
+		total += _estimated_animation_event_seconds(event)
+	return snappedf(total, 0.01)
+
+
+func _estimated_animation_event_seconds(event: Dictionary) -> float:
+	var speed_scale := _animation_speed_scale(event)
+	match str(event.get("type", "")):
+		"deposit":
+			return CARD_TILE_LANDING_SECONDS
+		"swap", "settlement_swap":
+			return _swap_finish_seconds(speed_scale)
+		"exchange":
+			return _swap_finish_seconds(speed_scale)
+		"redeem", "public_redeem":
+			return _redeem_finish_seconds(speed_scale)
+		"prepare":
+			return 2.20
+		"public_prepare":
+			return 1.72
+		"offer":
+			return 0.36
+		"eat":
+			return COMPLETE_ORBIT_LAUNCH_EVENT_SECONDS if bool(event.get("completeOrbit", false)) else CARD_TILE_LANDING_SECONDS
+		"turn":
+			return 0.36
+		"complete":
+			return 0.85
+		_:
+			return 0.0
 
 
 func _queue_animation_events(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> void:
@@ -5549,6 +5627,7 @@ func _queue_animation_events(previous_snapshot: Dictionary, current_snapshot: Di
 	if events.is_empty():
 		return
 	_animation_queue.append_array(events)
+	_compact_animation_queue_if_needed()
 	_request_animation_start()
 
 

@@ -3,6 +3,7 @@ extends Node
 signal snapshot_received(snapshot: Dictionary)
 signal error_received(error: Dictionary)
 signal connection_changed(status: String)
+signal server_debug_received(debug: Dictionary)
 
 const RECONNECT_DELAY_SECONDS := 1.5
 const SOCKET_WATCHDOG_FRESH_SNAPSHOT_MS := 20000
@@ -25,9 +26,16 @@ var manual_fresh_snapshot_count := 0
 var watchdog_fresh_snapshot_count := 0
 var watchdog_reconnect_count := 0
 var last_socket_message_type := ""
+var last_socket_error_description := ""
+var last_heartbeat_msec := 0
+var last_heartbeat: Dictionary = {}
+var last_server_debug: Dictionary = {}
+var last_server_debug_msec := 0
+var last_server_debug_error := ""
 var visual_busy := false
 
 var _http_request: HTTPRequest
+var _debug_http_request: HTTPRequest
 var _offline_store: Node
 var _websocket := WebSocketPeer.new()
 var _socket_open := false
@@ -48,6 +56,10 @@ func _ready() -> void:
 	_http_request.timeout = 10.0
 	add_child(_http_request)
 	_http_request.request_completed.connect(_on_http_request_completed)
+	_debug_http_request = HTTPRequest.new()
+	_debug_http_request.timeout = 10.0
+	add_child(_debug_http_request)
+	_debug_http_request.request_completed.connect(_on_debug_http_request_completed)
 	_offline_store = OfflineStore.new()
 	add_child(_offline_store)
 	_offline_store.snapshot_received.connect(_on_offline_snapshot_received)
@@ -216,6 +228,19 @@ func request_fresh_snapshot(count_as_manual := true) -> bool:
 	return true
 
 
+func request_server_debug() -> bool:
+	if offline_mode or table_code == "" or seat_token == "":
+		return false
+	if _debug_http_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		return false
+	var url := "%s/tables/%s/debug?seatToken=%s" % [server_url, table_code, seat_token]
+	var err := _debug_http_request.request(url)
+	if err != OK:
+		last_server_debug_error = "Debug request failed to start: %s" % err
+		return false
+	return true
+
+
 func is_socket_connected() -> bool:
 	if offline_mode:
 		return bool(_offline_store.call("has_active_table"))
@@ -230,6 +255,18 @@ func full_transaction_history() -> Array:
 
 func reconnect_attempt() -> int:
 	return _reconnect_attempt
+
+
+func last_heartbeat_age_ms() -> int:
+	if last_heartbeat_msec <= 0:
+		return -1
+	return maxi(0, Time.get_ticks_msec() - last_heartbeat_msec)
+
+
+func fresh_snapshot_request_age_ms() -> int:
+	if not _fresh_snapshot_request_in_flight or _fresh_snapshot_request_started_msec <= 0:
+		return -1
+	return maxi(0, Time.get_ticks_msec() - _fresh_snapshot_request_started_msec)
 
 
 func has_table_session(code: String = "") -> bool:
@@ -280,6 +317,8 @@ func connect_socket() -> void:
 	_should_reconnect = true
 	_reconnect_delay = -1.0
 	_last_socket_message_msec = Time.get_ticks_msec()
+	last_heartbeat_msec = 0
+	last_heartbeat = {}
 	_fresh_snapshot_request_in_flight = false
 	_fresh_snapshot_request_started_msec = 0
 	var ws_url := server_url.replace("https://", "wss://").replace("http://", "ws://")
@@ -374,13 +413,25 @@ func _handle_socket_message(text: String) -> void:
 		_handle_delta_message(parsed)
 	elif parsed.get("type", "") == "ack":
 		if not bool(parsed.get("ok", false)):
+			last_socket_error_description = str(parsed.get("description", "Socket ack failed."))
 			error_received.emit(parsed)
+	elif parsed.get("type", "") == "heartbeat":
+		_handle_heartbeat_message(parsed)
 	elif parsed.get("type", "") == "error":
 		var error_code := str(parsed.get("errorCode", ""))
 		if error_code == "invalid_seat_token" or error_code == "missing_table" or error_code == "seat_already_connected":
 			_should_reconnect = false
 			_reconnect_delay = -1.0
+		last_socket_error_description = str(parsed.get("description", "Socket error."))
 		error_received.emit(parsed)
+
+
+func _handle_heartbeat_message(message: Dictionary) -> void:
+	var heartbeat_table := str(message.get("tableCode", ""))
+	if heartbeat_table != "" and table_code != "" and heartbeat_table != table_code:
+		return
+	last_heartbeat = message.duplicate(true)
+	last_heartbeat_msec = Time.get_ticks_msec()
 
 
 func _should_accept_full_snapshot(snapshot: Dictionary) -> bool:
@@ -444,6 +495,23 @@ func _handle_delta_message(message: Dictionary) -> void:
 func _mark_socket_message(message_type: String) -> void:
 	_last_socket_message_msec = Time.get_ticks_msec()
 	last_socket_message_type = message_type
+
+
+func _on_debug_http_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if result != HTTPRequest.RESULT_SUCCESS:
+		last_server_debug_error = _http_request_failure_message(result)
+		return
+	var parsed = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		last_server_debug_error = "Server debug endpoint returned invalid JSON."
+		return
+	if response_code < 200 or response_code >= 300 or not parsed.get("ok", false):
+		last_server_debug_error = str(parsed.get("description", "Server debug request failed."))
+		return
+	last_server_debug = parsed.get("result", {})
+	last_server_debug_msec = Time.get_ticks_msec()
+	last_server_debug_error = ""
+	server_debug_received.emit(last_server_debug)
 
 
 func set_visual_busy(is_busy: bool) -> void:

@@ -10,7 +10,7 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.47"
+const APP_VERSION := "0.0.48"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -33,6 +33,7 @@ const TABLE_VISUAL_MIN_SCALE := 0.45
 const LOBBY_NAME_PUBLISH_DELAY_SECONDS := 0.5
 const PUBLIC_TABLES_POLL_SECONDS := 2.0
 const MAX_LOBBY_SEAT_NAME_LENGTH := 16
+const CONTROLLED_FOLLOW_VISUAL_WAIT_FRAMES := 180
 
 
 class FixedScrollContainer:
@@ -211,6 +212,7 @@ func _ready() -> void:
 	RecipesClient.snapshot_received.connect(_on_snapshot_received)
 	RecipesClient.error_received.connect(_on_error_received)
 	RecipesClient.connection_changed.connect(_on_connection_changed)
+	RecipesClient.server_debug_received.connect(_on_server_debug_received)
 	call_deferred("_maybe_start_local_web_smoke_table")
 
 
@@ -3196,6 +3198,8 @@ func _on_table_visual_menu_requested(action: String) -> void:
 			_open_history_popup()
 		"Debug Sync":
 			_open_debug_sync_popup()
+		"Catch Up":
+			_catch_up_visuals()
 		"Main Menu":
 			if not RecipesClient.offline_mode and _current_viewer_is_host() and _table_exists(RecipesClient.latest_snapshot):
 				_confirm_close_table()
@@ -3211,6 +3215,7 @@ func _on_table_visual_menu_requested(action: String) -> void:
 func _open_debug_sync_popup() -> void:
 	if not is_instance_valid(_debug_sync_popup) or not is_instance_valid(_debug_sync_text):
 		return
+	RecipesClient.request_server_debug()
 	_debug_sync_text.text = _debug_sync_report()
 	var viewport_size := get_viewport_rect().size
 	var phone_portrait := _is_phone_portrait_size(viewport_size)
@@ -3228,6 +3233,11 @@ func _open_debug_sync_popup() -> void:
 	_debug_sync_popup.popup_centered(popup_size)
 
 
+func _on_server_debug_received(_debug: Dictionary) -> void:
+	if is_instance_valid(_debug_sync_popup) and _debug_sync_popup.visible and is_instance_valid(_debug_sync_text):
+		_debug_sync_text.text = _debug_sync_report()
+
+
 func _copy_debug_sync_report() -> void:
 	if not is_instance_valid(_debug_sync_text):
 		return
@@ -3237,6 +3247,15 @@ func _copy_debug_sync_report() -> void:
 	else:
 		DisplayServer.clipboard_set(report)
 	_status_label.text = "Debug sync report copied."
+	_status_label.visible = true
+
+
+func _catch_up_visuals() -> void:
+	if is_instance_valid(_table_visual) and _table_visual.has_method("flush_visual_updates"):
+		_table_visual.call("flush_visual_updates")
+	if not RecipesClient.offline_mode:
+		RecipesClient.request_fresh_snapshot()
+	_status_label.text = "Caught up visuals and requested current state."
 	_status_label.visible = true
 
 
@@ -3273,6 +3292,10 @@ func _debug_sync_report() -> String:
 	lines.append("Watchdog fresh snapshots: %s" % RecipesClient.watchdog_fresh_snapshot_count)
 	lines.append("Watchdog reconnects: %s" % RecipesClient.watchdog_reconnect_count)
 	lines.append("Last socket message: %s" % RecipesClient.last_socket_message_type)
+	lines.append("Last socket error: %s" % ("(none)" if RecipesClient.last_socket_error_description == "" else RecipesClient.last_socket_error_description))
+	lines.append("Last heartbeat age ms: %s" % RecipesClient.last_heartbeat_age_ms())
+	lines.append("Last heartbeat: %s" % JSON.stringify(RecipesClient.last_heartbeat))
+	lines.append("Fresh snapshot request age ms: %s" % RecipesClient.fresh_snapshot_request_age_ms())
 	lines.append("")
 	lines.append("Snapshot")
 	lines.append("Table: %s" % str(snapshot.get("tableCode", RecipesClient.table_code)))
@@ -3302,6 +3325,8 @@ func _debug_sync_report() -> String:
 	lines.append("Animation actor: %s" % _debug_participant_label(snapshot, str(visual_stats.get("animationActorParticipantId", ""))))
 	lines.append("Animation events: %s" % str(visual_stats.get("lastAnimationTypes", [])))
 	lines.append("Animation event count: %s" % str(visual_stats.get("animationEventCount", 0)))
+	lines.append("Animation queue estimate seconds: %s" % str(pending_visual.get("queueEstimatedSeconds", visual_stats.get("animationQueueEstimatedSeconds", "?"))))
+	lines.append("Animation queue compactions: %s" % str(pending_visual.get("animationQueueCompactions", visual_stats.get("animationQueueCompactions", 0))))
 	lines.append("Pending visual turn: %s" % _debug_participant_label(snapshot, str(pending_visual.get("latestPendingTurn", ""))))
 	lines.append("Pending visual snapshots: %s" % str(pending_visual.get("pendingCount", 0)))
 	lines.append("Pending visual compactions: %s" % str(pending_visual.get("pendingCompactions", 0)))
@@ -3309,11 +3334,22 @@ func _debug_sync_report() -> String:
 	lines.append("Last visual turn flush: %s" % str(pending_visual.get("lastVisualTurnLagFlush", "")))
 	lines.append("Basket queue: %s, in flight: %s" % [str(visual_stats.get("basketSwapQueueSize", 0)), str(visual_stats.get("basketSwapInFlight", false))])
 	lines.append("")
+	lines.append("Server diagnostics")
+	lines.append("Server debug age ms: %s" % _server_debug_age_ms())
+	lines.append("Server debug error: %s" % ("(none)" if RecipesClient.last_server_debug_error == "" else RecipesClient.last_server_debug_error))
+	lines.append("Server debug: %s" % JSON.stringify(RecipesClient.last_server_debug))
+	lines.append("")
 	lines.append("How to read this")
 	lines.append("- If Snapshot > Current turn differs across clients, capture server logs for that table.")
 	lines.append("- If Snapshot matches but Visual current turn differs, this is a visual animation/staging bug.")
 	lines.append("- If Viewer differs from Current turn, the client is viewing one controlled seat while another seat has the turn.")
 	return "\n".join(lines)
+
+
+func _server_debug_age_ms() -> String:
+	if RecipesClient.last_server_debug_msec <= 0:
+		return "?"
+	return str(maxi(0, Time.get_ticks_msec() - RecipesClient.last_server_debug_msec))
 
 
 func _table_visual_debug_stats() -> Dictionary:
@@ -4391,7 +4427,7 @@ func _follow_controlled_turn_deferred(participant_id: String) -> void:
 	if participant_id == "":
 		_pending_controlled_follow_participant_id = ""
 		return
-	for _frame in range(1200):
+	for _frame in range(CONTROLLED_FOLLOW_VISUAL_WAIT_FRAMES):
 		var snapshot := RecipesClient.latest_snapshot
 		if not _should_follow_controlled_turn(snapshot):
 			if _pending_controlled_follow_participant_id == participant_id:
