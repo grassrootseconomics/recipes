@@ -80,6 +80,25 @@ func _initialize() -> void:
 	_require(str(main.call("_sanitize_lobby_seat_name", "ABCDEFGHIJKLMNOPQ")) == "ABCDEFGHIJKLMNOP", "lobby seat names allow 16 display characters")
 	_require(str(main.call("_display_participant_name", {"name": "Jim_b", "kind": "bot"})) == "Jim", "bot lobby display names hide server uniqueness suffixes")
 	_require(str(main.call("_display_participant_name", {"name": "Jim_b", "kind": "human"})) == "Jim_b", "human lobby display names keep literal suffix text")
+	main.call("_refresh_controls", online_ready_snapshot)
+	await process_frame
+	var lobby_inputs: Dictionary = main.get("_lobby_seat_name_inputs")
+	var host_name_input := lobby_inputs.get("p1", null) as LineEdit
+	var joined_name_input := lobby_inputs.get("p2", null) as LineEdit
+	_require(host_name_input != null and joined_name_input != null, "online lobby renders editable seat name inputs")
+	if host_name_input != null:
+		host_name_input.grab_focus()
+		host_name_input.text = "TypingHost"
+	var renamed_lobby_snapshot := online_ready_snapshot.duplicate(true)
+	renamed_lobby_snapshot["participants"] = online_ready_snapshot.get("participants", []).duplicate(true)
+	renamed_lobby_snapshot["participants"][1] = renamed_lobby_snapshot["participants"][1].duplicate(true)
+	renamed_lobby_snapshot["participants"][1]["name"] = "RenamedBen"
+	main.call("_refresh_controls", renamed_lobby_snapshot)
+	await process_frame
+	_require(host_name_input != null and host_name_input.text == "TypingHost", "focused lobby name input is preserved while typing")
+	_require(joined_name_input != null and joined_name_input.text == "RenamedBen", "non-focused lobby name input updates from incoming rename snapshot")
+	if host_name_input != null:
+		host_name_input.release_focus()
 
 	var missing_prepare_append := {"transactionHistory": [{"action": "Prepare", "participantId": "p1"}]}
 	var complete_prepare_patch := {"ownFoodParts": [{"id": "dish_1_part_1", "dishId": "dish_1"}]}

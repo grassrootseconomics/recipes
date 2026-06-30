@@ -3675,6 +3675,7 @@ func _refresh_participant_detail(snapshot: Dictionary) -> void:
 
 func _refresh_controls(snapshot: Dictionary) -> void:
 	if _should_preserve_lobby_controls_for_text_input(snapshot):
+		_sync_visible_lobby_controls_with_snapshot(snapshot)
 		_deferred_lobby_controls_refresh = true
 		return
 	_deferred_lobby_controls_refresh = false
@@ -3724,17 +3725,37 @@ func _should_preserve_lobby_controls_for_text_input(snapshot: Dictionary) -> boo
 
 func _lobby_name_input_has_focus() -> bool:
 	for raw_input in _lobby_seat_name_inputs.values():
-		var input := raw_input as LineEdit
-		if input != null and is_instance_valid(input) and input.has_focus():
+		if raw_input != null and is_instance_valid(raw_input) and raw_input is LineEdit and raw_input.has_focus():
 			return true
 	return false
 
 
 func _refresh_controls_after_lobby_edit() -> void:
 	if _lobby_name_input_has_focus():
+		_sync_visible_lobby_controls_with_snapshot(RecipesClient.latest_snapshot)
 		return
 	_deferred_lobby_controls_refresh = false
 	_refresh_controls(RecipesClient.latest_snapshot)
+
+
+func _sync_visible_lobby_controls_with_snapshot(snapshot: Dictionary) -> void:
+	if str(snapshot.get("phase", "lobby")) != "lobby" or _game_started(snapshot):
+		return
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		var participant_id := str(participant.get("id", ""))
+		if participant_id == "":
+			continue
+		var input = _lobby_seat_name_inputs.get(participant_id, null)
+		if input != null and is_instance_valid(input) and input is LineEdit and not input.has_focus() and not _lobby_pending_seat_names.has(participant_id):
+			var display_name := _sanitize_lobby_seat_name(_display_participant_name(participant, ""))
+			if input.text != display_name:
+				input.text = display_name
+		var toggle = _lobby_seat_kind_inputs.get(participant_id, null)
+		if toggle != null and is_instance_valid(toggle) and toggle is OptionButton and not toggle.has_focus():
+			var desired_index := 1 if str(participant.get("kind", "human")) == "bot" else 0
+			if toggle.selected != desired_index:
+				toggle.select(desired_index)
 
 
 func _add_lobby_controls(snapshot: Dictionary) -> void:
@@ -4302,8 +4323,8 @@ func _sync_lobby_pending_names_with_snapshot(snapshot: Dictionary) -> void:
 		if pending == current:
 			_lobby_pending_seat_names.erase(participant_id)
 			continue
-		var input := _lobby_seat_name_inputs.get(participant_id, null) as LineEdit
-		if input == null or not is_instance_valid(input) or not input.has_focus():
+		var input = _lobby_seat_name_inputs.get(participant_id, null)
+		if input == null or not is_instance_valid(input) or not (input is LineEdit) or not input.has_focus():
 			_lobby_pending_seat_names.erase(participant_id)
 	_stop_lobby_name_publish_if_idle()
 
