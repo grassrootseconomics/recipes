@@ -140,6 +140,12 @@ func _initialize() -> void:
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, true, 9000)) == "reconnect", "online active table watchdog reconnects when a full snapshot request gets no response")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 21000, false, 0, true)) == "none", "online active table watchdog waits while visual updates are still busy")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", online_waiting_snapshot, true, 21000, false, 0)) == "none", "online lobby watchdog does not poll active-game snapshots")
+	_require(bool(main.call("debug_pause_hotkey_can_toggle", _online_playing_snapshot())), "online host can use the pause hotkey during active play")
+	var online_non_host_snapshot := _online_playing_snapshot()
+	online_non_host_snapshot["viewerCanUseHostControls"] = false
+	online_non_host_snapshot["connectionParticipantId"] = "p2"
+	online_non_host_snapshot["viewerParticipantId"] = "p2"
+	_require(not bool(main.call("debug_pause_hotkey_can_toggle", online_non_host_snapshot)), "online non-host cannot use the pause hotkey")
 	recipes_client.table_code = "JOINME"
 	recipes_client.call("_handle_socket_message", JSON.stringify({"type": "heartbeat", "tableCode": "JOINME", "version": 12, "transactionCursor": 45, "phase": "playing", "currentTurnParticipantId": "p2", "sentAtMs": 123}))
 	_require(str(recipes_client.last_socket_message_type) == "heartbeat", "online heartbeat counts as socket activity")
@@ -206,6 +212,23 @@ func _initialize() -> void:
 	_require(post_controls != null and not post_controls.visible, "post-table End Game controls are hidden during play")
 	var table_main_menu_button := visual.find_child("TableMainMenuButton", true, false) as Control
 	_require(table_main_menu_button != null and not table_main_menu_button.visible, "table hides the direct Main Menu button until the game is over")
+	_require(bool(main.call("debug_pause_hotkey_can_toggle", recipes_client.latest_snapshot)), "offline active table can use the pause hotkey")
+	main.call("_on_pause_hotkey_pressed")
+	await process_frame
+	_require(bool(recipes_client.latest_snapshot.get("paused", false)), "offline pause hotkey pauses the table snapshot")
+	_require(bool(visual.call("debug_visual_paused")), "offline pause hotkey pauses table animations")
+	main.call("_on_pause_hotkey_pressed")
+	await process_frame
+	_require(not bool(recipes_client.latest_snapshot.get("paused", false)), "offline pause hotkey resumes the table snapshot")
+	_require(not bool(visual.call("debug_visual_paused")), "offline pause hotkey resumes table animations")
+	main.call("_on_table_visual_menu_requested", "Pause Game")
+	await process_frame
+	_require(bool(recipes_client.latest_snapshot.get("paused", false)), "table menu Pause Game pauses the offline table snapshot")
+	_require(bool(visual.call("debug_visual_paused")), "table menu Pause Game pauses table animations")
+	main.call("_on_table_visual_menu_requested", "Resume Game")
+	await process_frame
+	_require(not bool(recipes_client.latest_snapshot.get("paused", false)), "table menu Resume Game resumes the offline table snapshot")
+	_require(not bool(visual.call("debug_visual_paused")), "table menu Resume Game resumes table animations")
 	var root_scroll := _control_from_property(main, "_root_scroll") as ScrollContainer
 	_require(root_scroll != null and root_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED, "main table view disables root page scrolling during play")
 	if root_scroll != null:

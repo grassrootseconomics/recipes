@@ -126,9 +126,26 @@ func _initialize() -> void:
 	var menu_actions: Array = visual.debug_stats.get("menuActions", [])
 	_require(menu_actions.has("View History"), "table menu exposes transaction history")
 	_require(menu_actions.has("Catch Up"), "table menu exposes manual visual catch-up")
+	_require(menu_actions.has("Pause Game"), "host table menu exposes Pause Game")
 	_require(menu_actions.has("Fast Bots"), "table menu exposes Fast Bots toggle by default")
 	_require(menu_actions.has("End Game"), "host table menu exposes End Game")
 	_require(menu_actions.has("Main Menu"), "table menu exposes Main Menu")
+	var paused_menu_snapshot := snapshot.duplicate(true)
+	paused_menu_snapshot["paused"] = true
+	visual.debug_apply_snapshot(paused_menu_snapshot)
+	await process_frame
+	menu_actions = visual.debug_stats.get("menuActions", [])
+	_require(menu_actions.has("Resume Game"), "paused host table menu toggles to Resume Game")
+	_require(not menu_actions.has("Pause Game"), "paused host table menu hides Pause Game")
+	var guest_menu_snapshot := snapshot.duplicate(true)
+	guest_menu_snapshot["offline"] = false
+	guest_menu_snapshot["viewerCanUseHostControls"] = false
+	visual.debug_apply_snapshot(guest_menu_snapshot)
+	await process_frame
+	menu_actions = visual.debug_stats.get("menuActions", [])
+	_require(not menu_actions.has("Pause Game") and not menu_actions.has("Resume Game"), "non-host online table menu hides pause actions")
+	visual.debug_apply_snapshot(snapshot)
+	await process_frame
 	var main_menu_overlay := visual.find_child("TableMainMenuButton", true, false) as Button
 	_require(main_menu_overlay != null and not main_menu_overlay.visible, "visual table hides top Main Menu button before the game is over")
 	_require(visual.debug_fast_bots_enabled(), "Fast Bots mode is enabled by default")
@@ -2287,6 +2304,16 @@ func _assert_start_snapshot_animates_offerings_from_empty_basket(visual: Node) -
 	_require(_same_size(backdrop.get_global_rect().size, basket_size_before), "first offering does not resize the basket backdrop: %s -> %s" % [basket_size_before, backdrop.get_global_rect().size])
 	_require(_visible_platter_total(visual) == 1, "first offering animation adds one basket card")
 	_require(_visible_platter_count(visual, "cheese") == 1, "first offering animation follows the first Deposit transaction")
+	visual.call("set_visual_paused", true)
+	await process_frame
+	var paused_actions: Array = visual.debug_stats.get("menuActions", [])
+	_require(bool(visual.call("debug_visual_paused")), "opening offering pause freezes the visual queue")
+	_require(paused_actions.has("Resume Game") and not paused_actions.has("Pause Game"), "opening offering pause switches hamburger action to Resume Game")
+	visual.call("set_visual_paused", false)
+	await process_frame
+	var resumed_actions: Array = visual.debug_stats.get("menuActions", [])
+	_require(not bool(visual.call("debug_visual_paused")), "opening offering resume unfreezes the visual queue")
+	_require(resumed_actions.has("Pause Game") and not resumed_actions.has("Resume Game"), "opening offering resume switches hamburger action back to Pause Game")
 	var second: String = visual.debug_apply_next_animation_milestone()
 	await process_frame
 	_require(second == "deposit", "start snapshot second animation is an offering")

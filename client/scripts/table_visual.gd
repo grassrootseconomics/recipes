@@ -559,9 +559,14 @@ var _create_offer_quantity := 1
 var _animation_queue: Array = []
 var _animation_running := false
 var _animation_deadline_msec := 0
+var _animation_deadline_remaining_when_paused_msec := 0
 var _current_animation_event: Dictionary = {}
 var _animation_actor_participant_id := ""
 var _last_animation_types: Array[String] = []
+var _visual_paused := false
+var _active_animation_tweens: Array = []
+var _animation_timers: Array = []
+var _next_animation_timer_id := 1
 var _pending_visual_snapshot: Dictionary = {}
 var _has_pending_visual_snapshot := false
 var _pending_visual_snapshots: Array = []
@@ -931,6 +936,41 @@ func debug_play_animation_event(event: Dictionary) -> void:
 	_play_animation_event(event)
 
 
+func set_visual_paused(paused: bool) -> void:
+	_snapshot["paused"] = paused
+	debug_stats["menuActions"] = _table_menu_actions()
+	if is_instance_valid(_menu_popup) and _menu_popup.visible:
+		_rebuild_open_table_menu()
+	if _visual_paused == paused:
+		return
+	_visual_paused = paused
+	debug_stats["visualPaused"] = _visual_paused
+	if _visual_paused:
+		if _animation_running and _animation_deadline_msec > 0:
+			_animation_deadline_remaining_when_paused_msec = maxi(1, _animation_deadline_msec - Time.get_ticks_msec())
+		_pause_animation_timers()
+		for raw_tween in _active_animation_tweens.duplicate():
+			var tween := raw_tween as Tween
+			if tween != null and tween.is_valid():
+				tween.pause()
+	else:
+		if _animation_running and _animation_deadline_remaining_when_paused_msec > 0:
+			_animation_deadline_msec = Time.get_ticks_msec() + _animation_deadline_remaining_when_paused_msec
+		_animation_deadline_remaining_when_paused_msec = 0
+		_prune_animation_tweens()
+		for raw_tween in _active_animation_tweens.duplicate():
+			var tween := raw_tween as Tween
+			if tween != null and tween.is_valid():
+				tween.play()
+		_resume_animation_timers()
+		if not _animation_running and not _animation_queue.is_empty():
+			_request_animation_start()
+
+
+func debug_visual_paused() -> bool:
+	return _visual_paused
+
+
 func flush_visual_updates() -> void:
 	_flush_visual_updates()
 
@@ -948,8 +988,11 @@ func _flush_visual_updates() -> void:
 	_animation_queue.clear()
 	_animation_running = false
 	_animation_deadline_msec = 0
+	_animation_deadline_remaining_when_paused_msec = 0
 	_current_animation_event = {}
 	_animation_actor_participant_id = ""
+	_clear_animation_timers()
+	_active_animation_tweens.clear()
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
 	_pending_visual_snapshots.clear()
@@ -964,8 +1007,11 @@ func debug_apply_snapshot(snapshot: Dictionary) -> void:
 	_animation_queue.clear()
 	_animation_running = false
 	_animation_deadline_msec = 0
+	_animation_deadline_remaining_when_paused_msec = 0
 	_current_animation_event = {}
 	_animation_actor_participant_id = ""
+	_clear_animation_timers()
+	_active_animation_tweens.clear()
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
 	_pending_visual_snapshots.clear()
@@ -1595,10 +1641,104 @@ func _render_menu() -> void:
 
 
 func _process(_delta: float) -> void:
+	if _visual_paused:
+		_sync_menu_visibility(false)
+		return
 	_finish_stalled_animation_if_needed()
 	_flush_stale_visual_turn_if_needed()
 	_sync_menu_visibility(false)
 	_process_queued_basket_swaps()
+
+
+func _create_animation_tween(bound_node: Node = null) -> Tween:
+	var tween: Tween
+	if is_instance_valid(bound_node):
+		tween = bound_node.create_tween()
+	else:
+		tween = create_tween()
+	_active_animation_tweens.append(tween)
+	tween.finished.connect(func() -> void:
+		_active_animation_tweens.erase(tween)
+	)
+	if _visual_paused:
+		tween.pause()
+	return tween
+
+
+func _prune_animation_tweens() -> void:
+	var retained: Array = []
+	for raw_tween in _active_animation_tweens:
+		var tween := raw_tween as Tween
+		if tween != null and tween.is_valid():
+			retained.append(tween)
+	_active_animation_tweens = retained
+
+
+func _schedule_animation_timer(delay_seconds: float, callback: Callable) -> void:
+	if delay_seconds <= 0.0:
+		if callback.is_valid():
+			callback.call()
+		return
+	var timer_record := {
+		"id": _next_animation_timer_id,
+		"remainingMsec": int(ceil(delay_seconds * 1000.0)),
+		"startedMsec": Time.get_ticks_msec(),
+		"active": false,
+		"generation": 0,
+		"callback": callback
+	}
+	_next_animation_timer_id += 1
+	_animation_timers.append(timer_record)
+	if _visual_paused:
+		return
+	_start_animation_timer(timer_record)
+
+
+func _start_animation_timer(timer_record: Dictionary) -> void:
+	timer_record["active"] = true
+	timer_record["startedMsec"] = Time.get_ticks_msec()
+	timer_record["generation"] = int(timer_record.get("generation", 0)) + 1
+	var generation := int(timer_record.get("generation", 0))
+	var delay_seconds := maxf(0.001, float(timer_record.get("remainingMsec", 0)) / 1000.0)
+	get_tree().create_timer(delay_seconds).timeout.connect(func(record := timer_record, expected_generation := generation) -> void:
+		if not _animation_timers.has(record):
+			return
+		if _visual_paused or not bool(record.get("active", false)) or int(record.get("generation", 0)) != expected_generation:
+			return
+		_animation_timers.erase(record)
+		record["active"] = false
+		var callback: Callable = record.get("callback", Callable())
+		if callback.is_valid():
+			callback.call()
+	)
+
+
+func _pause_animation_timers() -> void:
+	var now := Time.get_ticks_msec()
+	for raw_record in _animation_timers:
+		var record := raw_record as Dictionary
+		if not bool(record.get("active", false)):
+			continue
+		var elapsed := maxi(0, now - int(record.get("startedMsec", now)))
+		record["remainingMsec"] = maxi(1, int(record.get("remainingMsec", 0)) - elapsed)
+		record["active"] = false
+		record["generation"] = int(record.get("generation", 0)) + 1
+
+
+func _resume_animation_timers() -> void:
+	for raw_record in _animation_timers.duplicate():
+		var record := raw_record as Dictionary
+		if bool(record.get("active", false)):
+			continue
+		_start_animation_timer(record)
+
+
+func _clear_animation_timers() -> void:
+	for raw_record in _animation_timers:
+		var record := raw_record as Dictionary
+		record["active"] = false
+		record["generation"] = int(record.get("generation", 0)) + 1
+	_animation_timers.clear()
 
 
 func _menu_should_be_visible() -> bool:
@@ -1640,12 +1780,23 @@ func _position_menu_button() -> void:
 
 
 func _table_menu_actions() -> Array[String]:
-	var actions: Array[String] = ["View History", "Debug Sync", "Catch Up", _bot_speed_menu_label()]
 	var phase := str(_snapshot.get("phase", ""))
+	var actions: Array[String] = ["View History", "Debug Sync", "Catch Up"]
+	if _can_use_pause_menu_action(phase):
+		actions.append("Resume Game" if bool(_snapshot.get("paused", false)) else "Pause Game")
+	actions.append(_bot_speed_menu_label())
 	if bool(_snapshot.get("viewerCanUseHostControls", false)) and phase != "complete" and phase != "lobby":
 		actions.append("End Game")
 	actions.append("Main Menu")
 	return actions
+
+
+func _can_use_pause_menu_action(phase: String) -> bool:
+	if phase == "" or phase == "lobby" or phase == "complete":
+		return false
+	if bool(_snapshot.get("offline", false)):
+		return true
+	return bool(_snapshot.get("viewerCanUseHostControls", false))
 
 
 func _bot_speed_menu_label() -> String:
@@ -1692,6 +1843,12 @@ func _open_table_menu() -> void:
 	if _menu_popup.visible:
 		_menu_popup.hide()
 		return
+	_rebuild_open_table_menu()
+
+
+func _rebuild_open_table_menu() -> void:
+	if not is_instance_valid(_menu_popup) or not is_instance_valid(_menu_popup_list):
+		return
 	_clear(_menu_popup_list)
 	var actions := _table_menu_actions()
 	for action in actions:
@@ -1700,7 +1857,11 @@ func _open_table_menu() -> void:
 	var height := maxi(48, actions.size() * 42 + 10)
 	var button_rect := _menu_button.get_global_rect()
 	var popup_position := Vector2i(int(button_rect.position.x), int(button_rect.end.y + 4.0))
-	_menu_popup.popup(Rect2i(popup_position, Vector2i(width, height)))
+	if _menu_popup.visible:
+		_menu_popup.position = popup_position
+		_menu_popup.size = Vector2i(width, height)
+	else:
+		_menu_popup.popup(Rect2i(popup_position, Vector2i(width, height)))
 
 
 func _menu_popup_button(action: String) -> Button:
@@ -1716,6 +1877,10 @@ func _menu_popup_button(action: String) -> Button:
 	button.add_theme_font_size_override("font_size", 15)
 	if action == "End Game":
 		_apply_button_style(button, Color(0.62, 0.24, 0.14), Color(0.34, 0.12, 0.06), 2)
+	elif action == "Resume Game":
+		_apply_button_style(button, Color(0.38, 0.58, 0.26), Color(0.18, 0.32, 0.12), 2)
+	elif action == "Pause Game":
+		_apply_button_style(button, Color(0.62, 0.43, 0.19), Color(0.36, 0.22, 0.08), 2)
 	elif action == "Fast Bots" or action == "Slow Bots":
 		_apply_button_style(button, Color(0.82, 0.58, 0.23), Color(0.42, 0.25, 0.08), 2)
 	elif action == "Main Menu":
@@ -2446,7 +2611,7 @@ func _start_complete_avatar_dance() -> void:
 			continue
 		avatar.pivot_offset = avatar.size * 0.5 if avatar.size.x > 0.0 and avatar.size.y > 0.0 else Vector2(16, 16)
 		avatar.set_meta("complete_dance", true)
-		var tween := create_tween()
+		var tween := _create_animation_tween()
 		tween.set_loops()
 		var delay := float(count % 4) * 0.07
 		if delay > 0.0:
@@ -3190,7 +3355,7 @@ func _apply_star_completion_style(label: Label) -> void:
 
 func _start_star_pulse(control: Control) -> Tween:
 	control.modulate = Color(1.0, 0.92, 0.68, 1.0)
-	var tween := control.create_tween()
+	var tween := _create_animation_tween(control)
 	tween.set_loops()
 	tween.tween_property(control, "modulate", Color(1.0, 0.72, 0.18, 1.0), 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tween.tween_property(control, "modulate", Color(1.0, 0.98, 0.78, 1.0), 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -5002,7 +5167,7 @@ func _apply_start_setup_transition(current_snapshot: Dictionary) -> void:
 
 
 func _request_animation_start() -> void:
-	if _animation_queue.is_empty() or _animation_running:
+	if _visual_paused or _animation_queue.is_empty() or _animation_running:
 		return
 	var next_event: Dictionary = _animation_queue[0]
 	if _animation_event_can_start_immediately(next_event):
@@ -5025,7 +5190,7 @@ func _play_next_animation_after_layout() -> void:
 	if not is_inside_tree():
 		return
 	await get_tree().process_frame
-	if not is_inside_tree():
+	if not is_inside_tree() or _visual_paused:
 		return
 	_resolve_deposit_animation_points()
 	_play_next_animation()
@@ -6787,11 +6952,13 @@ func _snapshot_has_eating_transition(previous_snapshot: Dictionary, current_snap
 
 
 func _play_next_animation() -> void:
-	if _animation_running or _animation_queue.is_empty() or not is_inside_tree():
+	if _visual_paused or _animation_running or _animation_queue.is_empty() or not is_inside_tree():
 		return
+	_clear_animation_timers()
 	var previous_visual_actor_id := _current_visual_actor_id()
 	_animation_running = true
 	_animation_deadline_msec = 0
+	_animation_deadline_remaining_when_paused_msec = 0
 	var event: Dictionary = _animation_queue.pop_front()
 	_current_animation_event = event
 	_animation_actor_participant_id = _animation_actor_id(event)
@@ -6807,13 +6974,13 @@ func _start_current_animation_after_layout(expected_event: Dictionary) -> void:
 	if not is_inside_tree():
 		return
 	await get_tree().process_frame
-	if not is_inside_tree():
+	if not is_inside_tree() or _visual_paused:
 		return
 	_start_current_animation_now(expected_event)
 
 
 func _start_current_animation_now(expected_event: Dictionary) -> void:
-	if not _animation_running or _current_animation_event.is_empty() or not _same_animation_event(_current_animation_event, expected_event):
+	if _visual_paused or not _animation_running or _current_animation_event.is_empty() or not _same_animation_event(_current_animation_event, expected_event):
 		return
 	var event := _current_animation_event
 	var duration := _play_animation_event(event)
@@ -6822,14 +6989,14 @@ func _start_current_animation_now(expected_event: Dictionary) -> void:
 		return
 	_animation_deadline_msec = Time.get_ticks_msec() + int(ceil((duration + 0.25) * 1000.0))
 	expected_event = event.duplicate(true)
-	get_tree().create_timer(duration).timeout.connect(func() -> void:
+	_schedule_animation_timer(duration, func() -> void:
 		if _animation_running and not _current_animation_event.is_empty() and _same_animation_event(_current_animation_event, expected_event):
 			_finish_animation_event()
 	)
 
 
 func _finish_stalled_animation_if_needed() -> void:
-	if not _animation_running or _animation_deadline_msec <= 0:
+	if _visual_paused or not _animation_running or _animation_deadline_msec <= 0:
 		return
 	if Time.get_ticks_msec() < _animation_deadline_msec:
 		return
@@ -6843,7 +7010,9 @@ func _finish_animation_event() -> void:
 	_current_animation_event = {}
 	_animation_running = false
 	_animation_deadline_msec = 0
+	_animation_deadline_remaining_when_paused_msec = 0
 	_animation_actor_participant_id = ""
+	_clear_animation_timers()
 	_apply_animation_event_snapshot(finished_event)
 	if _animation_queue.is_empty():
 		_apply_pending_visual_snapshot_after_layout()
@@ -7128,11 +7297,11 @@ func _animate_swap_event(event: Dictionary) -> float:
 	_apply_swap_stage_snapshot(event, "_snapshotStart")
 	_animate_event_asset_tile_path(event, "give", _valid_points([give_start, give_end]), 0.0, true, speed_scale)
 	if event.has("_snapshotMid") and is_inside_tree():
-		get_tree().create_timer(_swap_mid_snapshot_seconds(speed_scale)).timeout.connect(func() -> void:
+		_schedule_animation_timer(_swap_mid_snapshot_seconds(speed_scale), func() -> void:
 			_apply_swap_stage_snapshot(event, "_snapshotMid")
 		)
 	if is_inside_tree():
-		get_tree().create_timer(_swap_take_start_seconds(speed_scale)).timeout.connect(func() -> void:
+		_schedule_animation_timer(_swap_take_start_seconds(speed_scale), func() -> void:
 			var return_start := _swap_point(event, "takeStartPoint", _swap_take_start_center(event))
 			_apply_swap_stage_snapshot(event, "_snapshotTakeStart")
 			var return_end := _swap_point(event, "takeEndPoint", _swap_take_end_center(event))
@@ -7362,7 +7531,7 @@ func _schedule_prepare_landing_snapshot(event: Dictionary, landing_seconds: floa
 	if not is_inside_tree() or not event.has("_snapshotAfter"):
 		return
 	var event_copy := event.duplicate(true)
-	get_tree().create_timer(maxf(0.01, landing_seconds)).timeout.connect(func() -> void:
+	_schedule_animation_timer(maxf(0.01, landing_seconds), func() -> void:
 		if _current_animation_event.is_empty() or not _same_animation_event(_current_animation_event, event_copy):
 			return
 		var snapshot: Dictionary = event_copy.get("_snapshotAfter", {})
@@ -7566,7 +7735,7 @@ func _animate_texture_to_complete_orbit(texture: Texture2D, global_start: Vector
 	_animation_layer.add_child(icon)
 	icon.position = _animation_local(start) - icon_size * 0.5
 
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	tween.tween_property(icon, "position", _animation_local(finish) - icon_size * 0.5, COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 	tween.parallel().tween_property(icon, "scale", Vector2.ONE, COMPLETE_ORBIT_LAUNCH_MOVE_SECONDS * 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tween.tween_property(icon, "scale", Vector2(0.92, 0.92), COMPLETE_ORBIT_LAUNCH_SETTLE_SECONDS).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
@@ -8156,7 +8325,7 @@ func _animate_visual_tile_path(meta: Dictionary, label: String, global_points: A
 		local_points.append(_animation_local(point))
 	tile.position = local_points[0] - tile_size * 0.5
 
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	if delay > 0.0:
 		tween.tween_interval(delay)
 	if not start_visible:
@@ -8191,7 +8360,7 @@ func _animate_texture_path(texture: Texture2D, global_points: Array[Vector2], de
 		local_points.append(_animation_local(point))
 	icon.position = local_points[0] - icon_size * 0.5
 
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	if delay > 0.0:
 		tween.tween_interval(delay)
 	tween.tween_property(icon, "modulate", Color(1, 1, 1, 1), _scaled(TEXTURE_FADE_IN_SECONDS, duration_scale))
@@ -8237,7 +8406,7 @@ func _animate_large_dish(texture: Texture2D, dish_name: String, global_start: Ve
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(label)
 
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	if delay > 0.0:
 		tween.tween_interval(delay)
 	tween.tween_property(wrapper, "modulate", Color(1, 1, 1, 1), 0.12)
@@ -8314,7 +8483,7 @@ func _animate_prepare_announcement(participant_name: String, dish_name: String, 
 	label.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	card.add_child(label)
 
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	if delay > 0.0:
 		tween.tween_interval(delay)
 	tween.tween_property(card, "modulate", Color(1, 1, 1, 1), 0.12)
@@ -8386,7 +8555,7 @@ func _animate_swirl_ingredient(ingredient_id: String, global_start: Vector2, glo
 	var orbit_c := center + Vector2(cos(angle + TAU * 0.82), sin(angle + TAU * 0.82)) * (radius * 0.48)
 	var delay := float(index) * 0.035
 
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	tween.tween_interval(delay)
 	tween.tween_property(icon, "modulate", Color(1, 1, 1, 1), 0.05)
 	tween.parallel().tween_property(icon, "scale", Vector2(1.04, 1.04), 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -8417,7 +8586,7 @@ func _pop_texture(texture: Texture2D, global_center: Vector2) -> void:
 	icon.position = _animation_local(global_center) - icon_size * 0.5
 	icon.modulate = Color(1, 1, 1, 0.95)
 	_animation_layer.add_child(icon)
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	tween.tween_property(icon, "scale", Vector2(1.25, 1.25), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tween.tween_property(icon, "scale", Vector2(0.2, 0.2), 0.18)
 	tween.parallel().tween_property(icon, "modulate", Color(1, 1, 1, 0), 0.18)
@@ -8447,7 +8616,7 @@ func _animate_offer_badge_arrival(participant_node: Control, text: String, color
 	label.add_theme_color_override("font_color", Color(1, 0.98, 0.90))
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	badge.add_child(label)
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	tween.tween_property(badge, "modulate", Color(1, 1, 1, 0.98), 0.08)
 	tween.parallel().tween_property(badge, "scale", Vector2(1.2, 1.2), 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tween.tween_property(badge, "scale", Vector2(0.9, 0.9), 0.12)
@@ -8469,7 +8638,7 @@ func _pulse_control(control: Control, color: Color) -> void:
 	panel.modulate = Color(1, 1, 1, 0)
 	panel.add_theme_stylebox_override("panel", _pulse_style(color))
 	_animation_layer.add_child(panel)
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	tween.tween_property(panel, "modulate", Color(1, 1, 1, 0.72), 0.08)
 	tween.tween_property(panel, "modulate", Color(1, 1, 1, 0), 0.28)
 	tween.tween_callback(panel.queue_free)
@@ -8479,7 +8648,7 @@ func _start_offer_badge_pulse(panel: Control) -> void:
 	if not is_instance_valid(panel):
 		return
 	panel.modulate = Color(1, 1, 1, 1)
-	var tween := panel.create_tween()
+	var tween := _create_animation_tween(panel)
 	tween.set_loops()
 	tween.tween_property(panel, "modulate", Color(1, 1, 1, 0.66), 0.48).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tween.tween_property(panel, "modulate", Color(1, 1, 1, 1.0), 0.48).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -8521,7 +8690,7 @@ func _animate_poof_burst(global_center: Vector2, delay := 0.0) -> void:
 	ring.add_theme_stylebox_override("panel", _pulse_style(Color(1.0, 0.74, 0.18)))
 	_animation_layer.add_child(ring)
 
-	var tween := create_tween()
+	var tween := _create_animation_tween()
 	if delay > 0.0:
 		tween.tween_interval(delay)
 	tween.tween_property(label, "modulate", Color(1, 1, 1, 1), 0.07)
@@ -8548,7 +8717,7 @@ func _emit_steam_wisps(global_center: Vector2, delay := 0.0) -> void:
 		wisp.position = center + Vector2(float(index - 2) * 15.0, 16)
 		wisp.modulate = Color(1, 1, 1, 0)
 		_animation_layer.add_child(wisp)
-		var tween := create_tween()
+		var tween := _create_animation_tween()
 		tween.tween_interval(delay + float(index) * 0.05)
 		tween.tween_property(wisp, "modulate", Color(1, 1, 1, 0.72), 0.08)
 		tween.parallel().tween_property(wisp, "position", wisp.position + Vector2(float((index % 2) * 2 - 1) * 10.0, -48), 0.54).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
@@ -8572,7 +8741,7 @@ func _emit_sparkles(global_center: Vector2, count: int, color: Color, delay := 0
 		var angle := TAU * float(index) / float(maxi(1, count))
 		var distance := 22.0 + float((index * 7) % 42)
 		var target: Vector2 = center + Vector2(cos(angle), sin(angle)) * distance
-		var tween := create_tween()
+		var tween := _create_animation_tween()
 		tween.tween_interval(delay + float(index % 5) * 0.015)
 		tween.tween_property(dot, "modulate", Color(1, 1, 1, 0.95), 0.05)
 		tween.parallel().tween_property(dot, "position", target, 0.34).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)

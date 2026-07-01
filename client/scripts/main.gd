@@ -44,6 +44,28 @@ class FixedScrollContainer:
 		return fixed_minimum_size
 
 
+class PauseHotkeyRouter:
+	extends Node
+
+	var callback := Callable()
+
+	func _init(callback_callable := Callable()) -> void:
+		callback = callback_callable
+		process_mode = Node.PROCESS_MODE_ALWAYS
+
+	func _input(event: InputEvent) -> void:
+		if not event is InputEventKey:
+			return
+		var key_event := event as InputEventKey
+		if not key_event.pressed or key_event.echo:
+			return
+		if key_event.keycode != KEY_P and key_event.physical_keycode != KEY_P:
+			return
+		if callback.is_valid():
+			callback.call()
+			get_viewport().set_input_as_handled()
+
+
 var _status_label: Label
 var _server_input: LineEdit
 var _server_option: OptionButton
@@ -127,6 +149,7 @@ var _select_popup_scroller: ScrollContainer
 var _select_popup_list: VBoxContainer
 var _csv_http_request: HTTPRequest
 var _root_scroll: ScrollContainer
+var _pause_hotkey_router: Node
 var _home_sprites: Array = []
 var _server_options: Array = []
 var _home_animation_time := 0.0
@@ -193,6 +216,7 @@ var _active_game_scroll_reset_key := ""
 var _active_game_auto_scroll_key := ""
 var _close_table_after_reconnect := false
 var _return_to_menu_after_close_table := false
+var _local_pause_hotkey_state := false
 
 
 func _ready() -> void:
@@ -218,6 +242,8 @@ func _ready() -> void:
 	add_child(_lobby_name_publish_timer)
 	_lobby_name_publish_timer.timeout.connect(_flush_pending_lobby_name_edits)
 	_build_ui()
+	_pause_hotkey_router = PauseHotkeyRouter.new(_on_pause_hotkey_pressed)
+	add_child(_pause_hotkey_router)
 	set_process(true)
 	RecipesClient.snapshot_received.connect(_on_snapshot_received)
 	RecipesClient.error_received.connect(_on_error_received)
@@ -1556,6 +1582,8 @@ func _return_to_main_menu() -> void:
 	if RecipesClient.table_code != "":
 		RecipesClient.disconnect_local()
 	_home_choice = ""
+	_local_pause_hotkey_state = false
+	_apply_visual_pause_state(false)
 	_clear_lobby_edit_state()
 	_active_game_scroll_reset_key = ""
 	_active_game_auto_scroll_key = ""
@@ -3062,6 +3090,8 @@ func _on_snapshot_received(snapshot: Dictionary) -> void:
 func _render_snapshot(snapshot: Dictionary) -> void:
 	var table_exists := _table_exists(snapshot)
 	var game_started := _game_started(snapshot)
+	var snapshot_paused := game_started and bool(snapshot.get("paused", false))
+	_local_pause_hotkey_state = snapshot_paused
 	if table_exists and not bool(snapshot.get("offline", false)):
 		_code_input.text = str(snapshot.get("tableCode", RecipesClient.table_code))
 	elif not table_exists and _home_choice == "online" and _online_code_needs_generation() and _server_is_ready():
@@ -3081,6 +3111,7 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 		_table_visual.visible = true
 		_fit_table_visual_to_window()
 		_table_visual.render(snapshot)
+		_apply_visual_pause_state(snapshot_paused)
 		_fit_table_visual_to_window()
 		call_deferred("_fit_table_visual_after_layout")
 		if game_started:
@@ -3292,6 +3323,51 @@ func _current_viewer_is_host() -> bool:
 	if not _table_exists(snapshot):
 		return false
 	return bool(snapshot.get("viewerCanUseHostControls", false))
+
+
+func _on_pause_hotkey_pressed() -> void:
+	if not _pause_hotkey_can_toggle(RecipesClient.latest_snapshot):
+		return
+	_toggle_pause_intent(not _effective_pause_state())
+
+
+func _pause_hotkey_can_toggle(snapshot: Dictionary) -> bool:
+	if not _table_exists(snapshot):
+		return false
+	if _pause_hotkey_text_focus_active():
+		return false
+	var phase := str(snapshot.get("phase", ""))
+	if phase == "" or phase == "lobby" or phase == "complete":
+		return false
+	if bool(snapshot.get("offline", false)) or RecipesClient.offline_mode:
+		return true
+	return bool(snapshot.get("viewerCanUseHostControls", false))
+
+
+func _pause_hotkey_text_focus_active() -> bool:
+	var focused := get_viewport().gui_get_focus_owner()
+	return focused is LineEdit or focused is TextEdit
+
+
+func _toggle_pause_intent(paused: bool) -> bool:
+	var sent := RecipesClient.send_host_intent({"type": "set_pause", "paused": paused})
+	if sent:
+		_local_pause_hotkey_state = paused
+		_apply_visual_pause_state(paused)
+	return sent
+
+
+func _effective_pause_state() -> bool:
+	return _local_pause_hotkey_state
+
+
+func _apply_visual_pause_state(paused: bool) -> void:
+	if is_instance_valid(_table_visual) and _table_visual.has_method("set_visual_paused"):
+		_table_visual.call("set_visual_paused", paused)
+
+
+func debug_pause_hotkey_can_toggle(snapshot: Dictionary) -> bool:
+	return _pause_hotkey_can_toggle(snapshot)
 
 
 func _refresh_connection_buttons(snapshot: Dictionary) -> void:
@@ -3615,6 +3691,8 @@ func _on_table_visual_menu_requested(action: String) -> void:
 			_open_debug_sync_popup()
 		"Catch Up":
 			_catch_up_visuals()
+		"Pause Game", "Resume Game":
+			_toggle_pause_intent(not _effective_pause_state())
 		"Main Menu":
 			if not RecipesClient.offline_mode and _current_viewer_is_host() and _table_exists(RecipesClient.latest_snapshot):
 				_confirm_close_table()
@@ -4004,7 +4082,7 @@ func _refresh_controls(snapshot: Dictionary) -> void:
 		_add_dish_summary_controls(snapshot)
 		_add_transaction_history_controls(snapshot)
 	if bool(snapshot.get("paused", false)):
-		_phase_controls.add_child(_wrapped_label("Game paused by host. Waiting for resume."))
+		_phase_controls.add_child(_wrapped_label(_paused_message(snapshot)))
 		return
 	if not _viewer_can_act(snapshot) and not _viewer_is_witness(snapshot):
 		_phase_controls.add_child(_wrapped_label("This seat is now controlled by a bot."))
@@ -5007,10 +5085,9 @@ func _add_host_admin_controls(snapshot: Dictionary) -> void:
 	if phase != "lobby" and phase != "complete":
 		var game_row := _button_row()
 		_phase_controls.add_child(game_row)
-		if not is_offline:
-			game_row.add_child(_button("Resume Game" if paused else "Pause Game", func() -> void:
-				RecipesClient.send_host_intent({"type": "set_pause", "paused": not bool(RecipesClient.latest_snapshot.get("paused", false))})
-			))
+		game_row.add_child(_button("Resume Game" if paused else "Pause Game", func() -> void:
+			_toggle_pause_intent(not _effective_pause_state())
+		))
 		if not paused or is_offline:
 			game_row.add_child(_button("End Game", func() -> void:
 				if bool(RecipesClient.latest_snapshot.get("offline", false)) or RecipesClient.offline_mode:
@@ -5024,6 +5101,14 @@ func _add_host_admin_controls(snapshot: Dictionary) -> void:
 		_phase_controls.add_child(_button("Switch %s To Bot" % selected.get("name", "Player"), func(id := str(selected.get("id", "")), name := str(selected.get("name", "Player"))) -> void:
 			_confirm_switch_to_bot(id, name)
 		))
+
+
+func _paused_message(snapshot: Dictionary) -> String:
+	if bool(snapshot.get("offline", false)) or RecipesClient.offline_mode:
+		return "Game paused. Press P or Resume Game to continue."
+	if bool(snapshot.get("viewerCanUseHostControls", false)):
+		return "Game paused. Press P or Resume Game to continue."
+	return "Game paused by host. Waiting for resume."
 
 
 func _add_witness_controls(snapshot: Dictionary) -> void:
