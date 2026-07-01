@@ -110,8 +110,11 @@ const FAST_BOT_ANIMATION_SCALE := 0.25
 const VIEWER_ANIMATION_SCALE := 1.35
 const BASKET_SWAP_QUEUE_TIMEOUT_MS := 5000
 const VISUAL_TURN_LAG_FLUSH_MS := 3000
+const BUSY_VISUAL_TURN_LAG_FLUSH_MS := 900
 const MAX_PENDING_VISUAL_SNAPSHOTS := 32
 const MAX_ANIMATION_QUEUE_ESTIMATED_SECONDS := 12.0
+const WEB_ANIMATION_QUEUE_ESTIMATED_SECONDS := 6.0
+const COMPLETE_ANIMATION_QUEUE_ESTIMATED_SECONDS := 1.0
 const PREPARE_ANNOUNCEMENT_HOLD_SECONDS := 2.05
 const COMPLETE_FOOD_ORBIT_MIN_ITEMS := 8
 const COMPLETE_FOOD_ORBIT_MAX_ITEMS := 32
@@ -626,6 +629,7 @@ var _complete_food_orbit_key := ""
 var _complete_orbit_transition_active := false
 var _shared_food_orbit_items: Array = []
 var _compacted_complete_orbit_replay_suppression_active := false
+var _debug_mobile_turn_catchup_enabled := false
 
 
 func _ready() -> void:
@@ -898,6 +902,10 @@ func debug_animation_speed_scale_for_type(type: String) -> float:
 
 func debug_animation_speed_scale_for_event(event: Dictionary) -> float:
 	return _animation_speed_scale(event)
+
+
+func debug_set_mobile_turn_catchup_enabled(enabled: bool) -> void:
+	_debug_mobile_turn_catchup_enabled = enabled
 
 
 func debug_force_visual_turn_lag_flush() -> void:
@@ -2398,6 +2406,7 @@ func _sync_complete_celebration_effects() -> void:
 	_start_complete_avatar_dance()
 	_ensure_complete_food_orbit()
 	_complete_orbit_transition_active = false
+	_compacted_complete_orbit_replay_suppression_active = false
 
 
 func _clear_complete_celebration_effects() -> void:
@@ -4365,10 +4374,12 @@ func _sync_basket_swap_queue_for_snapshot(previous_snapshot: Dictionary, current
 		var context_changed := str(previous_snapshot.get("tableCode", "")) != str(current_snapshot.get("tableCode", ""))
 		context_changed = context_changed or str(previous_snapshot.get("viewerParticipantId", "")) != str(current_snapshot.get("viewerParticipantId", ""))
 		context_changed = context_changed or str(previous_snapshot.get("phase", "")) != str(current_snapshot.get("phase", ""))
-		context_changed = context_changed or str(previous_snapshot.get("currentTurnParticipantId", "")) != str(current_snapshot.get("currentTurnParticipantId", ""))
 		if context_changed:
 			_clear_basket_swap_queue()
 			return
+		var turn_changed := str(previous_snapshot.get("currentTurnParticipantId", "")) != str(current_snapshot.get("currentTurnParticipantId", ""))
+		if turn_changed and _queued_basket_swap_requests.is_empty():
+			_clear_basket_swap_in_flight()
 	var materially_changed := not previous_snapshot.is_empty() and JSON.stringify(previous_snapshot) != JSON.stringify(current_snapshot)
 	var final_snapshot_applied := materially_changed and not _visual_update_waiting()
 	if _basket_swap_intent_in_flight and (_snapshot_identity_key(current_snapshot) != _basket_swap_in_flight_snapshot_key or final_snapshot_applied):
@@ -4386,13 +4397,17 @@ func _emit_basket_swap_intent(intent: Dictionary) -> void:
 func _queue_basket_swap_request(request: Dictionary) -> void:
 	_queued_basket_swap_requests.append(request.duplicate(true))
 	debug_stats["basketSwapQueueSize"] = _queued_basket_swap_requests.size()
-	status_requested.emit("Queued basket swap.")
+	if _pending_snapshot_allows_viewer_action(str(request.get("phase", ""))):
+		status_requested.emit("Catching up to your turn.")
+		call_deferred("_flush_visual_updates")
+	else:
+		status_requested.emit("Queued basket swap.")
 
 
 func _should_queue_basket_swap_click(phase: String) -> bool:
 	if not _basket_swap_intent_in_flight and not _visual_update_waiting():
 		return false
-	return _can_act_now_without_visual_wait(phase)
+	return _can_act_now_without_visual_wait(phase) or _pending_snapshot_allows_viewer_action(phase)
 
 
 func _process_queued_basket_swaps() -> void:
@@ -4477,18 +4492,28 @@ func _can_act_now(phase: String) -> bool:
 
 
 func _can_act_now_without_visual_wait(phase: String) -> bool:
-	if bool(_snapshot.get("paused", false)):
+	return _snapshot_allows_viewer_action(_snapshot, phase)
+
+
+func _pending_snapshot_allows_viewer_action(phase: String) -> bool:
+	var pending_snapshot := _latest_pending_visual_snapshot()
+	return not pending_snapshot.is_empty() and _snapshot_allows_viewer_action(pending_snapshot, phase)
+
+
+func _snapshot_allows_viewer_action(snapshot: Dictionary, phase: String) -> bool:
+	if bool(snapshot.get("paused", false)):
 		return false
-	if _viewer_is_witness():
+	if str(snapshot.get("viewerRole", "")) == "witness":
 		return false
-	var viewer := _participant_by_id(_viewer_id())
+	var viewer_id := str(snapshot.get("viewerParticipantId", _viewer_id()))
+	var viewer := _participant_from_snapshot(snapshot, viewer_id)
 	if str(viewer.get("role", "")) != "active" or str(viewer.get("kind", "human")) != "human":
 		return false
-	if phase != "" and str(_snapshot.get("phase", "")) != phase:
+	if phase != "" and str(snapshot.get("phase", "")) != phase:
 		return false
 	if phase == "deposit" or phase == "lobby" or phase == "eating" or phase == "complete":
 		return true
-	return str(_snapshot.get("currentTurnParticipantId", "")) == _viewer_id()
+	return str(snapshot.get("currentTurnParticipantId", "")) == viewer_id
 
 
 func _is_round_robin_off_turn(phase: String) -> bool:
@@ -4866,9 +4891,6 @@ func _flush_stale_visual_turn_if_needed() -> void:
 	if not _visual_update_waiting():
 		_reset_visual_turn_lag_watch()
 		return
-	if _animation_running or not _animation_queue.is_empty():
-		_reset_visual_turn_lag_watch()
-		return
 	var pending_snapshot := _latest_pending_visual_snapshot()
 	if pending_snapshot.is_empty():
 		_reset_visual_turn_lag_watch()
@@ -4876,6 +4898,10 @@ func _flush_stale_visual_turn_if_needed() -> void:
 	var visual_turn := current_visual_turn_id()
 	var pending_turn := str(pending_snapshot.get("currentTurnParticipantId", ""))
 	if visual_turn == "" or pending_turn == "" or visual_turn == pending_turn:
+		_reset_visual_turn_lag_watch()
+		return
+	var busy := _animation_running or not _animation_queue.is_empty()
+	if busy and not _should_flush_busy_stale_turn(pending_snapshot):
 		_reset_visual_turn_lag_watch()
 		return
 	var key := "%s:%s:%s" % [
@@ -4887,10 +4913,27 @@ func _flush_stale_visual_turn_if_needed() -> void:
 		_visual_turn_lag_key = key
 		_visual_turn_lag_started_msec = Time.get_ticks_msec()
 		return
-	if _visual_turn_lag_elapsed_msec() < VISUAL_TURN_LAG_FLUSH_MS:
+	var threshold := BUSY_VISUAL_TURN_LAG_FLUSH_MS if busy else VISUAL_TURN_LAG_FLUSH_MS
+	if _visual_turn_lag_elapsed_msec() < threshold:
 		return
 	_last_visual_turn_lag_flush = key
 	_flush_visual_updates()
+
+
+func _should_flush_busy_stale_turn(pending_snapshot: Dictionary) -> bool:
+	if not _mobile_turn_catchup_enabled():
+		return false
+	if str(pending_snapshot.get("phase", "")) != "playing" and str(pending_snapshot.get("phase", "")) != "settlement":
+		return false
+	var pending_turn := str(pending_snapshot.get("currentTurnParticipantId", ""))
+	return pending_turn == str(pending_snapshot.get("viewerParticipantId", _viewer_id())) or not _queued_basket_swap_requests.is_empty()
+
+
+func _mobile_turn_catchup_enabled() -> bool:
+	if _debug_mobile_turn_catchup_enabled:
+		return true
+	var os_name := OS.get_name()
+	return os_name == "Web" or os_name == "Android" or os_name == "iOS"
 
 
 func _latest_pending_visual_snapshot() -> Dictionary:
@@ -5218,6 +5261,10 @@ func _events_with_visual_milestones(previous_snapshot: Dictionary, current_snaps
 				milestone["completeOrbitTotal"] = orbit_items.size()
 				milestone["completeOrbitRevealCount"] = orbit_items.size()
 			working = _snapshot_after_eat_step(working, current_snapshot, event)
+			if str(current_snapshot.get("phase", "")) == "complete" \
+					and bool(milestone.get("completeOrbit", false)) \
+					and int(milestone.get("completeOrbitRevealCount", 0)) >= orbit_items.size():
+				working = current_snapshot.duplicate(true)
 			milestone["_snapshotAfter"] = working.duplicate(true)
 		else:
 			working = current_snapshot.duplicate(true)
@@ -5645,14 +5692,31 @@ func _compact_animation_queue_if_needed() -> void:
 	var estimated := _animation_queue_estimated_seconds()
 	debug_stats["animationQueueEstimatedSeconds"] = estimated
 	debug_stats["animationQueueCompactions"] = _animation_queue_compaction_count
-	if estimated <= MAX_ANIMATION_QUEUE_ESTIMATED_SECONDS:
+	var force_final_orbit_compaction := _complete_snapshot_pending() and _animation_queue_has_non_viewer_complete_orbit_event()
+	if not force_final_orbit_compaction and estimated <= _animation_queue_compaction_threshold_seconds():
 		return
 	var compacted: Array = []
 	var removed := 0
 	var compacted_orbit_items: Array = []
 	var compacted_orbit_visible := 0
+	var final_orbit_compaction := _complete_snapshot_pending() and _animation_queue_has_complete_orbit_event()
+	var kept_viewer_final_orbit := false
 	for raw_event in _animation_queue:
 		var event: Dictionary = raw_event
+		if final_orbit_compaction and bool(event.get("completeOrbit", false)):
+			var orbit_payload := _complete_orbit_payload_from_event(event)
+			if not orbit_payload.is_empty():
+				var payload_items: Array = orbit_payload.get("items", [])
+				var payload_visible := int(orbit_payload.get("visible", 0))
+				if payload_visible >= compacted_orbit_visible or payload_items.size() > compacted_orbit_items.size():
+					compacted_orbit_items = payload_items.duplicate(true)
+					compacted_orbit_visible = payload_visible
+			if _event_involves_viewer(event) and not kept_viewer_final_orbit:
+				compacted.append(event)
+				kept_viewer_final_orbit = true
+			else:
+				removed += 1
+			continue
 		if _should_preserve_queued_animation_event(event):
 			compacted.append(event)
 		else:
@@ -5706,9 +5770,52 @@ func _merge_compacted_complete_orbit_payload(queue: Array, items: Array, visible
 			target_event["completeOrbitItems"] = items.duplicate(true)
 			target_event["completeOrbitTotal"] = items.size()
 			target_event["completeOrbitRevealCount"] = normalized_visible
-			queue[target_index] = target_event
+		var complete_snapshot := _complete_pending_snapshot()
+		if not complete_snapshot.is_empty() and normalized_visible >= items.size():
+			target_event["_snapshotAfter"] = complete_snapshot.duplicate(true)
+		queue[target_index] = target_event
 	_remember_shared_food_orbit_items(items, normalized_visible)
 	_compacted_complete_orbit_replay_suppression_active = true
+
+
+func _animation_queue_compaction_threshold_seconds() -> float:
+	if _complete_snapshot_pending() and _animation_queue_has_complete_orbit_event():
+		return COMPLETE_ANIMATION_QUEUE_ESTIMATED_SECONDS
+	if OS.get_name() == "Web":
+		return WEB_ANIMATION_QUEUE_ESTIMATED_SECONDS
+	return MAX_ANIMATION_QUEUE_ESTIMATED_SECONDS
+
+
+func _animation_queue_has_complete_orbit_event() -> bool:
+	for raw_event in _animation_queue:
+		var event: Dictionary = raw_event
+		if bool(event.get("completeOrbit", false)):
+			return true
+	return false
+
+
+func _animation_queue_has_non_viewer_complete_orbit_event() -> bool:
+	for raw_event in _animation_queue:
+		var event: Dictionary = raw_event
+		if bool(event.get("completeOrbit", false)) and not _event_involves_viewer(event):
+			return true
+	return false
+
+
+func _complete_snapshot_pending() -> bool:
+	return not _complete_pending_snapshot().is_empty()
+
+
+func _complete_pending_snapshot() -> Dictionary:
+	if str(_snapshot.get("phase", "")) == "complete":
+		return _snapshot.duplicate(true)
+	if _has_pending_visual_snapshot and str(_pending_visual_snapshot.get("phase", "")) == "complete":
+		return _pending_visual_snapshot.duplicate(true)
+	for raw_snapshot in _pending_visual_snapshots:
+		var snapshot: Dictionary = raw_snapshot
+		if str(snapshot.get("phase", "")) == "complete":
+			return snapshot.duplicate(true)
+	return {}
 
 
 func _should_preserve_queued_animation_event(event: Dictionary) -> bool:

@@ -415,6 +415,7 @@ func _initialize() -> void:
 	_assert_stale_visual_turn_watchdog_flushes(visual)
 	_assert_pending_visual_backlog_preserves_animation_sequence(visual)
 	_assert_visual_backlog_coalesces_bot_only_events(visual)
+	await _assert_mobile_stale_turn_tap_queues_and_catches_up(visual)
 	_assert_in_place_delta_redeem_pass_waits_for_animation(visual)
 	_assert_redeem_pass_and_public_turns_apply_in_order(visual)
 	_assert_deposits_update_basket_one_by_one(visual)
@@ -456,6 +457,7 @@ func _initialize() -> void:
 	await _assert_eat_animation_reanchors_after_food_group_reflow(visual)
 	await _assert_final_eat_starts_orbit_before_congratulations(visual)
 	await _assert_compacted_final_orbit_reveals_all_cooks(visual)
+	await _assert_settlement_share_burst_reaches_complete_panel(visual)
 	_assert_public_final_eat_uses_avatar_source(visual)
 	_assert_animation_event(visual, _complete_before(), _complete_after(), "complete", "complete confirmation queues animation")
 	visual.render(snapshot)
@@ -1270,6 +1272,31 @@ func _assert_compacted_final_orbit_reveals_all_cooks(visual: Node) -> void:
 	visual.debug_flush_animations()
 
 
+func _assert_settlement_share_burst_reaches_complete_panel(visual: Node) -> void:
+	visual.debug_apply_snapshot(_all_cooks_final_settlement_before())
+	await process_frame
+	_require(str(visual.debug_stats.get("phase", "")) == "settlement", "regression fixture starts on the stale settlement panel")
+	_require(_has_text_containing(visual, "Everyone has to settle"), "regression fixture shows the old settlement action message")
+	visual.render(_all_cooks_final_settlement_after())
+	await process_frame
+	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) >= 1, "settlement-to-complete share burst compacts final orbit animations")
+	var guard := 0
+	while bool(visual.call("visual_update_waiting")) and guard < 2:
+		var next_type: String = visual.debug_apply_next_animation_milestone()
+		if next_type == "":
+			break
+		guard += 1
+	await process_frame
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "settlement-to-complete share burst lands on the complete screen promptly")
+	_require(str(visual.debug_stats.get("phase", "")) == "complete", "settlement-to-complete share burst applies the complete snapshot")
+	_require(str(visual.debug_stats.get("recipeName", "")) == "Congratulations!", "settlement-to-complete share burst shows Congratulations")
+	var actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(actions.has("Game Stats"), "settlement-to-complete share burst exposes Game Stats")
+	_require(not _has_text_containing(visual, "Everyone has to settle"), "settlement-to-complete share burst removes the stale settlement action message")
+	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "settlement-to-complete share burst reveals the full orbit")
+	visual.debug_flush_animations()
+
+
 func _assert_public_final_eat_uses_avatar_source(visual: Node) -> void:
 	visual.debug_apply_snapshot(_public_final_eating_before())
 	await process_frame
@@ -2067,6 +2094,46 @@ func _assert_visual_backlog_coalesces_bot_only_events(visual: Node) -> void:
 	_require(event_types.has("turn") and event_types.has("public_prepare"), "visual backlog preserves turn and prepare events")
 	_require(float(visual.debug_stats.get("animationQueueEstimatedSeconds", 999.0)) <= 12.0, "visual backlog estimate is bounded after compaction")
 	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) >= 1, "visual backlog records compaction diagnostics")
+	visual.debug_flush_animations()
+
+
+func _assert_mobile_stale_turn_tap_queues_and_catches_up(visual: Node) -> void:
+	var stale := _snapshot_fixture()
+	stale["currentTurnParticipantId"] = "p2"
+	stale["transactionHistory"] = []
+	stale["transactionTotal"] = 0
+	visual.debug_apply_snapshot(stale)
+	await process_frame
+	visual.debug_set_mobile_turn_catchup_enabled(true)
+
+	var pending := stale.duplicate(true)
+	pending["currentTurnParticipantId"] = "p1"
+	pending["transactionHistory"] = [
+		{"id": "tx_mobile_p2_pass", "turn": 15, "participantId": "p2", "name": "Ben", "action": "Pass Turn", "counterpartyParticipantId": "p1", "counterparty": "Amina", "itemOut": "None", "itemBack": "None"}
+	]
+	pending["transactionTotal"] = 1
+	pending["transactionCursor"] = 1
+	pending["transactionHistoryTotal"] = 1
+	pending["turn"] = int(stale.get("turn", 0)) + 1
+	pending["version"] = int(stale.get("version", 0)) + 1
+
+	visual.set("_animation_queue", [{"type": "public_prepare", "participantId": "p2", "dishName": "Bean Tacos", "unit": "piece"}])
+	visual.set("_pending_visual_snapshot", pending.duplicate(true))
+	visual.set("_has_pending_visual_snapshot", true)
+	visual.set("_pending_visual_snapshots", [pending.duplicate(true)])
+	_intents.clear()
+	_statuses.clear()
+	visual.debug_press_platter_ingredient("beans")
+	await process_frame
+	await process_frame
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p1", "mobile stale-turn tap catches the visual up to the authoritative viewer turn")
+	_require(int(visual.debug_stats.get("basketQueueSize", visual.debug_stats.get("basketSwapQueueSize", 0))) == 0, "mobile stale-turn tap drains the queued basket swap")
+	_require(not _intents.is_empty(), "mobile stale-turn tap emits the queued swap intent after catch-up")
+	var intent: Dictionary = _intents[_intents.size() - 1]
+	_require(str(intent.get("type", "")) == "platter_swap_ingredient", "mobile stale-turn tap emits a basket swap intent")
+	_require(str(intent.get("takeIngredientId", "")) == "beans", "mobile stale-turn tap preserves the tapped basket ingredient")
+	_require(_statuses.has("Catching up to your turn."), "mobile stale-turn tap explains catch-up instead of silently dropping the tap")
+	visual.debug_set_mobile_turn_catchup_enabled(false)
 	visual.debug_flush_animations()
 
 
@@ -2979,6 +3046,29 @@ func _all_cooks_final_eating_after() -> Dictionary:
 	snapshot["version"] = int(snapshot.get("version", 0)) + 1
 	snapshot["turn"] = int(snapshot.get("turn", 0)) + rows.size()
 	snapshot["gameStats"] = {"playerTurnCount": 64, "cycleCount": 8.0, "eatCount": rows.size()}
+	return snapshot
+
+
+func _all_cooks_final_settlement_before() -> Dictionary:
+	var snapshot := _all_cooks_final_eating_before()
+	snapshot["phase"] = "settlement"
+	var participants: Array = snapshot.get("participants", [])
+	if participants.size() > 1:
+		var participant: Dictionary = participants[1]
+		participant["cleared"] = false
+		participants[1] = participant
+		snapshot["participants"] = participants
+	return snapshot
+
+
+func _all_cooks_final_settlement_after() -> Dictionary:
+	var snapshot := _all_cooks_final_eating_after()
+	var participants: Array = snapshot.get("participants", [])
+	for index in range(participants.size()):
+		var participant: Dictionary = participants[index]
+		participant["cleared"] = true
+		participants[index] = participant
+	snapshot["participants"] = participants
 	return snapshot
 
 

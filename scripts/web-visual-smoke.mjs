@@ -16,6 +16,9 @@ const chromeBin = args.get("chrome") ?? process.env.CHROME_BIN ?? "google-chrome
 const outDir = path.resolve(args.get("out-dir") ?? process.env.RECIPES_WEB_SMOKE_OUT ?? path.join(os.tmpdir(), "recipes-web-visual-smoke"));
 const profileDir = path.join(os.tmpdir(), `recipes-chrome-smoke-${process.pid}`);
 const verbose = args.has("verbose");
+const cdpCommandTimeoutMs = Number(args.get("cdp-timeout-ms") ?? 30000);
+const tableLoadDelayMs = Number(args.get("table-load-ms") ?? 18000);
+const strictTableScreenshots = args.has("strict-table-screenshots") || process.env.RECIPES_WEB_STRICT_TABLE_SCREENSHOTS === "1";
 
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -55,12 +58,12 @@ try {
   await delay(2500);
   await capture(cdp, "lobby", 1080, 1920);
   await cdp.send("Page.navigate", { url: smokeTableUrl(url) });
-  await delay(7000);
-  await capture(cdp, "portrait-table", 1080, 1920);
-  await capture(cdp, "wide-table", 1440, 900);
+  await delay(tableLoadDelayMs);
+  await capture(cdp, "portrait-table", 1080, 1920, { stateOnly: !strictTableScreenshots });
+  await capture(cdp, "wide-table", 1440, 900, { stateOnly: !strictTableScreenshots });
   await cdp.close();
 
-  console.log(`Web visual smoke screenshots written to ${outDir}`);
+  console.log(`Web visual smoke artifacts written to ${outDir}`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   if (stderr.trim() !== "") {
@@ -135,12 +138,21 @@ function connectCdp(wsUrl) {
   let nextId = 1;
   const pending = new Map();
 
+  function rejectPending(error) {
+    for (const { reject, timer } of pending.values()) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    pending.clear();
+  }
+
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (!message.id || !pending.has(message.id)) {
       return;
     }
-    const { resolve, reject } = pending.get(message.id);
+    const { resolve, reject, timer } = pending.get(message.id);
+    clearTimeout(timer);
     pending.delete(message.id);
     if (message.error) {
       reject(new Error(`${message.error.message}: ${message.error.data ?? ""}`));
@@ -157,7 +169,11 @@ function connectCdp(wsUrl) {
           nextId += 1;
           socket.send(JSON.stringify({ id, method, params }));
           return new Promise((innerResolve, innerReject) => {
-            pending.set(id, { resolve: innerResolve, reject: innerReject });
+            const timer = setTimeout(() => {
+              pending.delete(id);
+              innerReject(new Error(`Timed out waiting for CDP response to ${method}`));
+            }, cdpCommandTimeoutMs);
+            pending.set(id, { resolve: innerResolve, reject: innerReject, timer });
           });
         },
         close() {
@@ -166,6 +182,7 @@ function connectCdp(wsUrl) {
       });
     });
     socket.addEventListener("error", () => reject(new Error("CDP WebSocket connection failed")));
+    socket.addEventListener("close", () => rejectPending(new Error("CDP WebSocket closed before command completed")));
   });
 }
 
@@ -205,7 +222,7 @@ function smokeTableUrl(baseUrl) {
   return nextUrl.toString();
 }
 
-async function capture(cdp, name, width, height) {
+async function capture(cdp, name, width, height, options = {}) {
   await cdp.send("Emulation.setDeviceMetricsOverride", {
     width,
     height,
@@ -213,20 +230,91 @@ async function capture(cdp, name, width, height) {
     mobile: false
   });
   await delay(name === "wide-table" ? 3500 : 1200);
-  const canvas = await cdp.send("Runtime.evaluate", {
-    returnByValue: true,
-    expression: `(() => {
-      const canvas = document.querySelector("canvas");
-      return canvas ? { width: canvas.width, height: canvas.height } : null;
-    })()`
-  });
-  if (!canvas.result?.value) {
+  const canvas = await canvasState(cdp, name);
+  if (!canvas) {
     throw new Error(`No Godot canvas found before ${name} screenshot`);
   }
-  const screenshot = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+  if (Math.abs(Number(canvas.width) - width) > 2 || Math.abs(Number(canvas.height) - height) > 2) {
+    throw new Error(`Godot canvas size mismatch for ${name}: expected ${width}x${height}, got ${canvas.width}x${canvas.height}`);
+  }
+  if (options.stateOnly) {
+    const filePath = path.join(outDir, `${name}-${width}x${height}.json`);
+    fs.writeFileSync(filePath, JSON.stringify({ name, expected: { width, height }, canvas }, null, 2));
+    return;
+  }
+  const screenshot = await captureCanvasPng(cdp, name);
   const filePath = path.join(outDir, `${name}-${width}x${height}.png`);
-  fs.writeFileSync(filePath, Buffer.from(screenshot.data, "base64"));
+  fs.writeFileSync(filePath, screenshot);
   if (fs.statSync(filePath).size < 20_000) {
     throw new Error(`Screenshot ${filePath} is unexpectedly small`);
   }
+}
+
+async function canvasState(cdp, name) {
+  let result;
+  try {
+    result = await cdp.send("Runtime.evaluate", {
+      returnByValue: true,
+      expression: `(() => {
+        const canvas = document.querySelector("canvas");
+        if (!canvas) {
+          return null;
+        }
+        const rect = canvas.getBoundingClientRect();
+        return {
+          width: canvas.width,
+          height: canvas.height,
+          rectWidth: Math.round(rect.width),
+          rectHeight: Math.round(rect.height),
+          visible: rect.width > 0 && rect.height > 0
+        };
+      })()`
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to inspect ${name}: ${message}`);
+  }
+  const value = result.result?.value;
+  if (!value || !value.visible || value.width < 320 || value.height < 240) {
+    throw new Error(`Godot canvas is not renderable for ${name}: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+async function captureCanvasPng(cdp, name) {
+  let result;
+  try {
+    result = await cdp.send("Runtime.evaluate", {
+      awaitPromise: true,
+      returnByValue: true,
+      expression: `new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const canvas = document.querySelector("canvas");
+          if (!canvas) {
+            resolve(null);
+            return;
+          }
+          try {
+            resolve(canvas.toDataURL("image/png"));
+          } catch (error) {
+            resolve({ error: String(error?.message ?? error) });
+          }
+        }));
+      })`
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to capture ${name}: ${message}`);
+  }
+  const value = result.result?.value;
+  if (!value) {
+    throw new Error(`Failed to capture ${name}: no canvas data URL returned`);
+  }
+  if (typeof value === "object" && value.error) {
+    throw new Error(`Failed to capture ${name}: ${value.error}`);
+  }
+  if (typeof value !== "string" || !value.startsWith("data:image/png;base64,")) {
+    throw new Error(`Failed to capture ${name}: invalid canvas data URL`);
+  }
+  return Buffer.from(value.slice("data:image/png;base64,".length), "base64");
 }
