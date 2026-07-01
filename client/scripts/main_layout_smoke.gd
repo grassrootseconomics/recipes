@@ -10,6 +10,9 @@ func _initialize() -> void:
 	_require(app_tablecloth != null and app_tablecloth.mouse_filter == Control.MOUSE_FILTER_IGNORE, "main scene renders a tiled tablecloth outside the table panel")
 	_require(bool(main.call("_web_display_mode_is_standalone", true)), "web standalone helper accepts installed PWA display mode")
 	_require(not bool(main.call("_web_display_mode_is_standalone", false)), "web standalone helper rejects normal browser tab display mode")
+	var version_label := main.find_child("VersionLabel", true, false) as Label
+	var project_version := str(ProjectSettings.get_setting("application/config/version", "")).strip_edges()
+	_require(version_label != null and version_label.text == "v%s" % project_version, "title screen version label follows project config version")
 
 	var original_window_size := root.size
 	root.size = Vector2i(360, 740)

@@ -10,7 +10,6 @@ const TRANSACTION_POPUP_MAX_ROWS := 6
 const PHONE_POPUP_MAX_WIDTH := 560
 const PHONE_POPUP_MAX_HEIGHT := 430
 const REQUIRED_ACTIVE_SEATS := 8
-const APP_VERSION := "0.0.55"
 const GE_LOGO_PATH := "res://art/branding/ge-logo-horizontal-text.png"
 const SERVER_LIST_PATH := "res://data/servers.json"
 const CLIENT_INVITE_URL := "https://recipes.grassecon.org"
@@ -318,6 +317,11 @@ func _apply_readability_theme() -> void:
 
 func _scaled_ui_font_size(size: int) -> int:
 	return maxi(1, int(round(float(size) * UI_READABILITY_SCALE)))
+
+
+func _app_version() -> String:
+	var version := str(ProjectSettings.get_setting("application/config/version", "")).strip_edges()
+	return version if version != "" else "unknown"
 
 
 func _is_phone_layout_width() -> bool:
@@ -642,7 +646,8 @@ func _build_home_panel() -> PanelContainer:
 	box.add_child(footer_spacer)
 
 	_version_label = Label.new()
-	_version_label.text = "v%s" % APP_VERSION
+	_version_label.name = "VersionLabel"
+	_version_label.text = "v%s" % _app_version()
 	_version_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_version_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_version_label.custom_minimum_size = Vector2(0, 26)
@@ -3691,7 +3696,7 @@ func _debug_sync_report() -> String:
 	var lines: Array[String] = []
 	lines.append("Recipes debug sync")
 	lines.append("Captured: %s" % Time.get_datetime_string_from_system(false, true))
-	lines.append("App version: %s" % APP_VERSION)
+	lines.append("App version: %s" % _app_version())
 	lines.append("OS: %s" % OS.get_name())
 	lines.append("Client profile: %s" % ("default" if _dev_client_profile == "" else _dev_client_profile))
 	lines.append("")
