@@ -113,7 +113,6 @@ const VISUAL_TURN_LAG_FLUSH_MS := 3000
 const BUSY_VISUAL_TURN_LAG_FLUSH_MS := 900
 const MAX_PENDING_VISUAL_SNAPSHOTS := 32
 const MAX_ANIMATION_QUEUE_ESTIMATED_SECONDS := 12.0
-const WEB_ANIMATION_QUEUE_ESTIMATED_SECONDS := 6.0
 const COMPLETE_ANIMATION_QUEUE_ESTIMATED_SECONDS := 1.0
 const PREPARE_ANNOUNCEMENT_HOLD_SECONDS := 2.05
 const COMPLETE_FOOD_ORBIT_MIN_ITEMS := 8
@@ -630,7 +629,6 @@ var _complete_orbit_transition_active := false
 var _shared_food_orbit_items: Array = []
 var _compacted_complete_orbit_replay_suppression_active := false
 var _debug_mobile_turn_catchup_enabled := false
-var _debug_animation_queue_compaction_threshold_seconds := -1.0
 
 
 func _ready() -> void:
@@ -907,10 +905,6 @@ func debug_animation_speed_scale_for_event(event: Dictionary) -> float:
 
 func debug_set_mobile_turn_catchup_enabled(enabled: bool) -> void:
 	_debug_mobile_turn_catchup_enabled = enabled
-
-
-func debug_set_animation_queue_compaction_threshold_seconds(seconds: float) -> void:
-	_debug_animation_queue_compaction_threshold_seconds = seconds
 
 
 func debug_force_visual_turn_lag_flush() -> void:
@@ -1911,8 +1905,9 @@ func _basket_food_slot(group: Dictionary, visual_slot_index: int, slot_size: Vec
 
 	var unit := str(group.get("unitSingular", "part"))
 	var dish_name := str(group.get("dishName", "Dish"))
-	var meta := VisualAssets.dish_meta(dish_name, unit)
-	var label := "%s x%s" % [VisualAssets.short_dish_name(dish_name), int(group.get("count", 0))]
+	var food_count := int(group.get("count", 0))
+	var meta := _dish_piece_card_meta(VisualAssets.dish_meta(dish_name, unit), food_count)
+	var label := VisualAssets.short_dish_name(dish_name)
 	var button := _visual_card("", label, meta, slot_size, func(g := group) -> void:
 		_on_platter_food_group_pressed(g)
 	)
@@ -3254,8 +3249,9 @@ func _render_hand() -> void:
 		var group: Dictionary = raw_group
 		var unit := str(group.get("unitSingular", "part"))
 		var dish_name := str(group.get("dishName", "Dish"))
-		var meta := VisualAssets.dish_meta(dish_name, unit)
-		var label := "%s x%s" % [VisualAssets.short_dish_name(dish_name), int(group.get("count", 0))]
+		var food_count := int(group.get("count", 0))
+		var meta := _dish_piece_card_meta(VisualAssets.dish_meta(dish_name, unit), food_count)
+		var label := VisualAssets.short_dish_name(dish_name)
 		var button := _plain_asset_item(label, meta, HAND_FOOD_SIZE, func(g := group) -> void:
 			_on_inventory_food_group_pressed(g)
 		)
@@ -4928,10 +4924,10 @@ func _flush_stale_visual_turn_if_needed() -> void:
 func _should_flush_busy_stale_turn(pending_snapshot: Dictionary) -> bool:
 	if not _mobile_turn_catchup_enabled():
 		return false
-	if str(pending_snapshot.get("phase", "")) != "playing" and str(pending_snapshot.get("phase", "")) != "settlement":
+	var phase := str(pending_snapshot.get("phase", ""))
+	if phase != "playing" and phase != "settlement":
 		return false
-	var pending_turn := str(pending_snapshot.get("currentTurnParticipantId", ""))
-	return pending_turn == str(pending_snapshot.get("viewerParticipantId", _viewer_id())) or not _queued_basket_swap_requests.is_empty()
+	return not _queued_basket_swap_requests.is_empty() and _snapshot_allows_viewer_action(pending_snapshot, phase)
 
 
 func _mobile_turn_catchup_enabled() -> bool:
@@ -5785,12 +5781,8 @@ func _merge_compacted_complete_orbit_payload(queue: Array, items: Array, visible
 
 
 func _animation_queue_compaction_threshold_seconds() -> float:
-	if _debug_animation_queue_compaction_threshold_seconds >= 0.0:
-		return _debug_animation_queue_compaction_threshold_seconds
 	if _complete_snapshot_pending() and _animation_queue_has_complete_orbit_event():
 		return COMPLETE_ANIMATION_QUEUE_ESTIMATED_SECONDS
-	if OS.get_name() == "Web":
-		return WEB_ANIMATION_QUEUE_ESTIMATED_SECONDS
 	return MAX_ANIMATION_QUEUE_ESTIMATED_SECONDS
 
 
@@ -5827,13 +5819,7 @@ func _complete_pending_snapshot() -> Dictionary:
 
 
 func _should_preserve_queued_animation_event(event: Dictionary) -> bool:
-	if _event_involves_viewer(event):
-		return true
-	match str(event.get("type", "")):
-		"prepare", "public_prepare", "complete", "turn":
-			return true
-		_:
-			return false
+	return true
 
 
 func _animation_queue_estimated_seconds() -> float:
@@ -9507,6 +9493,12 @@ func _card_meta_with_stack(meta: Dictionary, count: int) -> Dictionary:
 	return stacked
 
 
+func _dish_piece_card_meta(meta: Dictionary, count: int) -> Dictionary:
+	var dish_meta := meta.duplicate(true)
+	dish_meta["dish_piece_count"] = maxi(1, count)
+	return dish_meta
+
+
 func _add_card_stack_layers(button: Button, meta: Dictionary) -> void:
 	if not bool(meta.get("stacked_card", false)):
 		return
@@ -9682,7 +9674,11 @@ func _add_turn_circle(parent: Control) -> void:
 func _add_visual_content(button: Button, top_text: String, bottom_text: String, meta: Dictionary, minimum: Vector2, ink: Color, framed: bool) -> void:
 	var pad := 4 if framed else 2
 	var top_band := 20 if top_text != "" else 0
-	var bottom_band := 42 if bottom_text.find("\n") >= 0 else 31
+	var dish_piece_count := int(meta.get("dish_piece_count", 0))
+	var uses_dish_piece_count := dish_piece_count > 0
+	var bottom_band := 44 if uses_dish_piece_count else (42 if bottom_text.find("\n") >= 0 else 31)
+	if uses_dish_piece_count and minimum.y <= 60.0:
+		bottom_band = 30
 	var stack_gap := 5 if bool(meta.get("stacked_card", false)) else 0
 
 	if top_text != "":
@@ -9706,10 +9702,43 @@ func _add_visual_content(button: Button, top_text: String, bottom_text: String, 
 		_place_overlay(mark, pad, pad + top_band, -pad, -(bottom_band + pad + stack_gap))
 		button.add_child(mark)
 
-	var bottom := _visual_text_label(bottom_text, ink)
-	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_place_overlay(bottom, pad, -(bottom_band + stack_gap), -pad, -(pad + stack_gap))
-	button.add_child(bottom)
+	if uses_dish_piece_count:
+		_add_dish_piece_card_labels(button, bottom_text, dish_piece_count, ink, pad, bottom_band, stack_gap, minimum)
+	else:
+		var bottom := _visual_text_label(bottom_text, ink)
+		bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_place_overlay(bottom, pad, -(bottom_band + stack_gap), -pad, -(pad + stack_gap))
+		button.add_child(bottom)
+
+
+func _add_dish_piece_card_labels(button: Button, dish_name: String, count: int, ink: Color, pad: int, bottom_band: int, stack_gap: int, minimum: Vector2) -> void:
+	var compact := minimum.y <= 60.0
+	var count_height := 13 if compact else 17
+	var name_font_size := 10 if compact else 13
+	var count_font_size := 10 if compact else 13
+	var outline_color := Color(0.98, 0.93, 0.78, 0.86)
+
+	var name := _visual_text_label(dish_name, ink)
+	name.name = "DishPieceNameLabel"
+	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	name.clip_text = true
+	name.add_theme_font_size_override("font_size", name_font_size)
+	name.add_theme_color_override("font_outline_color", outline_color)
+	name.add_theme_constant_override("outline_size", 1)
+	_place_overlay(name, pad, -(bottom_band + stack_gap), -pad, -(count_height + pad + stack_gap))
+	button.add_child(name)
+
+	var count_label := _visual_text_label("x%s" % maxi(1, count), ink)
+	count_label.name = "DishPieceCountLabel"
+	count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	count_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	count_label.clip_text = true
+	count_label.add_theme_font_size_override("font_size", count_font_size)
+	count_label.add_theme_color_override("font_outline_color", outline_color)
+	count_label.add_theme_constant_override("outline_size", 1)
+	_place_overlay(count_label, pad, -(count_height + pad + stack_gap), -pad, -(pad + stack_gap))
+	button.add_child(count_label)
 
 
 func _place_overlay(control: Control, left: int, top: int, right: int, bottom: int) -> void:

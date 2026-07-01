@@ -229,13 +229,15 @@ func _initialize() -> void:
 	var mixed_hand := snapshot.duplicate(true)
 	mixed_hand["ownFoodParts"] = [
 		{"id": "dish_a_part_1", "dishId": "dish_a", "dishName": "Cheese Frittata", "unitSingular": "slice", "unitPlural": "slices", "makerParticipantId": "p1", "location": {"type": "hand", "participantId": "p1"}},
-		{"id": "dish_b_part_1", "dishId": "dish_b", "dishName": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "makerParticipantId": "p2", "location": {"type": "hand", "participantId": "p1"}}
+		{"id": "dish_b_part_1", "dishId": "dish_b", "dishName": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "makerParticipantId": "p2", "location": {"type": "hand", "participantId": "p1"}},
+		{"id": "dish_b_part_2", "dishId": "dish_b", "dishName": "Bean Dip", "unitSingular": "scoop", "unitPlural": "scoops", "makerParticipantId": "p2", "location": {"type": "hand", "participantId": "p1"}}
 	]
 	visual.debug_apply_snapshot(mixed_hand)
 	await process_frame
 	var second_row_piece := visual.find_child("HandFood_dish_b", true, false) as Control
 	_require(second_row_piece != null and second_row_piece.size.y >= 92.0, "second-row finished dish pieces keep enough height for their text labels")
-	_require(second_row_piece != null and second_row_piece.tooltip_text == "Ben's Bean Dip - 1 scoop", "held finished dish piece tooltip shows maker, full recipe name, unit, and quantity")
+	_require(second_row_piece != null and second_row_piece.tooltip_text == "Ben's Bean Dip - 2 scoops", "held finished dish piece tooltip shows maker, full recipe name, unit, and quantity")
+	_require(second_row_piece != null and _node_has_label_text(second_row_piece, "x2"), "held finished dish piece shows grouped quantity even when the name is separate")
 	visual.debug_press_own_food_part("Bean Dip")
 	await process_frame
 	var food_popup := visual.find_child("OfferPopup", true, false) as PopupPanel
@@ -243,7 +245,7 @@ func _initialize() -> void:
 	visual.debug_open_own_food_part_info("Bean Dip")
 	await process_frame
 	_require(food_popup != null and food_popup.visible, "double-tapping a held finished dish piece opens its food-piece info popup")
-	_require(_has_text_containing(visual, "Ben's Bean Dip - 1 scoop"), "food-piece info popup shows maker, full recipe name, unit, and quantity")
+	_require(_has_text_containing(visual, "Ben's Bean Dip - 2 scoops"), "food-piece info popup shows maker, full recipe name, unit, and quantity")
 	visual.debug_apply_snapshot(mixed_hand)
 	await process_frame
 	_require(food_popup != null and food_popup.visible, "food-piece info popup stays open across table refreshes")
@@ -341,6 +343,7 @@ func _initialize() -> void:
 	_require(visual.find_child("PlatterFood_dish_1", true, false) != null, "platter food piece remains visible inside a fixed basket slot")
 	var platter_food := visual.find_child("PlatterFood_dish_1", true, false) as Control
 	_require(platter_food != null and platter_food.tooltip_text == "Diego's Vegetable Chili - 2 cups", "basket finished dish piece tooltip shows maker, full recipe name, unit, and quantity")
+	_require(platter_food != null and _node_has_label_text(platter_food, "x2"), "basket finished dish piece keeps quantity visible beside truncated dish names")
 	if food_popup != null:
 		food_popup.hide()
 	visual.debug_press_platter_food_part("Vegetable Chili")
@@ -407,7 +410,6 @@ func _initialize() -> void:
 	await process_frame
 	await _assert_start_snapshot_animates_offerings_from_empty_basket(visual)
 	await _assert_eight_start_snapshot_animates_offerings_from_cooks_to_fixed_basket(visual)
-	await _assert_compacted_start_snapshot_reaches_playing(visual)
 	_assert_turn_update_waits_for_animation(visual)
 	_assert_turn_handoff_does_not_preempt_animation_actor(visual)
 	_assert_batch_redeem_updates_counts_one_by_one(visual)
@@ -415,7 +417,7 @@ func _initialize() -> void:
 	_assert_multi_redeem_pass_auto_prepare_waits_for_prepare_animation(visual)
 	_assert_stale_visual_turn_watchdog_flushes(visual)
 	_assert_pending_visual_backlog_preserves_animation_sequence(visual)
-	_assert_visual_backlog_coalesces_bot_only_events(visual)
+	_assert_visual_backlog_preserves_non_viewer_events(visual)
 	await _assert_mobile_stale_turn_tap_queues_and_catches_up(visual)
 	_assert_in_place_delta_redeem_pass_waits_for_animation(visual)
 	_assert_redeem_pass_and_public_turns_apply_in_order(visual)
@@ -1713,6 +1715,14 @@ func _has_label_containing(node: Node, needle: String) -> bool:
 	return false
 
 
+func _node_has_label_text(node: Node, text: String) -> bool:
+	for raw_child in node.find_children("*", "Label", true, false):
+		var label := raw_child as Label
+		if label != null and label.text == text:
+			return true
+	return false
+
+
 func _action_status_labels_fit(node: Node) -> bool:
 	var checked := 0
 	for raw_child in node.find_children("ActionStatusLabel", "Label", true, false):
@@ -2077,7 +2087,7 @@ func _assert_pending_visual_backlog_preserves_animation_sequence(visual: Node) -
 	visual.debug_flush_animations()
 
 
-func _assert_visual_backlog_coalesces_bot_only_events(visual: Node) -> void:
+func _assert_visual_backlog_preserves_non_viewer_events(visual: Node) -> void:
 	visual.debug_apply_snapshot(_eight_seat_snapshot())
 	var events: Array = []
 	for index in range(80):
@@ -2091,10 +2101,9 @@ func _assert_visual_backlog_coalesces_bot_only_events(visual: Node) -> void:
 	for raw_event in queue:
 		var event: Dictionary = raw_event
 		event_types.append(str(event.get("type", "")))
-	_require(queue.size() < events.size(), "visual backlog coalesces stale bot-only animations")
+	_require(queue.size() == events.size(), "visual backlog preserves non-viewer gameplay animations")
 	_require(event_types.has("turn") and event_types.has("public_prepare"), "visual backlog preserves turn and prepare events")
-	_require(float(visual.debug_stats.get("animationQueueEstimatedSeconds", 999.0)) <= 12.0, "visual backlog estimate is bounded after compaction")
-	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) >= 1, "visual backlog records compaction diagnostics")
+	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) == 0, "ordinary visual backlog does not compact gameplay events")
 	visual.debug_flush_animations()
 
 
@@ -2122,6 +2131,7 @@ func _assert_mobile_stale_turn_tap_queues_and_catches_up(visual: Node) -> void:
 	visual.set("_pending_visual_snapshot", pending.duplicate(true))
 	visual.set("_has_pending_visual_snapshot", true)
 	visual.set("_pending_visual_snapshots", [pending.duplicate(true)])
+	_require(not bool(visual.call("_should_flush_busy_stale_turn", pending)), "mobile passive catch-up preserves non-viewer animations when the viewer turn is pending")
 	_intents.clear()
 	_statuses.clear()
 	visual.debug_press_platter_ingredient("beans")
@@ -2316,27 +2326,6 @@ func _assert_eight_start_snapshot_animates_offerings_from_cooks_to_fixed_basket(
 			_require(_visible_platter_count(visual, ingredient_id) == expected_count, "8-seat opening reveals %s directly in its final basket cell" % ingredient_id)
 	visual.debug_flush_animations()
 	_require(_visible_platter_total(visual) == 16, "8-seat opening ends with all sixteen offerings in the basket")
-
-
-func _assert_compacted_start_snapshot_reaches_playing(visual: Node) -> void:
-	visual.debug_set_animation_queue_compaction_threshold_seconds(0.5)
-	visual.debug_apply_snapshot(_eight_lobby_before_start())
-	visual.render(_eight_start_after())
-	await process_frame
-	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) >= 1, "opening deposit burst compacts under web-style animation budget")
-	var guard := 0
-	while bool(visual.call("visual_update_waiting")) and guard < 3:
-		var next_type: String = visual.debug_apply_next_animation_milestone()
-		if next_type == "":
-			break
-		_require(next_type == "deposit", "compacted opening start preserves only opening deposit cues")
-		guard += 1
-	await process_frame
-	_require(str(visual.debug_stats.get("phase", "")) == "playing", "compacted opening start applies the final playing snapshot")
-	_require(not _has_text_containing(visual, "Offering given. Waiting for the table."), "compacted opening start removes the stale deposit waiting text")
-	_require(_visible_platter_total(visual) == 16, "compacted opening start shows all opening offerings after preserved cues")
-	visual.debug_set_animation_queue_compaction_threshold_seconds(-1.0)
-	visual.debug_flush_animations()
 
 
 func _valid_unique_anchor_count(anchors: Array, key: String) -> int:

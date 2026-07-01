@@ -175,7 +175,7 @@ func _initialize() -> void:
 	_require(pending_offer_end_button != null and pending_offer_end_button.custom_minimum_size.x >= 164.0, "pending offers end-turn button is wide enough for readable text")
 	_require(pending_offer_review_button != null and pending_offer_review_button.custom_minimum_size.x >= 144.0, "pending offers review button is wide enough for readable text")
 	_require(status_label != null and not status_label.visible, "pending-offer active-game prompt does not reveal the layout status label")
-	_require(floating_status_label != null and floating_status_label.visible, "pending-offer active-game prompt uses floating status text")
+	_require(floating_status_label != null and not floating_status_label.visible, "pending-offer active-game prompt does not show floating gameplay status text")
 	if pending_offer_dialog != null:
 		pending_offer_dialog.hide()
 	var controlled_offer_snapshot := _pending_offer_playing_snapshot()

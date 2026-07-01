@@ -2001,11 +2001,9 @@ func _set_status_message(message: String, visible := true) -> void:
 	if not is_instance_valid(_status_label):
 		return
 	if visible and _game_started(RecipesClient.latest_snapshot):
-		_status_label.text = message
 		_status_label.visible = false
 		if is_instance_valid(_floating_status_label):
-			_floating_status_label.text = message
-			_floating_status_label.visible = message != ""
+			_floating_status_label.visible = false
 		return
 	if is_instance_valid(_floating_status_label):
 		_floating_status_label.visible = false
