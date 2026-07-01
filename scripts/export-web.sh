@@ -31,10 +31,14 @@ touch "$WEB_DIR/.nojekyll"
 rm -f "$WEB_DIR/index.service.worker.js" "$WEB_DIR/index.offline.html"
 
 if [[ "$WEB_DIR" = /* ]]; then
+  WEB_INDEX="$WEB_DIR/index.html"
   DISPLAY_WEB_DIR="$WEB_DIR"
 else
+  WEB_INDEX="$ROOT_DIR/client/$WEB_DIR/index.html"
   DISPLAY_WEB_DIR="client/$WEB_DIR"
 fi
+
+node "$ROOT_DIR/scripts/patch-web-shell.mjs" "$WEB_INDEX"
 
 cat <<EOF
 Web export written to $DISPLAY_WEB_DIR

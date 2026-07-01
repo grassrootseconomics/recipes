@@ -407,6 +407,7 @@ func _initialize() -> void:
 	await process_frame
 	await _assert_start_snapshot_animates_offerings_from_empty_basket(visual)
 	await _assert_eight_start_snapshot_animates_offerings_from_cooks_to_fixed_basket(visual)
+	await _assert_compacted_start_snapshot_reaches_playing(visual)
 	_assert_turn_update_waits_for_animation(visual)
 	_assert_turn_handoff_does_not_preempt_animation_actor(visual)
 	_assert_batch_redeem_updates_counts_one_by_one(visual)
@@ -2315,6 +2316,27 @@ func _assert_eight_start_snapshot_animates_offerings_from_cooks_to_fixed_basket(
 			_require(_visible_platter_count(visual, ingredient_id) == expected_count, "8-seat opening reveals %s directly in its final basket cell" % ingredient_id)
 	visual.debug_flush_animations()
 	_require(_visible_platter_total(visual) == 16, "8-seat opening ends with all sixteen offerings in the basket")
+
+
+func _assert_compacted_start_snapshot_reaches_playing(visual: Node) -> void:
+	visual.debug_set_animation_queue_compaction_threshold_seconds(0.5)
+	visual.debug_apply_snapshot(_eight_lobby_before_start())
+	visual.render(_eight_start_after())
+	await process_frame
+	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) >= 1, "opening deposit burst compacts under web-style animation budget")
+	var guard := 0
+	while bool(visual.call("visual_update_waiting")) and guard < 3:
+		var next_type: String = visual.debug_apply_next_animation_milestone()
+		if next_type == "":
+			break
+		_require(next_type == "deposit", "compacted opening start preserves only opening deposit cues")
+		guard += 1
+	await process_frame
+	_require(str(visual.debug_stats.get("phase", "")) == "playing", "compacted opening start applies the final playing snapshot")
+	_require(not _has_text_containing(visual, "Offering given. Waiting for the table."), "compacted opening start removes the stale deposit waiting text")
+	_require(_visible_platter_total(visual) == 16, "compacted opening start shows all opening offerings after preserved cues")
+	visual.debug_set_animation_queue_compaction_threshold_seconds(-1.0)
+	visual.debug_flush_animations()
 
 
 func _valid_unique_anchor_count(anchors: Array, key: String) -> int:

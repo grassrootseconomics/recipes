@@ -630,6 +630,7 @@ var _complete_orbit_transition_active := false
 var _shared_food_orbit_items: Array = []
 var _compacted_complete_orbit_replay_suppression_active := false
 var _debug_mobile_turn_catchup_enabled := false
+var _debug_animation_queue_compaction_threshold_seconds := -1.0
 
 
 func _ready() -> void:
@@ -906,6 +907,10 @@ func debug_animation_speed_scale_for_event(event: Dictionary) -> float:
 
 func debug_set_mobile_turn_catchup_enabled(enabled: bool) -> void:
 	_debug_mobile_turn_catchup_enabled = enabled
+
+
+func debug_set_animation_queue_compaction_threshold_seconds(seconds: float) -> void:
+	_debug_animation_queue_compaction_threshold_seconds = seconds
 
 
 func debug_force_visual_turn_lag_flush() -> void:
@@ -4996,6 +5001,7 @@ func _apply_start_setup_transition(current_snapshot: Dictionary) -> void:
 	if _animation_queue.is_empty():
 		_apply_pending_visual_snapshot_after_layout()
 	else:
+		_ensure_last_animation_applies_snapshot(current_snapshot)
 		call_deferred("_play_next_animation_after_layout")
 
 
@@ -5779,6 +5785,8 @@ func _merge_compacted_complete_orbit_payload(queue: Array, items: Array, visible
 
 
 func _animation_queue_compaction_threshold_seconds() -> float:
+	if _debug_animation_queue_compaction_threshold_seconds >= 0.0:
+		return _debug_animation_queue_compaction_threshold_seconds
 	if _complete_snapshot_pending() and _animation_queue_has_complete_orbit_event():
 		return COMPLETE_ANIMATION_QUEUE_ESTIMATED_SECONDS
 	if OS.get_name() == "Web":
@@ -6874,6 +6882,15 @@ func _apply_animation_event_snapshot(event: Dictionary) -> void:
 		var snapshot: Dictionary = event.get("_snapshotAfter", {})
 		if not snapshot.is_empty():
 			_apply_snapshot(snapshot)
+
+
+func _ensure_last_animation_applies_snapshot(snapshot: Dictionary) -> void:
+	if _animation_queue.is_empty() or snapshot.is_empty():
+		return
+	var index := _animation_queue.size() - 1
+	var event: Dictionary = _animation_queue[index]
+	event["_snapshotAfter"] = snapshot.duplicate(true)
+	_animation_queue[index] = event
 
 
 func _queue_pending_visual_snapshot(snapshot: Dictionary) -> void:
