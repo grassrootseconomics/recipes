@@ -1224,7 +1224,7 @@ func _game_stats() -> Dictionary:
 		if _transaction_asset_is_food_piece(str(transaction.get("itemOut", ""))) or _transaction_asset_is_food_piece(str(transaction.get("itemBack", ""))):
 			food_piece_settlement_swaps += 1
 	var asset_loss_count := _asset_loss_count(active_participants)
-	var productivity_count := _count_transactions(history, "Share") + _count_transactions(history, "Eat")
+	var productivity_count := _food_shared_count(history)
 	var total_trades := common_basket_swaps + direct_exchanges + settlement_swaps
 	var hoarding := _hoarding_index()
 	return {
@@ -1269,6 +1269,22 @@ func _asset_loss_count(active_participants: Array) -> int:
 	return loss
 
 
+func _food_shared_count(history: Array) -> int:
+	var dish_state_total := 0
+	for raw_dish in table.get("dishes", {}).values():
+		var dish: Dictionary = raw_dish
+		dish_state_total += maxi(0, int(dish.get("partsEaten", 0)))
+	if dish_state_total > 0:
+		return dish_state_total
+	var total := 0
+	for raw_transaction in history:
+		var transaction: Dictionary = raw_transaction
+		var action := str(transaction.get("action", ""))
+		if action == "Share" or action == "Eat":
+			total += _asset_quantity_from_label(str(transaction.get("itemOut", "")))
+	return total
+
+
 func _profit_gain_percent(productivity_count: int, asset_loss_count: int) -> float:
 	if asset_loss_count <= 0:
 		return 0.0
@@ -1285,8 +1301,14 @@ func _count_transactions(history: Array, action: String) -> int:
 
 
 func _transaction_asset_is_food_piece(label: String) -> bool:
-	var normalized := label.strip_edges().to_lower()
-	return normalized != "" and normalized != "none" and normalized != "turn" and normalized.find("card") < 0
+	var normalized := _normalized_asset_label(label)
+	if normalized == "":
+		return false
+	for raw_ingredient in _catalog.get("ingredients", []):
+		var ingredient: Dictionary = raw_ingredient
+		if str(ingredient.get("name", ingredient.get("id", ""))).strip_edges().to_lower() == normalized:
+			return false
+	return true
 
 
 func _hoarding_index() -> Dictionary:

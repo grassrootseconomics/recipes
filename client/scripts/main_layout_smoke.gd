@@ -146,6 +146,7 @@ func _initialize() -> void:
 	online_non_host_snapshot["connectionParticipantId"] = "p2"
 	online_non_host_snapshot["viewerParticipantId"] = "p2"
 	_require(not bool(main.call("debug_pause_hotkey_can_toggle", online_non_host_snapshot)), "online non-host cannot use the pause hotkey")
+	_require(bool(main.call("debug_skip_animations_hotkey_can_toggle", online_non_host_snapshot)), "online non-host can use the local skip animations hotkey")
 	recipes_client.table_code = "JOINME"
 	recipes_client.call("_handle_socket_message", JSON.stringify({"type": "heartbeat", "tableCode": "JOINME", "version": 12, "transactionCursor": 45, "phase": "playing", "currentTurnParticipantId": "p2", "sentAtMs": 123}))
 	_require(str(recipes_client.last_socket_message_type) == "heartbeat", "online heartbeat counts as socket activity")
@@ -213,6 +214,7 @@ func _initialize() -> void:
 	var table_main_menu_button := visual.find_child("TableMainMenuButton", true, false) as Control
 	_require(table_main_menu_button != null and not table_main_menu_button.visible, "table hides the direct Main Menu button until the game is over")
 	_require(bool(main.call("debug_pause_hotkey_can_toggle", recipes_client.latest_snapshot)), "offline active table can use the pause hotkey")
+	_require(bool(main.call("debug_skip_animations_hotkey_can_toggle", recipes_client.latest_snapshot)), "offline active table can use the skip animations hotkey")
 	main.call("_on_pause_hotkey_pressed")
 	await process_frame
 	_require(bool(recipes_client.latest_snapshot.get("paused", false)), "offline pause hotkey pauses the table snapshot")
@@ -229,6 +231,16 @@ func _initialize() -> void:
 	await process_frame
 	_require(not bool(recipes_client.latest_snapshot.get("paused", false)), "table menu Resume Game resumes the offline table snapshot")
 	_require(not bool(visual.call("debug_visual_paused")), "table menu Resume Game resumes table animations")
+	main.call("_on_skip_animations_hotkey_pressed")
+	await process_frame
+	_require(bool(main.call("debug_skip_animations_enabled")), "offline skip animations hotkey enables the local skip flag")
+	_require(bool(visual.call("debug_skip_animations")), "offline skip animations hotkey reaches the table visual")
+	var skip_actions: Array = visual.debug_stats.get("menuActions", [])
+	_require(skip_actions.has("Play Animations"), "skip animations hotkey switches hamburger action to Play Animations")
+	main.call("_on_table_visual_menu_requested", "Play Animations")
+	await process_frame
+	_require(not bool(main.call("debug_skip_animations_enabled")), "table menu Play Animations disables the local skip flag")
+	_require(not bool(visual.call("debug_skip_animations")), "table menu Play Animations reaches the table visual")
 	var root_scroll := _control_from_property(main, "_root_scroll") as ScrollContainer
 	_require(root_scroll != null and root_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED, "main table view disables root page scrolling during play")
 	if root_scroll != null:

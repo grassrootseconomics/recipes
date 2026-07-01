@@ -1,4 +1,5 @@
 import { activeParticipants } from "./game.js";
+import { INGREDIENTS } from "./constants.js";
 import type { GameStats, Table, TransactionAction, TransactionRecord } from "./types.js";
 
 export function computeGameStats(table: Table): GameStats {
@@ -13,7 +14,7 @@ export function computeGameStats(table: Table): GameStats {
   const settlementRows = history.filter((transaction) => transaction.action === "Settlement Swap");
   const settlementSwapCount = settlementRows.length;
   const assetLossCount = countConsumedRealIngredients(table);
-  const productivityCount = countAction(history, "Share") + countAction(history, "Eat");
+  const productivityCount = countSharedFoodPieces(table, history);
   const totalTrades = commonBasketSwapCount + directExchangeCount + settlementSwapCount;
   return {
     activePlayerCount,
@@ -56,8 +57,11 @@ function settlementSwapInvolvesFoodPiece(transaction: TransactionRecord): boolea
 }
 
 function transactionAssetIsFoodPiece(label: string): boolean {
-  const normalized = label.trim().toLowerCase();
-  return normalized !== "" && normalized !== "none" && normalized !== "turn" && !normalized.includes("card");
+  const normalized = normalizeAssetLabel(label);
+  if (!normalized) {
+    return false;
+  }
+  return !INGREDIENTS.some((ingredient) => ingredient.name.trim().toLowerCase() === normalized);
 }
 
 function countConsumedRealIngredients(table: Table): number {
@@ -65,6 +69,16 @@ function countConsumedRealIngredients(table: Table): number {
     const remaining = participant.realIngredientStock ?? table.stockPerIngredient;
     return total + Math.max(0, table.stockPerIngredient - remaining);
   }, 0);
+}
+
+function countSharedFoodPieces(table: Table, history: TransactionRecord[]): number {
+  const dishStateTotal = Object.values(table.dishes ?? {}).reduce((total, dish) => total + Math.max(0, dish.partsEaten ?? 0), 0);
+  if (dishStateTotal > 0) {
+    return dishStateTotal;
+  }
+  return history
+    .filter((transaction) => transaction.action === "Share" || transaction.action === "Eat")
+    .reduce((total, transaction) => total + assetQuantity(transaction.itemOut), 0);
 }
 
 function percentGain(productivityCount: number, assetLossCount: number): number {

@@ -44,13 +44,15 @@ class FixedScrollContainer:
 		return fixed_minimum_size
 
 
-class PauseHotkeyRouter:
+class TableHotkeyRouter:
 	extends Node
 
-	var callback := Callable()
+	var pause_callback := Callable()
+	var skip_callback := Callable()
 
-	func _init(callback_callable := Callable()) -> void:
-		callback = callback_callable
+	func _init(pause_callable := Callable(), skip_callable := Callable()) -> void:
+		pause_callback = pause_callable
+		skip_callback = skip_callable
 		process_mode = Node.PROCESS_MODE_ALWAYS
 
 	func _input(event: InputEvent) -> void:
@@ -59,11 +61,20 @@ class PauseHotkeyRouter:
 		var key_event := event as InputEventKey
 		if not key_event.pressed or key_event.echo:
 			return
-		if key_event.keycode != KEY_P and key_event.physical_keycode != KEY_P:
+		if key_event.ctrl_pressed or key_event.meta_pressed or key_event.alt_pressed:
 			return
-		if callback.is_valid():
-			callback.call()
-			get_viewport().set_input_as_handled()
+		var keycode := key_event.keycode
+		var physical_keycode := key_event.physical_keycode
+		if keycode == KEY_P or physical_keycode == KEY_P:
+			if pause_callback.is_valid():
+				pause_callback.call()
+				get_viewport().set_input_as_handled()
+			return
+		if keycode == KEY_S or physical_keycode == KEY_S:
+			if skip_callback.is_valid():
+				skip_callback.call()
+				get_viewport().set_input_as_handled()
+			return
 
 
 var _status_label: Label
@@ -217,6 +228,7 @@ var _active_game_auto_scroll_key := ""
 var _close_table_after_reconnect := false
 var _return_to_menu_after_close_table := false
 var _local_pause_hotkey_state := false
+var _skip_animations_enabled := false
 
 
 func _ready() -> void:
@@ -242,7 +254,7 @@ func _ready() -> void:
 	add_child(_lobby_name_publish_timer)
 	_lobby_name_publish_timer.timeout.connect(_flush_pending_lobby_name_edits)
 	_build_ui()
-	_pause_hotkey_router = PauseHotkeyRouter.new(_on_pause_hotkey_pressed)
+	_pause_hotkey_router = TableHotkeyRouter.new(_on_pause_hotkey_pressed, _on_skip_animations_hotkey_pressed)
 	add_child(_pause_hotkey_router)
 	set_process(true)
 	RecipesClient.snapshot_received.connect(_on_snapshot_received)
@@ -3110,6 +3122,7 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 	if is_instance_valid(_table_visual):
 		_table_visual.visible = true
 		_fit_table_visual_to_window()
+		_apply_skip_animation_state(_skip_animations_enabled)
 		_table_visual.render(snapshot)
 		_apply_visual_pause_state(snapshot_paused)
 		_fit_table_visual_to_window()
@@ -3331,6 +3344,12 @@ func _on_pause_hotkey_pressed() -> void:
 	_toggle_pause_intent(not _effective_pause_state())
 
 
+func _on_skip_animations_hotkey_pressed() -> void:
+	if not _skip_animations_hotkey_can_toggle(RecipesClient.latest_snapshot):
+		return
+	_toggle_skip_animations(not _skip_animations_enabled)
+
+
 func _pause_hotkey_can_toggle(snapshot: Dictionary) -> bool:
 	if not _table_exists(snapshot):
 		return false
@@ -3342,6 +3361,15 @@ func _pause_hotkey_can_toggle(snapshot: Dictionary) -> bool:
 	if bool(snapshot.get("offline", false)) or RecipesClient.offline_mode:
 		return true
 	return bool(snapshot.get("viewerCanUseHostControls", false))
+
+
+func _skip_animations_hotkey_can_toggle(snapshot: Dictionary) -> bool:
+	if not _table_exists(snapshot):
+		return false
+	if _pause_hotkey_text_focus_active():
+		return false
+	var phase := str(snapshot.get("phase", ""))
+	return phase != "" and phase != "lobby"
 
 
 func _pause_hotkey_text_focus_active() -> bool:
@@ -3366,8 +3394,26 @@ func _apply_visual_pause_state(paused: bool) -> void:
 		_table_visual.call("set_visual_paused", paused)
 
 
+func _toggle_skip_animations(skip: bool) -> void:
+	_skip_animations_enabled = skip
+	_apply_skip_animation_state(skip)
+
+
+func _apply_skip_animation_state(skip: bool) -> void:
+	if is_instance_valid(_table_visual) and _table_visual.has_method("set_skip_animations"):
+		_table_visual.call("set_skip_animations", skip)
+
+
 func debug_pause_hotkey_can_toggle(snapshot: Dictionary) -> bool:
 	return _pause_hotkey_can_toggle(snapshot)
+
+
+func debug_skip_animations_hotkey_can_toggle(snapshot: Dictionary) -> bool:
+	return _skip_animations_hotkey_can_toggle(snapshot)
+
+
+func debug_skip_animations_enabled() -> bool:
+	return _skip_animations_enabled
 
 
 func _refresh_connection_buttons(snapshot: Dictionary) -> void:
@@ -3693,6 +3739,8 @@ func _on_table_visual_menu_requested(action: String) -> void:
 			_catch_up_visuals()
 		"Pause Game", "Resume Game":
 			_toggle_pause_intent(not _effective_pause_state())
+		"Skip Animations", "Play Animations":
+			_toggle_skip_animations(not _skip_animations_enabled)
 		"Main Menu":
 			if not RecipesClient.offline_mode and _current_viewer_is_host() and _table_exists(RecipesClient.latest_snapshot):
 				_confirm_close_table()

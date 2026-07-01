@@ -1890,6 +1890,69 @@ describe("platter, offers, and visibility", () => {
     expect(snapshot.gameStats).toEqual(stats);
   });
 
+  it("counts shared food pieces by quantity and does not treat ingredient settlement swaps as food pieces", () => {
+    const { table } = startTable(8, "stats-quantities");
+    const [first] = activeParticipants(table);
+    first.realIngredientStock = (first.realIngredientStock ?? table.stockPerIngredient) - 6;
+    table.dishes = {
+      dish_stats: {
+        id: "dish_stats",
+        ownerParticipantId: first.id,
+        name: "Bean Dip",
+        unitSingular: "scoop",
+        unitPlural: "scoops",
+        totalParts: DISH_PARTS_PER_DISH,
+        partsRemaining: 0,
+        partsEaten: DISH_PARTS_PER_DISH,
+        totalBites: DISH_PARTS_PER_DISH,
+        bitesRemaining: 0,
+        biteCounts: { [first.id]: DISH_PARTS_PER_DISH }
+      }
+    };
+    table.transactionHistory.push(
+      {
+        id: "tx_test_ingredient_settlement",
+        turn: table.turn,
+        participantId: first.id,
+        name: first.name,
+        action: "Settlement Swap",
+        counterparty: "Platter",
+        itemOut: "Rice",
+        itemBack: "Cheese"
+      },
+      {
+        id: "tx_test_food_settlement",
+        turn: table.turn,
+        participantId: first.id,
+        name: first.name,
+        action: "Settlement Swap",
+        counterparty: "Platter",
+        itemOut: "Rice",
+        itemBack: "Bean Dip scoop"
+      },
+      {
+        id: "tx_test_share_bundle",
+        turn: table.turn,
+        participantId: first.id,
+        name: first.name,
+        action: "Share",
+        counterparty: first.name,
+        itemOut: "Bean Dip scoop x3",
+        itemBack: "Shared"
+      }
+    );
+
+    const stats = computeGameStats(table);
+
+    expect(stats.settlementSwapCount).toBe(2);
+    expect(stats.foodPieceSettlementSwapCount).toBe(1);
+    expect(stats.eatCount).toBe(DISH_PARTS_PER_DISH);
+    expect(stats.productivityCount).toBe(DISH_PARTS_PER_DISH);
+    expect(stats.assetLossCount).toBe(6);
+    expect(stats.profitCount).toBe(4);
+    expect(stats.profitGainPercent).toBeCloseTo(66.667);
+  });
+
   it("analyzes EGGS37-style recipe fulfillment and exchange timing from CSV", async () => {
     const analyzer = await import("../../scripts/analyze-transactions.mjs");
     const catalog = JSON.parse(readFileSync("../client/data/recipe_catalog.json", "utf8"));

@@ -567,6 +567,7 @@ var _visual_paused := false
 var _active_animation_tweens: Array = []
 var _animation_timers: Array = []
 var _next_animation_timer_id := 1
+var _skip_animations := false
 var _pending_visual_snapshot: Dictionary = {}
 var _has_pending_visual_snapshot := false
 var _pending_visual_snapshots: Array = []
@@ -659,6 +660,13 @@ func _get_minimum_size() -> Vector2:
 
 func render(snapshot: Dictionary) -> void:
 	var previous_snapshot := _snapshot.duplicate(true)
+	if _skip_animations and _skip_animations_can_bypass_snapshot(previous_snapshot, snapshot):
+		if _visual_update_waiting():
+			_flush_visual_updates(false, false)
+		_record_animation_debug([])
+		_apply_snapshot(snapshot)
+		_process_queued_basket_swaps()
+		return
 	if _visual_update_waiting():
 		if _snapshot_identity_key(snapshot) != _snapshot_identity_key(_snapshot):
 			_queue_pending_visual_snapshot(snapshot)
@@ -694,6 +702,16 @@ func render(snapshot: Dictionary) -> void:
 	_apply_snapshot(snapshot)
 
 
+func _skip_animations_can_bypass_snapshot(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> bool:
+	if previous_snapshot.is_empty() or current_snapshot.is_empty():
+		return false
+	if str(previous_snapshot.get("tableCode", "")) == "" or str(previous_snapshot.get("tableCode", "")) != str(current_snapshot.get("tableCode", "")):
+		return false
+	if _final_celebration_animation_active_or_pending():
+		return false
+	return str(current_snapshot.get("phase", "")) != "complete"
+
+
 func _apply_snapshot(snapshot: Dictionary) -> void:
 	var previous_snapshot := _snapshot.duplicate(true)
 	_snapshot = snapshot.duplicate(true)
@@ -723,6 +741,8 @@ func _apply_snapshot(snapshot: Dictionary) -> void:
 		"completeBiteSummaryCount": 0,
 		"completeTurnCount": 0,
 		"fastBotsEnabled": _fast_bots_enabled,
+		"skipAnimations": _skip_animations,
+		"visualPaused": _visual_paused,
 		"offerPopupHeight": 0,
 		"menuButtonVisible": false,
 		"menuActions": [],
@@ -967,8 +987,50 @@ func set_visual_paused(paused: bool) -> void:
 			_request_animation_start()
 
 
+func set_skip_animations(skip: bool) -> void:
+	if _skip_animations == skip:
+		debug_stats["skipAnimations"] = _skip_animations
+		debug_stats["menuActions"] = _table_menu_actions()
+		return
+	_skip_animations = skip
+	debug_stats["skipAnimations"] = _skip_animations
+	debug_stats["menuActions"] = _table_menu_actions()
+	if is_instance_valid(_menu_popup) and _menu_popup.visible:
+		_rebuild_open_table_menu()
+	if _skip_animations and not _final_celebration_animation_active_or_pending():
+		_flush_visual_updates()
+
+
 func debug_visual_paused() -> bool:
 	return _visual_paused
+
+
+func debug_skip_animations() -> bool:
+	return _skip_animations
+
+
+func _final_celebration_animation_active_or_pending() -> bool:
+	if str(_snapshot.get("phase", "")) == "complete":
+		return true
+	if _complete_orbit_transition_active:
+		return true
+	if not _complete_pending_snapshot().is_empty():
+		return true
+	if _animation_event_is_final_celebration(_current_animation_event):
+		return true
+	for raw_event in _animation_queue:
+		var event: Dictionary = raw_event
+		if _animation_event_is_final_celebration(event):
+			return true
+	return false
+
+
+func _animation_event_is_final_celebration(event: Dictionary) -> bool:
+	if event.is_empty():
+		return false
+	if str(event.get("type", "")) == "complete":
+		return true
+	return bool(event.get("completeOrbit", false)) or str(event.get("phase", "")) == "complete"
 
 
 func flush_visual_updates() -> void:
@@ -979,12 +1041,13 @@ func debug_flush_animations() -> void:
 	_flush_visual_updates()
 
 
-func _flush_visual_updates() -> void:
+func _flush_visual_updates(apply_pending := true, process_basket_swaps := true) -> void:
 	var final_pending_snapshot: Dictionary = {}
-	if not _pending_visual_snapshots.is_empty():
-		final_pending_snapshot = (_pending_visual_snapshots[_pending_visual_snapshots.size() - 1] as Dictionary).duplicate(true)
-	elif _has_pending_visual_snapshot:
-		final_pending_snapshot = _pending_visual_snapshot.duplicate(true)
+	if apply_pending:
+		if not _pending_visual_snapshots.is_empty():
+			final_pending_snapshot = (_pending_visual_snapshots[_pending_visual_snapshots.size() - 1] as Dictionary).duplicate(true)
+		elif _has_pending_visual_snapshot:
+			final_pending_snapshot = _pending_visual_snapshot.duplicate(true)
 	_animation_queue.clear()
 	_animation_running = false
 	_animation_deadline_msec = 0
@@ -993,14 +1056,23 @@ func _flush_visual_updates() -> void:
 	_animation_actor_participant_id = ""
 	_clear_animation_timers()
 	_active_animation_tweens.clear()
+	_clear_animation_layer_transients()
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
 	_pending_visual_snapshots.clear()
 	_reset_visual_turn_lag_watch()
-	if not final_pending_snapshot.is_empty():
+	if apply_pending and not final_pending_snapshot.is_empty():
 		_apply_snapshot(final_pending_snapshot)
 		_clear_basket_swap_in_flight()
-	_process_queued_basket_swaps()
+	if process_basket_swaps:
+		_process_queued_basket_swaps()
+
+
+func _clear_animation_layer_transients() -> void:
+	if not is_instance_valid(_animation_layer):
+		return
+	for child in _animation_layer.get_children():
+		child.queue_free()
 
 
 func debug_apply_snapshot(snapshot: Dictionary) -> void:
@@ -1782,6 +1854,8 @@ func _position_menu_button() -> void:
 func _table_menu_actions() -> Array[String]:
 	var phase := str(_snapshot.get("phase", ""))
 	var actions: Array[String] = ["View History", "Debug Sync", "Catch Up"]
+	if phase != "" and phase != "lobby":
+		actions.append("Play Animations" if _skip_animations else "Skip Animations")
 	if _can_use_pause_menu_action(phase):
 		actions.append("Resume Game" if bool(_snapshot.get("paused", false)) else "Pause Game")
 	actions.append(_bot_speed_menu_label())
@@ -1881,6 +1955,10 @@ func _menu_popup_button(action: String) -> Button:
 		_apply_button_style(button, Color(0.38, 0.58, 0.26), Color(0.18, 0.32, 0.12), 2)
 	elif action == "Pause Game":
 		_apply_button_style(button, Color(0.62, 0.43, 0.19), Color(0.36, 0.22, 0.08), 2)
+	elif action == "Play Animations":
+		_apply_button_style(button, Color(0.38, 0.58, 0.26), Color(0.18, 0.32, 0.12), 2)
+	elif action == "Skip Animations":
+		_apply_button_style(button, Color(0.40, 0.53, 0.53), Color(0.18, 0.30, 0.30), 2)
 	elif action == "Fast Bots" or action == "Slow Bots":
 		_apply_button_style(button, Color(0.82, 0.58, 0.23), Color(0.42, 0.25, 0.08), 2)
 	elif action == "Main Menu":
@@ -2908,11 +2986,10 @@ func _core_game_stats_lines() -> Array[String]:
 		"Dishes prepared: %s" % int(stats.get("prepareCount", 0)),
 		"Settlement swaps: %s" % int(stats.get("settlementSwapCount", 0)),
 		"Food-piece settlement swaps: %s" % int(stats.get("foodPieceSettlementSwapCount", 0)),
-		"Food shared: %s" % int(stats.get("eatCount", 0)),
-		"Assets lost: %s" % int(stats.get("assetLossCount", 0)),
-		"Productivity: %s" % int(stats.get("productivityCount", 0)),
-		"Profit: %s" % int(stats.get("profitCount", 0)),
-		"Gain: %s" % _format_percent(float(stats.get("profitGainPercent", 0.0)))
+		"Food shared: %s pieces" % int(stats.get("eatCount", 0)),
+		"Ingredients used: %s" % int(stats.get("assetLossCount", 0)),
+		"Net food output: %s" % int(stats.get("profitCount", 0)),
+		"Yield gain: %s" % _format_percent(float(stats.get("profitGainPercent", 0.0)))
 	]
 
 
@@ -2938,6 +3015,8 @@ func _game_stats() -> Dictionary:
 		for key in derived.keys():
 			if not merged.has(key):
 				merged[key] = derived[key]
+		for corrected_key in ["eatCount", "assetLossCount", "productivityCount", "profitCount", "profitGainPercent", "consumptionVariance"]:
+			merged[corrected_key] = derived.get(corrected_key, merged.get(corrected_key, 0))
 		return merged
 	return derived
 
@@ -2960,7 +3039,7 @@ func _derive_game_stats() -> Dictionary:
 		if _transaction_asset_is_food_piece(str(transaction.get("itemOut", ""))) or _transaction_asset_is_food_piece(str(transaction.get("itemBack", ""))):
 			food_piece_settlement_swaps += 1
 	var asset_loss_count := _derive_asset_loss_count()
-	var productivity_count := _count_transactions(history, "Share") + _count_transactions(history, "Eat")
+	var productivity_count := _derive_food_shared_count(history)
 	var interaction_count := history.size() - pass_turns
 	var common_basket_swaps := _count_transactions(history, "Swap")
 	var direct_exchanges := _count_transactions(history, "Exchange")
@@ -3011,8 +3090,14 @@ func _count_transactions(history: Array, action: String) -> int:
 
 
 func _transaction_asset_is_food_piece(label: String) -> bool:
-	var normalized := label.strip_edges().to_lower()
-	return normalized != "" and normalized != "none" and normalized != "turn" and normalized.find("card") < 0
+	var normalized := _normalized_asset_label(label)
+	if normalized == "":
+		return false
+	for raw_ingredient in _snapshot.get("ingredients", []):
+		var ingredient: Dictionary = raw_ingredient
+		if str(ingredient.get("name", ingredient.get("id", ""))).strip_edges().to_lower() == normalized:
+			return false
+	return true
 
 
 func _derive_asset_loss_count() -> int:
@@ -3026,6 +3111,22 @@ func _derive_asset_loss_count() -> int:
 			continue
 		loss += maxi(0, starting_stock - int(participant.get("realIngredientStock", starting_stock)))
 	return loss
+
+
+func _derive_food_shared_count(history: Array) -> int:
+	var dish_state_total := 0
+	for raw_dish in _snapshot.get("dishes", []):
+		var dish: Dictionary = raw_dish
+		dish_state_total += maxi(0, int(dish.get("partsEaten", 0)))
+	if dish_state_total > 0:
+		return dish_state_total
+	var total := 0
+	for raw_transaction in history:
+		var transaction: Dictionary = raw_transaction
+		var action := str(transaction.get("action", ""))
+		if action == "Share" or action == "Eat":
+			total += _asset_quantity_from_label(str(transaction.get("itemOut", "")))
+	return total
 
 
 func _derive_hoarding_index() -> Dictionary:

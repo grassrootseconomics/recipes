@@ -126,10 +126,17 @@ func _initialize() -> void:
 	var menu_actions: Array = visual.debug_stats.get("menuActions", [])
 	_require(menu_actions.has("View History"), "table menu exposes transaction history")
 	_require(menu_actions.has("Catch Up"), "table menu exposes manual visual catch-up")
+	_require(menu_actions.has("Skip Animations"), "table menu exposes Skip Animations")
 	_require(menu_actions.has("Pause Game"), "host table menu exposes Pause Game")
 	_require(menu_actions.has("Fast Bots"), "table menu exposes Fast Bots toggle by default")
 	_require(menu_actions.has("End Game"), "host table menu exposes End Game")
 	_require(menu_actions.has("Main Menu"), "table menu exposes Main Menu")
+	visual.call("set_skip_animations", true)
+	await process_frame
+	menu_actions = visual.debug_stats.get("menuActions", [])
+	_require(menu_actions.has("Play Animations") and not menu_actions.has("Skip Animations"), "skip animations menu toggles to Play Animations")
+	visual.call("set_skip_animations", false)
+	await process_frame
 	var paused_menu_snapshot := snapshot.duplicate(true)
 	paused_menu_snapshot["paused"] = true
 	visual.debug_apply_snapshot(paused_menu_snapshot)
@@ -426,6 +433,7 @@ func _initialize() -> void:
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
 	await _assert_start_snapshot_animates_offerings_from_empty_basket(visual)
+	await _assert_skip_animations_applies_start_snapshot_without_queue(visual)
 	await _assert_eight_start_snapshot_animates_offerings_from_cooks_to_fixed_basket(visual)
 	_assert_turn_update_waits_for_animation(visual)
 	_assert_turn_handoff_does_not_preempt_animation_actor(visual)
@@ -476,6 +484,7 @@ func _initialize() -> void:
 	await _assert_eat_animation_starts_at_held_food_part(visual)
 	await _assert_eat_animation_reanchors_after_food_group_reflow(visual)
 	await _assert_final_eat_starts_orbit_before_congratulations(visual)
+	await _assert_skip_animations_preserves_final_orbit(visual)
 	await _assert_compacted_final_orbit_reveals_all_cooks(visual)
 	await _assert_settlement_share_burst_reaches_complete_panel(visual)
 	_assert_public_final_eat_uses_avatar_source(visual)
@@ -982,10 +991,11 @@ func _initialize() -> void:
 		}
 	}
 	complete["ownRecipe"] = {}
+	complete["stockPerIngredient"] = 12
 	complete["participants"][0]["realIngredientStock"] = 10
-	complete["participants"][1]["realIngredientStock"] = 11
-	complete["participants"][2]["realIngredientStock"] = 12
-	complete["participants"][3]["realIngredientStock"] = 13
+	complete["participants"][1]["realIngredientStock"] = 10
+	complete["participants"][2]["realIngredientStock"] = 10
+	complete["participants"][3]["realIngredientStock"] = 10
 	complete["dishes"] = [
 		{"id": "dish_1", "ownerParticipantId": "p1", "name": "Cheese Frittata", "partsRemaining": 0, "partsEaten": 10, "bitesRemaining": 0, "biteCounts": {"p1": 3, "p2": 2}},
 		{"id": "dish_2", "ownerParticipantId": "p2", "name": "Bean Dip", "partsRemaining": 0, "partsEaten": 10, "bitesRemaining": 0, "biteCounts": {"p1": 1, "p3": 4}}
@@ -1037,10 +1047,10 @@ func _initialize() -> void:
 	visual.call("_open_game_stats_popup")
 	await process_frame
 	_require(int(visual.debug_stats.get("offerPopupWidth", 0)) > 0 and int(visual.debug_stats.get("offerPopupWidth", 0)) <= 600, "game stats popup keeps a safe responsive width")
-	_require(_has_text_containing(visual, "Assets lost: 8"), "game stats popup includes asset loss")
-	_require(_has_text_containing(visual, "Productivity: 20"), "game stats popup includes productivity")
-	_require(_has_text_containing(visual, "Profit: 12"), "game stats popup includes profit")
-	_require(_has_text_containing(visual, "Gain: 150%"), "game stats popup includes percent gain")
+	_require(_has_text_containing(visual, "Food shared: 20 pieces"), "game stats popup includes food pieces shared")
+	_require(_has_text_containing(visual, "Ingredients used: 8"), "game stats popup includes ingredients used")
+	_require(_has_text_containing(visual, "Net food output: 12"), "game stats popup includes net food output")
+	_require(_has_text_containing(visual, "Yield gain: 150%"), "game stats popup includes yield gain")
 	_require(_has_text_containing(visual, "Avg turns/dish: 2.7"), "game stats popup includes average turns per dish")
 	_require(_has_text_containing(visual, "Basket velocity: 1.8 swaps/cycle"), "game stats popup includes basket velocity")
 	_require(_has_text_containing(visual, "Direct exchange share: 33.3%"), "game stats popup includes direct exchange share")
@@ -1265,6 +1275,22 @@ func _assert_final_eat_starts_orbit_before_congratulations(visual: Node) -> void
 	_require(actions.has("Game Stats"), "final orbit transition exposes the Game Stats action")
 	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "final complete snapshot keeps the orbit visible")
 	visual.debug_flush_animations()
+
+
+func _assert_skip_animations_preserves_final_orbit(visual: Node) -> void:
+	visual.debug_apply_snapshot(_final_eating_before())
+	visual.call("set_skip_animations", true)
+	await process_frame
+	visual.render(_final_eating_after())
+	await process_frame
+	var event := _first_animation_event_of_type(visual, "eat")
+	_require(not event.is_empty(), "skip animations still queues the final bite animation")
+	_require(bool(event.get("completeOrbit", false)), "skip animations preserves the final food orbit transition")
+	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "skip animations does not suppress the final orbit flying dish")
+	_require(not bool(visual.debug_stats.get("completeCelebration", true)), "skip animations keeps congratulations held until the final orbit lands")
+	visual.debug_flush_animations()
+	visual.call("set_skip_animations", false)
+	await process_frame
 
 
 func _assert_compacted_final_orbit_reveals_all_cooks(visual: Node) -> void:
@@ -2331,6 +2357,24 @@ func _assert_start_snapshot_animates_offerings_from_empty_basket(visual: Node) -
 	var action_texts: Array = visual.debug_stats.get("actionButtonTexts", [])
 	_require(not action_texts.has("Offer"), "start snapshot does not show a manual Offer action after opening animations finish")
 	_require(str(visual.debug_stats.get("phase", "")) == "playing", "start snapshot ends in normal play after opening animations finish")
+
+
+func _assert_skip_animations_applies_start_snapshot_without_queue(visual: Node) -> void:
+	var before := _lobby_before_start()
+	var after := _deposit_all_after()
+	visual.debug_apply_snapshot(before)
+	visual.call("set_skip_animations", true)
+	await process_frame
+	visual.render(after)
+	await process_frame
+	_require(str(visual.debug_stats.get("phase", "")) == "playing", "skip animations applies opening-offering final snapshot immediately")
+	_require(int(visual.debug_stats.get("animationEventCount", -1)) == 0, "skip animations does not queue opening-offering milestones")
+	_require(_visible_platter_total(visual) == 8, "skip animations still shows every opening offering in the basket")
+	_require(not visual.visual_update_waiting(), "skip animations leaves no pending opening-offering backlog")
+	var actions: Array = visual.debug_stats.get("menuActions", [])
+	_require(actions.has("Play Animations"), "skip animations menu label switches while enabled")
+	visual.call("set_skip_animations", false)
+	await process_frame
 
 
 func _assert_eight_start_snapshot_animates_offerings_from_cooks_to_fixed_basket(visual: Node) -> void:
