@@ -20,6 +20,16 @@ Not implemented yet:
 
 - Polished production UI/art pass.
 
+## How To Play
+
+Recipes is about cooking together by trading fair promises for real ingredients.
+
+1. **Cook 3 recipes.** Each cook brings one real ingredient and has 8 promise cards for it. At the start, the table automatically puts 2 promise cards from every cook into the Common Basket, so each cook keeps 6 cards in hand. Collect the promise cards shown in your recipe, then use `Redeem / Pass` to fill recipe slots.
+2. **Help neighbors cook.** When you finish your recipes, keep trading spare cards or food pieces so the other cooks can finish too. Tap cooks to see what they need and make structured offers.
+3. **Rebalance promises.** After everyone cooks, settle the table back to the fair starting shape: 2 of your own promise cards in the Common Basket, 6 of your own cards in hand, and no other cooks' cards in your hand.
+
+Use the in-game hamburger menu for `How To Play` or `Replay Table Tour`. The tour points to recipe slots, cooks and ingredients, promise cards, the Common Basket, and created food pieces.
+
 ## Requirements
 
 - Node.js `>=24`

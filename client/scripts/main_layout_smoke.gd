@@ -196,6 +196,8 @@ func _initialize() -> void:
 	_require(bool(main.call("_turn_ending_intent_has_pending_offers", controlled_offer_snapshot, {"type": "pass_turn"}, "p2")), "pending-offer guard checks the acting seat rather than only the viewer")
 	recipes_client.start_offline_table("", "")
 	await process_frame
+	main.set("_cookbook_tour_dismissed", true)
+	main.set("_cookbook_tour_auto_key", "")
 	recipes_client.send_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ben"})
 	await process_frame
 	recipes_client.send_host_intent({"type": "start"})
@@ -206,6 +208,12 @@ func _initialize() -> void:
 	var visual := _control_from_property(main, "_table_visual")
 	_require(holder != null, "main scene has a table visual holder")
 	_require(visual != null, "main scene has a table visual")
+	_require(visual != null and bool(visual.call("debug_guide_popup_visible")), "first active table render opens the guided table tour even after a previous dismissal")
+	_require(visual != null and str(visual.call("debug_guide_target")) == "viewer_cook", "first guided table tour starts at the viewer cook")
+	if visual != null:
+		visual.call("debug_guide_done")
+		await process_frame
+		_require(bool(main.get("_cookbook_tour_dismissed")), "dismissing the guided tour keeps the main dismissed state true")
 	_require(holder.visible, "table visual holder is visible after start")
 	var transaction_section := _control_from_property(main, "_transaction_section")
 	_require(transaction_section != null and not transaction_section.visible, "Successful Transactions section is hidden below the table")

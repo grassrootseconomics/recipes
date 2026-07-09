@@ -18,6 +18,8 @@ const ONLINE_SESSION_STORE_PATH := "user://online-sessions.json"
 const ONLINE_SESSION_STORE_TMP_PATH := "user://online-sessions.tmp"
 const LOBBY_SEAT_SETUP_STORE_PATH := "user://lobby-seat-setup.json"
 const LOBBY_SEAT_SETUP_STORE_TMP_PATH := "user://lobby-seat-setup.tmp"
+const COOKBOOK_GUIDANCE_STORE_PATH := "user://cookbook-guidance.json"
+const COOKBOOK_GUIDANCE_STORE_TMP_PATH := "user://cookbook-guidance.tmp"
 const DESKTOP_ANDROID_PREVIEW_SIZE := Vector2i(1080, 1920)
 const DESKTOP_ANDROID_PREVIEW_MARGIN := 48
 const UI_READABILITY_SCALE := 1.10
@@ -184,6 +186,8 @@ var _online_session_store_path := ONLINE_SESSION_STORE_PATH
 var _online_session_store_tmp_path := ONLINE_SESSION_STORE_TMP_PATH
 var _lobby_seat_setup_store_path := LOBBY_SEAT_SETUP_STORE_PATH
 var _lobby_seat_setup_store_tmp_path := LOBBY_SEAT_SETUP_STORE_TMP_PATH
+var _cookbook_guidance_store_path := COOKBOOK_GUIDANCE_STORE_PATH
+var _cookbook_guidance_store_tmp_path := COOKBOOK_GUIDANCE_STORE_TMP_PATH
 
 var _selected_hand_voucher_id := ""
 var _selected_platter_voucher_id := ""
@@ -229,11 +233,14 @@ var _close_table_after_reconnect := false
 var _return_to_menu_after_close_table := false
 var _local_pause_hotkey_state := false
 var _skip_animations_enabled := false
+var _cookbook_tour_dismissed := false
+var _cookbook_tour_auto_key := ""
 
 
 func _ready() -> void:
 	texture_filter = VisualAssets.preferred_texture_filter()
 	_configure_dev_client_profile()
+	_cookbook_tour_dismissed = bool(_load_cookbook_guidance().get("tableTourDismissed", false))
 	_configure_desktop_debug_window()
 	_csv_http_request = HTTPRequest.new()
 	_csv_http_request.timeout = 20.0
@@ -322,6 +329,8 @@ func _configure_dev_client_profile() -> void:
 	_online_session_store_tmp_path = "user://online-sessions-%s.tmp" % profile
 	_lobby_seat_setup_store_path = "user://lobby-seat-setup-%s.json" % profile
 	_lobby_seat_setup_store_tmp_path = "user://lobby-seat-setup-%s.tmp" % profile
+	_cookbook_guidance_store_path = "user://cookbook-guidance-%s.json" % profile
+	_cookbook_guidance_store_tmp_path = "user://cookbook-guidance-%s.tmp" % profile
 
 
 func _dev_client_profile_args() -> Array:
@@ -492,6 +501,7 @@ func _build_ui() -> void:
 	_table_visual.view_requested.connect(_on_table_visual_view_requested)
 	_table_visual.status_requested.connect(_on_table_visual_status_requested)
 	_table_visual.menu_requested.connect(_on_table_visual_menu_requested)
+	_table_visual.guidance_tour_dismissed.connect(_on_table_visual_guidance_tour_dismissed)
 	_table_visual_holder.add_child(_table_visual)
 
 	_post_table_controls = VBoxContainer.new()
@@ -1045,6 +1055,48 @@ func _save_lobby_seat_setup(store: Dictionary) -> void:
 		fallback.store_string(JSON.stringify(store, "\t"))
 		fallback.close()
 	_saved_lobby_seat_setup = store.duplicate(true)
+
+
+func _load_cookbook_guidance() -> Dictionary:
+	if not FileAccess.file_exists(_cookbook_guidance_store_path):
+		return {"tableTourDismissed": false}
+	var file := FileAccess.open(_cookbook_guidance_store_path, FileAccess.READ)
+	if file == null:
+		return {"tableTourDismissed": false}
+	var text := file.get_as_text()
+	file.close()
+	if text.strip_edges() == "":
+		return {"tableTourDismissed": false}
+	var json := JSON.new()
+	if json.parse(text) != OK:
+		return {"tableTourDismissed": false}
+	var parsed = json.data
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return {"tableTourDismissed": false}
+	return {"tableTourDismissed": bool(parsed.get("tableTourDismissed", false))}
+
+
+func _save_cookbook_guidance(store: Dictionary) -> void:
+	var file := FileAccess.open(_cookbook_guidance_store_tmp_path, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(store, "\t"))
+	file.close()
+	var target_path := ProjectSettings.globalize_path(_cookbook_guidance_store_path)
+	var tmp_path := ProjectSettings.globalize_path(_cookbook_guidance_store_tmp_path)
+	if FileAccess.file_exists(_cookbook_guidance_store_path):
+		DirAccess.remove_absolute(target_path)
+	if DirAccess.rename_absolute(tmp_path, target_path) != OK:
+		var fallback := FileAccess.open(_cookbook_guidance_store_path, FileAccess.WRITE)
+		if fallback == null:
+			return
+		fallback.store_string(JSON.stringify(store, "\t"))
+		fallback.close()
+
+
+func _on_table_visual_guidance_tour_dismissed() -> void:
+	_cookbook_tour_dismissed = true
+	_save_cookbook_guidance({"tableTourDismissed": true})
 
 
 func _online_session_candidates_for_code(code: String) -> Array:
@@ -3123,10 +3175,13 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 		_table_visual.visible = true
 		_fit_table_visual_to_window()
 		_apply_skip_animation_state(_skip_animations_enabled)
+		if _table_visual.has_method("set_guidance_tour_dismissed"):
+			_table_visual.call("set_guidance_tour_dismissed", _cookbook_tour_dismissed)
 		_table_visual.render(snapshot)
 		_apply_visual_pause_state(snapshot_paused)
 		_fit_table_visual_to_window()
 		call_deferred("_fit_table_visual_after_layout")
+		call_deferred("_maybe_show_cookbook_table_tour", snapshot.duplicate(true))
 		if game_started:
 			var active_game_key := _active_game_scroll_key(snapshot)
 			if _active_game_auto_scroll_key != active_game_key:
@@ -3151,6 +3206,24 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 	_refresh_post_table_controls(snapshot)
 	_refresh_history_popup_if_open(snapshot)
 	_refresh_active_select_popup(snapshot)
+
+
+func _maybe_show_cookbook_table_tour(snapshot: Dictionary) -> void:
+	if not _table_exists(snapshot) or not _game_started(snapshot):
+		_cookbook_tour_auto_key = ""
+		return
+	var phase := str(snapshot.get("phase", ""))
+	if phase == "lobby" or phase == "complete":
+		_cookbook_tour_auto_key = ""
+		return
+	var table_key := str(snapshot.get("tableCode", "local"))
+	if table_key == "":
+		table_key = "local"
+	if _cookbook_tour_auto_key == table_key:
+		return
+	_cookbook_tour_auto_key = table_key
+	if is_instance_valid(_table_visual) and _table_visual.has_method("start_table_tour"):
+		_table_visual.call("start_table_tour", false)
 
 
 func _handle_idle_prompt_snapshot(snapshot: Dictionary) -> void:
@@ -4954,7 +5027,7 @@ func _add_deposit_controls(snapshot: Dictionary) -> void:
 		_hand_controls.add_child(_wrapped_label("Witnessing the table offering."))
 		return
 	if _opening_offering_count(viewer) >= 2:
-		_hand_controls.add_child(_wrapped_label("Offering given. Waiting for the table."))
+		_hand_controls.add_child(_wrapped_label("Opening offerings are automatic. You have put 2 promise cards in the Common Basket and kept 6 in hand."))
 		return
 	if hand.is_empty():
 		_hand_controls.add_child(_wrapped_label("No offering is available. Waiting for the table."))
@@ -5213,7 +5286,7 @@ func _add_eating_controls(snapshot: Dictionary) -> void:
 		_dish_controls.add_child(_wrapped_label("Clear your central platter account before sharing food."))
 		_dish_controls.add_child(_wrapped_label(_accountability_label(snapshot)))
 		return
-	_dish_controls.add_child(_wrapped_label("Food is being shared automatically."))
+	_dish_controls.add_child(_wrapped_label("Promises are balanced. Food is sharing automatically."))
 	for raw_dish in snapshot.get("dishes", []):
 		var dish: Dictionary = raw_dish
 		var parts := int(dish.get("partsRemaining", dish.get("bitesRemaining", 0)))

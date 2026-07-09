@@ -20,9 +20,19 @@ When every requirement group is complete through `Redeem / Pass`, the ingredient
 
 The table should show each active player’s finished dish count and the names of the dishes they have prepared.
 
+## Player Guidance
+
+Recipes must be understandable to young first-time players without outside training. The live table UI should teach the three-stage arc in plain language: cook three recipes, help neighbors cook, then rebalance promises so the system can start fairly again.
+
+The client should include a themed `Cookbook Help` / table-tour layer that opens automatically at the start of each table and remains replayable from the hamburger menu. It should point to the real game elements: missing recipe slots, cooks and their real ingredients, promise cards in hand, the Common Basket, and created food pieces. Promise cards should be explained as fair claims on real ingredients that help cooks trade fairly because every card points back to real food. The Common Basket should be explained as the public place where promise cards are deposited and swapped, and later where created food can also be swapped during settlement.
+
+Action-panel guidance should remain concise and fit the fixed action panel without resizing the table. Longer teaching belongs in themed popups and reusable callouts.
+
 ## Trading And The Central Platter
 
 At the start of the game, every active participant automatically contributes exactly two active vouchers into the central platter pool. The client should show this as the opening offering animation, not as a manual per-player button flow. The central platter is visible to everyone.
+
+The client should teach this opening state clearly: opening offerings are automatic, so the table has already put exactly two promise cards from every cook into the Common Basket, leaving six promise cards in that cook's hand. Player-facing instructions should say "you have put 2" rather than asking the player to manually place two cards.
 
 After depositing, a player may swap 1:1 with the platter by giving one card from their hand and taking one visible card from the platter.
 

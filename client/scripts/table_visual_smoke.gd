@@ -8,6 +8,7 @@ var _views: Array = []
 var _statuses: Array = []
 var _menu_actions: Array = []
 var _failed := false
+var _tour_dismissed_count := 0
 
 
 func _initialize() -> void:
@@ -33,6 +34,9 @@ func _initialize() -> void:
 	)
 	visual.menu_requested.connect(func(action: String) -> void:
 		_menu_actions.append(action)
+	)
+	visual.guidance_tour_dismissed.connect(func() -> void:
+		_tour_dismissed_count += 1
 	)
 
 	var snapshot := _snapshot_fixture()
@@ -124,6 +128,8 @@ func _initialize() -> void:
 	await process_frame
 	_require(not visual.debug_table_menu_visible(), "table menu closes when clicking away")
 	var menu_actions: Array = visual.debug_stats.get("menuActions", [])
+	_require(menu_actions.has("How To Play"), "table menu exposes How To Play")
+	_require(menu_actions.has("Replay Table Tour"), "table menu exposes Replay Table Tour")
 	_require(menu_actions.has("View History"), "table menu exposes transaction history")
 	_require(menu_actions.has("Catch Up"), "table menu exposes manual visual catch-up")
 	_require(menu_actions.has("Skip Animations"), "table menu exposes Skip Animations")
@@ -131,6 +137,43 @@ func _initialize() -> void:
 	_require(menu_actions.has("Fast Bots"), "table menu exposes Fast Bots toggle by default")
 	_require(menu_actions.has("End Game"), "host table menu exposes End Game")
 	_require(menu_actions.has("Main Menu"), "table menu exposes Main Menu")
+	visual.debug_open_cookbook_help()
+	await process_frame
+	_require(visual.debug_guide_popup_visible(), "How To Play opens the themed cookbook help popup")
+	_require(str(visual.debug_guide_mode()) == "help", "cookbook help popup uses help mode")
+	_require(_has_text_containing(visual, "Promise cards are claims on real ingredients"), "cookbook help explains promise cards")
+	var cookbook_popup := visual.find_child("CookbookHelpPopup", true, false) as PopupPanel
+	if cookbook_popup != null:
+		cookbook_popup.hide()
+	visual.debug_start_table_tour(true)
+	await process_frame
+	_require(visual.debug_guide_popup_visible(), "Replay Table Tour opens the guided table tour")
+	_require(str(visual.debug_guide_mode()) == "tour", "guided table tour uses tour mode")
+	_require(str(visual.debug_guide_target()) == "viewer_cook", "guided table tour starts by pointing to the viewer cook")
+	_require(_has_text_containing(visual, "you hold promise cards"), "guided table tour explains the viewer's cards")
+	_require(visual.debug_guide_highlight_visible(), "guided table tour keeps a persistent section highlight visible")
+	_require(visual.debug_guide_arrow_visible(), "guided table tour keeps a persistent arrow visible")
+	_require(int(visual.debug_guide_arrow_count()) >= 2, "guided table tour can point to both the viewer cook and hand")
+	_require(float(visual.debug_stats.get("guidePopupTargetOverlapArea", 0.0)) <= 1.0, "guided table tour popup does not cover the highlighted viewer cook or hand")
+	visual.debug_guide_next()
+	await process_frame
+	_require(str(visual.debug_guide_target()) == "own_basket_card", "guided table tour points to the viewer's basket card")
+	_require(_has_text_containing(visual, "already put 2 of your promise cards"), "guided table tour explains automatic opening offerings")
+	_require(visual.debug_guide_highlight_visible(), "guided table tour keeps the highlight visible after moving sections")
+	_require(visual.debug_guide_arrow_visible(), "guided table tour keeps the arrow visible after moving sections")
+	_require(int(visual.debug_guide_arrow_count()) >= 2, "guided table tour points to the basket card and remaining hand cards")
+	_require(float(visual.debug_stats.get("guidePopupTargetOverlapArea", 0.0)) <= 1.0, "guided table tour popup does not cover the highlighted basket or hand cards")
+	visual.debug_guide_next()
+	await process_frame
+	_require(str(visual.debug_guide_target()) == "recipe_slots", "guided table tour points to recipe slots")
+	_require(int(visual.debug_guide_arrow_count()) >= 6, "guided table tour uses multiple arrows for recipe slots")
+	_require(float(visual.debug_stats.get("guidePopupTargetOverlapArea", 0.0)) <= 1.0, "guided table tour popup does not cover highlighted recipe slots")
+	var previous_dismissals := _tour_dismissed_count
+	visual.debug_guide_done()
+	await process_frame
+	_require(_tour_dismissed_count == previous_dismissals + 1, "finishing the table tour emits the dismissed signal")
+	_require(not visual.debug_guide_highlight_visible(), "finishing the table tour clears the persistent highlight")
+	_require(not visual.debug_guide_arrow_visible(), "finishing the table tour clears the persistent arrow")
 	visual.call("set_skip_animations", true)
 	await process_frame
 	menu_actions = visual.debug_stats.get("menuActions", [])
@@ -389,7 +432,7 @@ func _initialize() -> void:
 	finished_waiting["currentTurnParticipantId"] = "p2"
 	visual.debug_apply_snapshot(finished_waiting)
 	await process_frame
-	_require(_has_label_containing(visual, "Help the other cooks make their dishes."), "finished cook Actions panel tells the player to help others")
+	_require(_has_label_containing(visual, "Stage 2: Help neighbors."), "finished cook Actions panel tells the player to help others")
 	_require(not _has_label_containing(visual, "settle their debts"), "finished cook Actions panel does not show settlement text before everyone is done")
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
@@ -399,7 +442,7 @@ func _initialize() -> void:
 	visual.debug_press_hand_ingredient("rice")
 	await process_frame
 	var selected_swap_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
-	_require(_has_label_containing(visual, "Choose a needed card in basket or from another player."), "selected-card Actions panel shows the full needed-card instruction")
+	_require(_has_label_containing(visual, "Choose a useful card in the Common Basket"), "selected-card Actions panel shows the full needed-card instruction")
 	_require(_action_status_labels_fit(visual), "selected-card Actions panel instruction has enough room")
 	for action in selected_swap_actions:
 		_require(not str(action).begins_with("Swap"), "Actions panel does not show a Swap button after selecting a card")
@@ -428,7 +471,7 @@ func _initialize() -> void:
 	_require(turn_cook_name != null and int(turn_cook_name.get_theme_constant("outline_size")) >= 2, "non-viewer turn glows that cook name")
 	var off_turn_viewer := visual.find_child("Participant_p1", true, false)
 	_require(off_turn_viewer != null and off_turn_viewer.find_child("TurnCircle", true, false) == null, "off-turn viewer cook tile has no turn circle")
-	_require(_has_label_containing(visual, "Wait while other cooks take their turns."), "off-turn round-robin Actions panel tells the viewer to wait")
+	_require(_has_label_containing(visual, "Waiting for Ben."), "off-turn round-robin Actions panel tells the viewer to wait")
 	_require(_action_status_labels_fit(visual), "off-turn Actions panel wait text has enough room")
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
@@ -566,7 +609,8 @@ func _initialize() -> void:
 	deposit_waiting["participants"][0]["openingOfferingsCount"] = 2
 	visual.debug_apply_snapshot(deposit_waiting)
 	await process_frame
-	_require(_has_label_containing(visual, "Offering given. Waiting for the table."), "deposit Actions panel shows the full waiting instruction")
+	_require(_has_label_containing(visual, "You have put 2 promise cards"), "deposit Actions panel explains automatic opening offerings")
+	_require(not _has_label_containing(visual, "Put 2 in the Common Basket"), "deposit Actions panel does not ask for a manual two-card offering")
 	_require(_action_status_labels_fit(visual), "deposit Actions panel waiting text has enough room")
 
 	_intents.clear()
@@ -866,7 +910,7 @@ func _initialize() -> void:
 	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Food to Share", "eating phase labels held food as food to share")
 	_require(_has_text_containing(visual, "2 left"), "eating phase shows held pieces still left")
 	_require(_has_text_containing(visual, "3 shared"), "eating phase shows food already shared")
-	_require(_has_label_containing(visual, "Food is being shared automatically."), "eating phase explains that sharing is automatic")
+	_require(_has_label_containing(visual, "Food is sharing automatically."), "eating phase explains that sharing is automatic")
 	var eating_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
 	_require(not eating_actions.has("Share food."), "eating phase does not show a manual Share food button")
 	_require(not bool(visual.debug_stats.get("takeBiteEnabled", true)), "eating phase keeps manual Share food disabled")
@@ -910,8 +954,8 @@ func _initialize() -> void:
 	_require(str(visual.debug_stats.get("recipeTitle", "")) == "Dish Pieces Held", "settlement summary title is Dish Pieces Held")
 	_require(int(visual.debug_stats.get("pieceSummaryCount", 0)) == 4, "settlement summary renders active player held pieces")
 	_require(int(visual.debug_stats.get("pieceSummaryTotal", 0)) == 99, "settlement summary totals held pieces that can still be eaten")
-	_require(_has_label_containing(visual, "Everyone has to settle and return"), "settlement Actions panel explains common-basket debt goal")
-	_require(_has_label_containing(visual, "2 cards in the common basket"), "settlement Actions panel explains two-card basket target")
+	_require(_has_label_containing(visual, "Stage 3: Rebalance promises."), "settlement Actions panel explains common-basket debt goal")
+	_require(_has_label_containing(visual, "2 of your cards in the basket"), "settlement Actions panel explains two-card basket target")
 	var settlement_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
 	_require(not settlement_actions.has("Redeem / Pass"), "settlement Actions panel does not show Redeem / Pass")
 
@@ -1322,7 +1366,7 @@ func _assert_settlement_share_burst_reaches_complete_panel(visual: Node) -> void
 	visual.debug_apply_snapshot(_all_cooks_final_settlement_before())
 	await process_frame
 	_require(str(visual.debug_stats.get("phase", "")) == "settlement", "regression fixture starts on the stale settlement panel")
-	_require(_has_text_containing(visual, "Everyone has to settle"), "regression fixture shows the old settlement action message")
+	_require(_has_text_containing(visual, "Stage 3: Rebalance promises"), "regression fixture shows the settlement action message")
 	visual.render(_all_cooks_final_settlement_after())
 	await process_frame
 	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) >= 1, "settlement-to-complete share burst compacts final orbit animations")
@@ -1338,7 +1382,7 @@ func _assert_settlement_share_burst_reaches_complete_panel(visual: Node) -> void
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Congratulations!", "settlement-to-complete share burst shows Congratulations")
 	var actions: Array = visual.debug_stats.get("actionButtonTexts", [])
 	_require(actions.has("Game Stats"), "settlement-to-complete share burst exposes Game Stats")
-	_require(not _has_text_containing(visual, "Everyone has to settle"), "settlement-to-complete share burst removes the stale settlement action message")
+	_require(not _has_text_containing(visual, "Stage 3: Rebalance promises"), "settlement-to-complete share burst removes the stale settlement action message")
 	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "settlement-to-complete share burst reveals the full orbit")
 	visual.debug_flush_animations()
 

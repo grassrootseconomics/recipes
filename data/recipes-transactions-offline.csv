@@ -1,0 +1,461 @@
+Turn,Name,Action,Counterparty,Item out,Item back
+3,Will,Deposit,Platter,Beans,None
+3,Will,Deposit,Platter,Beans,None
+3,Ben_b,Deposit,Platter,Rice,None
+3,Ben_b,Deposit,Platter,Rice,None
+3,Nia_b,Deposit,Platter,Herbs,None
+3,Nia_b,Deposit,Platter,Herbs,None
+3,Luc_b,Deposit,Platter,Flour,None
+3,Luc_b,Deposit,Platter,Flour,None
+3,Ava_b,Deposit,Platter,Spices,None
+3,Ava_b,Deposit,Platter,Spices,None
+3,Leo_b,Deposit,Platter,Vegetables,None
+3,Leo_b,Deposit,Platter,Vegetables,None
+3,Mia_b,Deposit,Platter,Cheese,None
+3,Mia_b,Deposit,Platter,Cheese,None
+3,Yan_b,Deposit,Platter,Eggs,None
+3,Yan_b,Deposit,Platter,Eggs,None
+4,Will,Swap,Platter,Beans,Spices
+5,Will,Swap,Platter,Beans,Cheese
+6,Will,Swap,Platter,Beans,Herbs
+7,Will,Swap,Platter,Beans,Eggs
+8,Will,Swap,Platter,Beans,Vegetables
+9,Will,Redeem,Will,Beans,Real Beans
+9,Will,Redeem,Nia_b,Herbs,Real Herbs
+9,Will,Redeem,Ava_b,Spices,Real Spices
+9,Will,Redeem,Leo_b,Vegetables,Real Vegetables
+9,Will,Redeem,Mia_b,Cheese,Real Cheese
+9,Will,Redeem,Yan_b,Eggs,Real Eggs
+9,Will,Prepare,Table,Recipe ingredients,10 cups of Bean Shakshuka
+9,Will,Pass Turn,Ben_b,Turn,None
+10,Ben_b,Swap,Platter,Rice,Beans
+11,Ben_b,Swap,Platter,Rice,Herbs
+12,Ben_b,Swap,Platter,Rice,Spices
+13,Ben_b,Swap,Platter,Rice,Vegetables
+14,Ben_b,Swap,Platter,Rice,Eggs
+15,Ben_b,Redeem,Ben_b,Rice,Real Rice
+15,Ben_b,Redeem,Will,Beans,Real Beans
+15,Ben_b,Redeem,Nia_b,Herbs,Real Herbs
+15,Ben_b,Redeem,Ava_b,Spices,Real Spices
+15,Ben_b,Redeem,Leo_b,Vegetables,Real Vegetables
+15,Ben_b,Redeem,Yan_b,Eggs,Real Eggs
+15,Ben_b,Prepare,Table,Recipe ingredients,10 scoops of Fried Rice
+15,Ben_b,Pass Turn,Nia_b,Turn,None
+16,Nia_b,Swap,Platter,Herbs,Beans
+17,Nia_b,Swap,Platter,Herbs,Beans
+19,Nia_b,Redeem,Nia_b,Herbs,Real Herbs
+19,Nia_b,Redeem,Nia_b,Herbs,Real Herbs
+19,Nia_b,Redeem,Will,Beans,Real Beans
+19,Nia_b,Redeem,Will,Beans,Real Beans
+19,Nia_b,Pass Turn,Luc_b,Turn,None
+20,Luc_b,Swap,Platter,Flour,Herbs
+21,Luc_b,Swap,Platter,Flour,Herbs
+23,Luc_b,Redeem,Luc_b,Flour,Real Flour
+23,Luc_b,Redeem,Luc_b,Flour,Real Flour
+23,Luc_b,Redeem,Nia_b,Herbs,Real Herbs
+23,Luc_b,Redeem,Nia_b,Herbs,Real Herbs
+23,Luc_b,Pass Turn,Ava_b,Turn,None
+24,Ava_b,Swap,Platter,Spices,Beans
+25,Ava_b,Swap,Platter,Spices,Rice
+26,Ava_b,Swap,Platter,Spices,Cheese
+27,Nia_b,Exchange,Ava_b,Herbs,Spices
+29,Ava_b,Redeem,Ava_b,Spices,Real Spices
+29,Ava_b,Redeem,Will,Beans,Real Beans
+29,Ava_b,Redeem,Ben_b,Rice,Real Rice
+29,Ava_b,Redeem,Nia_b,Herbs,Real Herbs
+29,Ava_b,Redeem,Mia_b,Cheese,Real Cheese
+29,Ava_b,Pass Turn,Leo_b,Turn,None
+30,Ava_b,Exchange,Leo_b,Spices,Vegetables
+32,Leo_b,Redeem,Leo_b,Vegetables,Real Vegetables
+32,Leo_b,Pass Turn,Mia_b,Turn,None
+33,Mia_b,Swap,Platter,Cheese,Rice
+34,Mia_b,Swap,Platter,Cheese,Rice
+36,Mia_b,Redeem,Mia_b,Cheese,Real Cheese
+36,Mia_b,Redeem,Mia_b,Cheese,Real Cheese
+36,Mia_b,Redeem,Ben_b,Rice,Real Rice
+36,Mia_b,Redeem,Ben_b,Rice,Real Rice
+36,Mia_b,Pass Turn,Yan_b,Turn,None
+37,Yan_b,Swap,Platter,Eggs,Beans
+38,Yan_b,Swap,Platter,Eggs,Flour
+39,Yan_b,Swap,Platter,Eggs,Spices
+40,Yan_b,Swap,Platter,Eggs,Cheese
+41,Luc_b,Exchange,Yan_b,Flour,Eggs
+42,Leo_b,Exchange,Yan_b,Spices,Eggs
+44,Yan_b,Redeem,Yan_b,Eggs,Real Eggs
+44,Yan_b,Redeem,Will,Beans,Real Beans
+44,Yan_b,Redeem,Luc_b,Flour,Real Flour
+44,Yan_b,Redeem,Ava_b,Spices,Real Spices
+44,Yan_b,Redeem,Mia_b,Cheese,Real Cheese
+44,Yan_b,Pass Turn,Will,Turn,None
+45,Will,Swap,Platter,Beans,Cheese
+46,Will,Swap,Platter,Beans,Spices
+49,Will,Redeem,Will,Beans,Real Beans
+49,Will,Redeem,Will,Beans,Real Beans
+49,Will,Redeem,Ava_b,Spices,Real Spices
+49,Will,Redeem,Mia_b,Cheese,Real Cheese
+49,Will,Pass Turn,Ben_b,Turn,None
+50,Ben_b,Swap,Platter,Rice,Eggs
+52,Ben_b,Redeem,Ben_b,Rice,Real Rice
+52,Ben_b,Redeem,Ben_b,Rice,Real Rice
+52,Ben_b,Redeem,Yan_b,Eggs,Real Eggs
+52,Ben_b,Pass Turn,Nia_b,Turn,None
+53,Mia_b,Exchange,Nia_b,Cheese,Herbs
+54,Will,Exchange,Nia_b,Beans,Herbs
+55,Ben_b,Exchange,Nia_b,Rice,Herbs
+57,Nia_b,Redeem,Ava_b,Spices,Real Spices
+57,Nia_b,Pass Turn,Luc_b,Turn,None
+59,Luc_b,Redeem,Yan_b,Eggs,Real Eggs
+59,Luc_b,Pass Turn,Ava_b,Turn,None
+60,Ava_b,Redeem,Leo_b,Vegetables,Real Vegetables
+60,Ava_b,Prepare,Table,Recipe ingredients,10 scoops of Spiced Rice Pilaf
+60,Ava_b,Pass Turn,Leo_b,Turn,None
+61,Yan_b,Exchange,Leo_b,Flour,Vegetables
+62,Nia_b,Exchange,Leo_b,Beans,Vegetables
+63,Luc_b,Exchange,Leo_b,Flour,Vegetables
+65,Leo_b,Redeem,Yan_b,Eggs,Real Eggs
+65,Leo_b,Pass Turn,Mia_b,Turn,None
+66,Will,Exchange,Mia_b,Beans,Cheese
+67,Leo_b,Exchange,Mia_b,Beans,Cheese
+69,Mia_b,Redeem,Nia_b,Herbs,Real Herbs
+69,Mia_b,Pass Turn,Yan_b,Turn,None
+70,Yan_b,Redeem,Leo_b,Vegetables,Real Vegetables
+70,Yan_b,Prepare,Table,Recipe ingredients,10 pieces of Breakfast Burrito
+70,Yan_b,Pass Turn,Will,Turn,None
+71,Will,Redeem,Nia_b,Herbs,Real Herbs
+71,Will,Redeem,Mia_b,Cheese,Real Cheese
+71,Will,Prepare,Table,Recipe ingredients,10 scoops of Bean Dip
+71,Will,Pass Turn,Ben_b,Turn,None
+73,Ben_b,Redeem,Nia_b,Herbs,Real Herbs
+73,Ben_b,Pass Turn,Nia_b,Turn,None
+74,Nia_b,Redeem,Leo_b,Vegetables,Real Vegetables
+74,Nia_b,Prepare,Table,Recipe ingredients,10 cups of Bean Herb Salad
+74,Nia_b,Pass Turn,Luc_b,Turn,None
+75,Luc_b,Redeem,Leo_b,Vegetables,Real Vegetables
+75,Luc_b,Prepare,Table,Recipe ingredients,10 pieces of Herb Dumplings
+75,Luc_b,Pass Turn,Ava_b,Turn,None
+76,Ava_b,Swap,Platter,Spices,Eggs
+77,Ava_b,Swap,Platter,Spices,Eggs
+79,Ava_b,Redeem,Ava_b,Spices,Real Spices
+79,Ava_b,Redeem,Ava_b,Spices,Real Spices
+79,Ava_b,Redeem,Yan_b,Eggs,Real Eggs
+79,Ava_b,Redeem,Yan_b,Eggs,Real Eggs
+79,Ava_b,Pass Turn,Leo_b,Turn,None
+80,Mia_b,Exchange,Leo_b,Beans,Vegetables
+82,Leo_b,Redeem,Mia_b,Cheese,Real Cheese
+82,Leo_b,Pass Turn,Mia_b,Turn,None
+83,Ben_b,Exchange,Mia_b,Rice,Cheese
+84,Leo_b,Exchange,Mia_b,Beans,Cheese
+85,Mia_b,Redeem,Leo_b,Vegetables,Real Vegetables
+85,Mia_b,Prepare,Table,Recipe ingredients,10 slices of Cheesy Rice Bake
+85,Mia_b,Pass Turn,Yan_b,Turn,None
+87,Yan_b,Redeem,Yan_b,Eggs,Real Eggs
+87,Yan_b,Redeem,Yan_b,Eggs,Real Eggs
+87,Yan_b,Pass Turn,Will,Turn,None
+89,Will,Swap,Platter,Beans,Flour
+90,Will,Swap,Platter,Flour,Spices
+91,Will,Swap,Platter,Spices,Flour
+93,Will,Redeem,Will,Beans,Real Beans
+93,Will,Redeem,Will,Beans,Real Beans
+93,Will,Pass Turn,Ben_b,Turn,None
+95,Ben_b,Redeem,Mia_b,Cheese,Real Cheese
+95,Ben_b,Pass Turn,Nia_b,Turn,None
+96,Nia_b,Swap,Platter,Herbs,Spices
+97,Ava_b,Exchange,Nia_b,Spices,Herbs
+98,Yan_b,Exchange,Nia_b,Spices,Herbs
+100,Nia_b,Redeem,Nia_b,Herbs,Real Herbs
+100,Nia_b,Redeem,Nia_b,Herbs,Real Herbs
+100,Nia_b,Redeem,Ben_b,Rice,Real Rice
+100,Nia_b,Redeem,Ava_b,Spices,Real Spices
+100,Nia_b,Redeem,Mia_b,Cheese,Real Cheese
+100,Nia_b,Pass Turn,Luc_b,Turn,None
+101,Luc_b,Swap,Platter,Flour,Beans
+102,Luc_b,Swap,Platter,Flour,Spices
+104,Luc_b,Redeem,Luc_b,Flour,Real Flour
+104,Luc_b,Redeem,Luc_b,Flour,Real Flour
+104,Luc_b,Redeem,Will,Beans,Real Beans
+104,Luc_b,Redeem,Ava_b,Spices,Real Spices
+104,Luc_b,Pass Turn,Ava_b,Turn,None
+106,Ava_b,Redeem,Nia_b,Herbs,Real Herbs
+106,Ava_b,Pass Turn,Leo_b,Turn,None
+107,Leo_b,Swap,Platter,Flour,Herbs
+108,Will,Exchange,Leo_b,Beans,Vegetables
+109,Nia_b,Exchange,Leo_b,Herbs,Vegetables
+110,Ava_b,Exchange,Leo_b,Spices,Vegetables
+111,Leo_b,Redeem,Nia_b,Herbs,Real Herbs
+111,Leo_b,Redeem,Nia_b,Herbs,Real Herbs
+111,Leo_b,Redeem,Mia_b,Cheese,Real Cheese
+111,Leo_b,Prepare,Table,Recipe ingredients,10 slices of Veggie Omelet
+111,Leo_b,Pass Turn,Mia_b,Turn,None
+112,Mia_b,Swap,Platter,Beans,Flour
+113,Mia_b,Swap,Platter,Rice,Spices
+114,Will,Exchange,Mia_b,Flour,Cheese
+115,Ben_b,Exchange,Mia_b,Rice,Cheese
+116,Luc_b,Exchange,Mia_b,Flour,Cheese
+118,Mia_b,Redeem,Mia_b,Cheese,Real Cheese
+118,Mia_b,Redeem,Mia_b,Cheese,Real Cheese
+118,Mia_b,Redeem,Will,Beans,Real Beans
+118,Mia_b,Redeem,Luc_b,Flour,Real Flour
+118,Mia_b,Redeem,Ava_b,Spices,Real Spices
+118,Mia_b,Pass Turn,Yan_b,Turn,None
+120,Yan_b,Redeem,Nia_b,Herbs,Real Herbs
+120,Yan_b,Pass Turn,Will,Turn,None
+121,Will,Swap,Platter,Beans,Flour
+122,Will,Redeem,Luc_b,Flour,Real Flour
+122,Will,Redeem,Leo_b,Vegetables,Real Vegetables
+122,Will,Redeem,Mia_b,Cheese,Real Cheese
+122,Will,Pass Turn,Ben_b,Turn,None
+123,Ben_b,Redeem,Mia_b,Cheese,Real Cheese
+123,Ben_b,Prepare,Table,Recipe ingredients,10 pieces of Rice Cakes
+123,Ben_b,Pass Turn,Nia_b,Turn,None
+124,Nia_b,Redeem,Leo_b,Vegetables,Real Vegetables
+124,Nia_b,Prepare,Table,Recipe ingredients,10 scoops of Green Rice
+124,Nia_b,Pass Turn,Luc_b,Turn,None
+126,Luc_b,Redeem,Mia_b,Cheese,Real Cheese
+126,Luc_b,Pass Turn,Ava_b,Turn,None
+127,Ava_b,Redeem,Leo_b,Vegetables,Real Vegetables
+127,Ava_b,Prepare,Table,Recipe ingredients,10 slices of Masala Omelet
+127,Ava_b,Pass Turn,Leo_b,Turn,None
+128,Leo_b,Swap,Platter,Flour,Beans
+129,Mia_b,Exchange,Leo_b,Rice,Vegetables
+130,Yan_b,Exchange,Leo_b,Eggs,Vegetables
+131,Luc_b,Exchange,Leo_b,Flour,Vegetables
+133,Leo_b,Redeem,Leo_b,Vegetables,Real Vegetables
+133,Leo_b,Redeem,Will,Beans,Real Beans
+133,Leo_b,Redeem,Will,Beans,Real Beans
+133,Leo_b,Redeem,Ava_b,Spices,Real Spices
+133,Leo_b,Pass Turn,Mia_b,Turn,None
+134,Leo_b,Exchange,Mia_b,Rice,Cheese
+135,Mia_b,Redeem,Leo_b,Vegetables,Real Vegetables
+135,Mia_b,Prepare,Table,Recipe ingredients,10 pieces of Cheese Quesadilla
+135,Mia_b,Pass Turn,Yan_b,Turn,None
+137,Yan_b,Redeem,Leo_b,Vegetables,Real Vegetables
+137,Yan_b,Pass Turn,Will,Turn,None
+139,Will,Pass Turn,Ben_b,Turn,None
+140,Ben_b,Swap,Platter,Rice,Beans
+142,Ben_b,Redeem,Ben_b,Rice,Real Rice
+142,Ben_b,Redeem,Ben_b,Rice,Real Rice
+142,Ben_b,Redeem,Will,Beans,Real Beans
+142,Ben_b,Pass Turn,Nia_b,Turn,None
+143,Nia_b,Swap,Platter,Herbs,Rice
+144,Nia_b,Swap,Platter,Herbs,Eggs
+146,Nia_b,Redeem,Nia_b,Herbs,Real Herbs
+146,Nia_b,Redeem,Ben_b,Rice,Real Rice
+146,Nia_b,Redeem,Ava_b,Spices,Real Spices
+146,Nia_b,Redeem,Yan_b,Eggs,Real Eggs
+146,Nia_b,Pass Turn,Luc_b,Turn,None
+147,Luc_b,Redeem,Leo_b,Vegetables,Real Vegetables
+147,Luc_b,Prepare,Table,Recipe ingredients,10 pieces of Bean Pupusa
+147,Luc_b,Pass Turn,Ava_b,Turn,None
+148,Ava_b,Swap,Platter,Spices,Beans
+149,Ava_b,Swap,Platter,Spices,Flour
+150,Will,Exchange,Ava_b,Beans,Spices
+152,Ava_b,Redeem,Ava_b,Spices,Real Spices
+152,Ava_b,Redeem,Ava_b,Spices,Real Spices
+152,Ava_b,Redeem,Will,Beans,Real Beans
+152,Ava_b,Redeem,Luc_b,Flour,Real Flour
+152,Ava_b,Pass Turn,Leo_b,Turn,None
+153,Leo_b,Swap,Platter,Flour,Herbs
+154,Leo_b,Redeem,Nia_b,Herbs,Real Herbs
+154,Leo_b,Redeem,Mia_b,Cheese,Real Cheese
+154,Leo_b,Prepare,Table,Recipe ingredients,10 cups of Vegetable Chili
+154,Leo_b,Pass Turn,Mia_b,Turn,None
+155,Mia_b,Swap,Platter,Rice,Herbs
+156,Mia_b,Swap,Platter,Flour,Spices
+157,Yan_b,Exchange,Mia_b,Eggs,Cheese
+158,Ben_b,Exchange,Mia_b,Fried Rice scoop,Cheese
+159,Nia_b,Exchange,Mia_b,Herbs,Cheese
+160,Ava_b,Exchange,Mia_b,Beans,Cheese
+162,Mia_b,Redeem,Mia_b,Cheese,Real Cheese
+162,Mia_b,Redeem,Nia_b,Herbs,Real Herbs
+162,Mia_b,Redeem,Luc_b,Flour,Real Flour
+162,Mia_b,Redeem,Ava_b,Spices,Real Spices
+162,Mia_b,Redeem,Yan_b,Eggs,Real Eggs
+162,Mia_b,Pass Turn,Yan_b,Turn,None
+164,Yan_b,Redeem,Mia_b,Cheese,Real Cheese
+164,Yan_b,Pass Turn,Will,Turn,None
+165,Will,Redeem,Ava_b,Spices,Real Spices
+165,Will,Prepare,Table,Recipe ingredients,10 pieces of Bean Burrito
+165,Will,Pass Turn,Ben_b,Turn,None
+166,Ben_b,Swap,Platter,Rice,Spices
+168,Ben_b,Redeem,Ava_b,Spices,Real Spices
+168,Ben_b,Redeem,Mia_b,Cheese,Real Cheese
+168,Ben_b,Pass Turn,Nia_b,Turn,None
+170,Nia_b,Redeem,Mia_b,Cheese,Real Cheese
+170,Nia_b,Pass Turn,Luc_b,Turn,None
+171,Luc_b,Swap,Platter,Flour,Beans
+172,Luc_b,Swap,Platter,Flour,Rice
+174,Luc_b,Redeem,Luc_b,Flour,Real Flour
+174,Luc_b,Redeem,Will,Beans,Real Beans
+174,Luc_b,Redeem,Ben_b,Rice,Real Rice
+174,Luc_b,Pass Turn,Ava_b,Turn,None
+176,Ava_b,Redeem,Mia_b,Cheese,Real Cheese
+176,Ava_b,Pass Turn,Leo_b,Turn,None
+177,Leo_b,Swap,Platter,Vegetables,Beans
+178,Leo_b,Swap,Platter,Vegetables,Rice
+179,Mia_b,Exchange,Leo_b,Beans,Vegetables
+180,Ben_b,Exchange,Leo_b,Fried Rice scoop,Vegetables
+181,Nia_b,Exchange,Leo_b,Herbs,Vegetables
+182,Ava_b,Exchange,Leo_b,Spices,Vegetables
+184,Leo_b,Redeem,Leo_b,Vegetables,Real Vegetables
+184,Leo_b,Redeem,Will,Beans,Real Beans
+184,Leo_b,Redeem,Ben_b,Rice,Real Rice
+184,Leo_b,Redeem,Ava_b,Spices,Real Spices
+184,Leo_b,Redeem,Yan_b,Eggs,Real Eggs
+184,Leo_b,Pass Turn,Mia_b,Turn,None
+185,Yan_b,Exchange,Mia_b,Eggs,Cheese
+186,Leo_b,Exchange,Mia_b,Beans,Cheese
+187,Mia_b,Redeem,Leo_b,Vegetables,Real Vegetables
+187,Mia_b,Prepare,Table,Recipe ingredients,10 slices of Cheese Frittata
+187,Mia_b,Pass Turn,Yan_b,Turn,None
+188,Yan_b,Redeem,Mia_b,Cheese,Real Cheese
+188,Yan_b,Prepare,Table,Recipe ingredients,10 slices of Cheese Omelet
+188,Yan_b,Pass Turn,Will,Turn,None
+189,Will,Pass Turn,Ben_b,Turn,None
+190,Ben_b,Redeem,Leo_b,Vegetables,Real Vegetables
+190,Ben_b,Prepare,Table,Recipe ingredients,10 scoops of Rice Bean Bowl
+190,Ben_b,Pass Turn,Nia_b,Turn,None
+191,Luc_b,Exchange,Nia_b,Flour,Herbs
+192,Nia_b,Redeem,Leo_b,Vegetables,Real Vegetables
+192,Nia_b,Prepare,Table,Recipe ingredients,10 scoops of Herb Rice Bowl
+192,Nia_b,Pass Turn,Luc_b,Turn,None
+193,Luc_b,Settlement Swap,Platter,Herb Dumplings piece,Vegetables
+195,Luc_b,Redeem,Nia_b,Herbs,Real Herbs
+195,Luc_b,Redeem,Leo_b,Vegetables,Real Vegetables
+195,Luc_b,Pass Turn,Ava_b,Turn,None
+196,Luc_b,Exchange,Ava_b,Herb Dumplings piece,Spices
+197,Ava_b,Redeem,Leo_b,Vegetables,Real Vegetables
+197,Ava_b,Prepare,Table,Recipe ingredients,10 pieces of Bean Tacos
+197,Ava_b,Pass Turn,Leo_b,Turn,None
+198,Leo_b,Redeem,Mia_b,Cheese,Real Cheese
+198,Leo_b,Prepare,Table,Recipe ingredients,10 scoops of Veg Fried Rice
+198,Leo_b,Pass Turn,Mia_b,Turn,None
+199,Mia_b,Pass Turn,Yan_b,Turn,None
+200,Yan_b,Swap,Platter,Eggs,Rice
+201,Yan_b,Swap,Platter,Eggs,Vegetables
+203,Yan_b,Redeem,Yan_b,Eggs,Real Eggs
+203,Yan_b,Redeem,Yan_b,Eggs,Real Eggs
+203,Yan_b,Redeem,Ben_b,Rice,Real Rice
+203,Yan_b,Redeem,Leo_b,Vegetables,Real Vegetables
+203,Yan_b,Pass Turn,Will,Turn,None
+204,Will,Pass Turn,Ben_b,Turn,None
+205,Ben_b,Pass Turn,Nia_b,Turn,None
+206,Yan_b,Exchange,Nia_b,Eggs,Herbs
+207,Nia_b,Pass Turn,Luc_b,Turn,None
+208,Luc_b,Redeem,Ava_b,Spices,Real Spices
+208,Luc_b,Prepare,Table,Recipe ingredients,10 slices of Vegetable Flatbread
+208,Luc_b,Pass Turn,Ava_b,Turn,None
+209,Ava_b,Pass Turn,Leo_b,Turn,None
+210,Leo_b,Pass Turn,Mia_b,Turn,None
+211,Mia_b,Pass Turn,Yan_b,Turn,None
+213,Yan_b,Redeem,Nia_b,Herbs,Real Herbs
+213,Yan_b,Pass Turn,Will,Turn,None
+215,Will,Pass Turn,Ben_b,Turn,None
+216,Ben_b,Pass Turn,Nia_b,Turn,None
+217,Nia_b,Pass Turn,Luc_b,Turn,None
+218,Luc_b,Pass Turn,Ava_b,Turn,None
+219,Yan_b,Exchange,Ava_b,Eggs,Spices
+220,Ava_b,Pass Turn,Leo_b,Turn,None
+221,Leo_b,Pass Turn,Mia_b,Turn,None
+222,Will,Exchange,Mia_b,Bean Shakshuka cup,Beans
+223,Mia_b,Pass Turn,Yan_b,Turn,None
+224,Yan_b,Redeem,Ava_b,Spices,Real Spices
+224,Yan_b,Prepare,Table,Recipe ingredients,10 scoops of Egg Fried Rice
+224,Yan_b,Pass Turn,Will,Turn,None
+225,Will,Settlement Swap,Platter,Beans,Herb Dumplings piece
+226,Will,Pass Turn,Ben_b,Turn,None
+227,Ben_b,Settlement Swap,Platter,Fried Rice scoop,Rice
+228,Ben_b,Pass Turn,Nia_b,Turn,None
+230,Nia_b,Settlement Swap,Platter,Spices,Fried Rice scoop
+231,Nia_b,Pass Turn,Luc_b,Turn,None
+232,Luc_b,Settlement Swap,Platter,Herb Dumplings piece,Flour
+233,Luc_b,Pass Turn,Ava_b,Turn,None
+234,Ava_b,Settlement Swap,Platter,Spices,Herb Dumplings piece
+235,Ava_b,Pass Turn,Leo_b,Turn,None
+236,Nia_b,Exchange,Leo_b,Bean Herb Salad cup,Herbs
+237,Leo_b,Pass Turn,Mia_b,Turn,None
+239,Mia_b,Pass Turn,Yan_b,Turn,None
+241,Yan_b,Pass Turn,Will,Turn,None
+242,Will,Pass Turn,Ben_b,Turn,None
+243,Ben_b,Settlement Swap,Platter,Fried Rice scoop,Rice
+244,Ben_b,Pass Turn,Nia_b,Turn,None
+245,Mia_b,Exchange,Nia_b,Herbs,Fried Rice scoop
+246,Yan_b,Exchange,Nia_b,Breakfast Burrito piece,Eggs
+247,Nia_b,Settlement Swap,Platter,Herbs,Fried Rice scoop
+248,Nia_b,Pass Turn,Luc_b,Turn,None
+249,Luc_b,Settlement Swap,Platter,Herb Dumplings piece,Flour
+250,Luc_b,Pass Turn,Ava_b,Turn,None
+252,Ava_b,Pass Turn,Leo_b,Turn,None
+253,Leo_b,Settlement Swap,Platter,Vegetables,Herb Dumplings piece
+254,Leo_b,Pass Turn,Mia_b,Turn,None
+256,Mia_b,Pass Turn,Yan_b,Turn,None
+257,Ava_b,Exchange,Yan_b,Eggs,Breakfast Burrito piece
+258,Mia_b,Exchange,Yan_b,Eggs,Breakfast Burrito piece
+259,Yan_b,Pass Turn,Will,Turn,None
+260,Will,Pass Turn,Ben_b,Turn,None
+261,Ben_b,Settlement Swap,Platter,Fried Rice scoop,Rice
+262,Ben_b,Pass Turn,Nia_b,Turn,None
+263,Nia_b,Settlement Swap,Platter,Herbs,Fried Rice scoop
+264,Nia_b,Pass Turn,Luc_b,Turn,None
+265,Luc_b,Settlement Swap,Platter,Herb Dumplings piece,Flour
+266,Luc_b,Pass Turn,Ava_b,Turn,None
+267,Ava_b,Pass Turn,Leo_b,Turn,None
+268,Leo_b,Settlement Swap,Platter,Vegetables,Herb Dumplings piece
+269,Leo_b,Pass Turn,Mia_b,Turn,None
+270,Mia_b,Pass Turn,Yan_b,Turn,None
+271,Yan_b,Pass Turn,Will,Turn,None
+272,Will,Pass Turn,Ben_b,Turn,None
+273,Ben_b,Pass Turn,Nia_b,Turn,None
+275,Nia_b,Pass Turn,Luc_b,Turn,None
+276,Nia_b,Exchange,Luc_b,Flour,Herb Dumplings piece
+277,Luc_b,Settlement Swap,Platter,Herb Dumplings piece,Flour
+278,Luc_b,Pass Turn,Ava_b,Turn,None
+279,Ava_b,Pass Turn,Leo_b,Turn,None
+280,Leo_b,Pass Turn,Mia_b,Turn,None
+281,Mia_b,Settlement Swap,Platter,Cheese,Herb Dumplings piece
+282,Mia_b,Pass Turn,Yan_b,Turn,None
+283,Yan_b,Pass Turn,Will,Turn,None
+284,Will,Pass Turn,Ben_b,Turn,None
+285,Ben_b,Pass Turn,Nia_b,Turn,None
+286,Nia_b,Pass Turn,Luc_b,Turn,None
+287,Luc_b,Settlement Swap,Platter,Herb Dumplings piece,Flour
+288,Luc_b,Pass Turn,Ava_b,Turn,None
+289,Ava_b,Pass Turn,Leo_b,Turn,None
+290,Leo_b,Pass Turn,Mia_b,Turn,None
+291,Mia_b,Settlement Swap,Platter,Cheese,Herb Dumplings piece
+291,Will,Share,Will,Bean Shakshuka cup x9,Shared
+291,Will,Share,Will,Bean Dip scoop x10,Shared
+291,Will,Share,Will,Herb Dumplings piece x1,Shared
+291,Will,Share,Will,Bean Burrito piece x10,Shared
+291,Ben_b,Share,Ben_b,Fried Rice scoop x5,Shared
+291,Ben_b,Share,Ben_b,Rice Cakes piece x10,Shared
+291,Ben_b,Share,Ben_b,Rice Bean Bowl scoop x10,Shared
+291,Nia_b,Share,Nia_b,Fried Rice scoop x2,Shared
+291,Nia_b,Share,Nia_b,Breakfast Burrito piece x1,Shared
+291,Nia_b,Share,Nia_b,Bean Herb Salad cup x9,Shared
+291,Nia_b,Share,Nia_b,Herb Dumplings piece x1,Shared
+291,Nia_b,Share,Nia_b,Green Rice scoop x10,Shared
+291,Nia_b,Share,Nia_b,Herb Rice Bowl scoop x10,Shared
+291,Luc_b,Share,Luc_b,Herb Dumplings piece x2,Shared
+291,Luc_b,Share,Luc_b,Bean Pupusa piece x10,Shared
+291,Luc_b,Share,Luc_b,Vegetable Flatbread slice x10,Shared
+291,Ava_b,Share,Ava_b,Spiced Rice Pilaf scoop x10,Shared
+291,Ava_b,Share,Ava_b,Breakfast Burrito piece x1,Shared
+291,Ava_b,Share,Ava_b,Herb Dumplings piece x2,Shared
+291,Ava_b,Share,Ava_b,Masala Omelet slice x10,Shared
+291,Ava_b,Share,Ava_b,Bean Tacos piece x10,Shared
+291,Leo_b,Share,Leo_b,Fried Rice scoop x1,Shared
+291,Leo_b,Share,Leo_b,Bean Herb Salad cup x1,Shared
+291,Leo_b,Share,Leo_b,Herb Dumplings piece x2,Shared
+291,Leo_b,Share,Leo_b,Veggie Omelet slice x10,Shared
+291,Leo_b,Share,Leo_b,Vegetable Chili cup x10,Shared
+291,Leo_b,Share,Leo_b,Veg Fried Rice scoop x10,Shared
+291,Mia_b,Share,Mia_b,Bean Shakshuka cup x1,Shared
+291,Mia_b,Share,Mia_b,Fried Rice scoop x2,Shared
+291,Mia_b,Share,Mia_b,Breakfast Burrito piece x1,Shared
+291,Mia_b,Share,Mia_b,Herb Dumplings piece x2,Shared
+291,Mia_b,Share,Mia_b,Cheesy Rice Bake slice x10,Shared
+291,Mia_b,Share,Mia_b,Cheese Quesadilla piece x10,Shared
+291,Mia_b,Share,Mia_b,Cheese Frittata slice x10,Shared
+291,Yan_b,Share,Yan_b,Breakfast Burrito piece x7,Shared
+291,Yan_b,Share,Yan_b,Cheese Omelet slice x10,Shared
+291,Yan_b,Share,Yan_b,Egg Fried Rice scoop x10,Shared

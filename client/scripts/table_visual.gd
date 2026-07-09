@@ -4,6 +4,7 @@ signal intent_requested(intent: Dictionary)
 signal view_requested(participant_id: String)
 signal status_requested(message: String)
 signal menu_requested(action: String)
+signal guidance_tour_dismissed()
 
 const VisualAssets := preload("res://scripts/visual_asset_registry.gd")
 const TableclothPattern := preload("res://scripts/tablecloth_pattern.gd")
@@ -47,6 +48,7 @@ const ACTION_PANEL_FIXED_HEIGHT := INVENTORY_UPPER_PANEL_MIN_HEIGHT - INVENTORY_
 const ACTION_LABEL_SHORT_HEIGHT := 44
 const ACTION_LABEL_MEDIUM_HEIGHT := 78
 const ACTION_LABEL_LONG_HEIGHT := 94
+const ACTION_LABEL_EXTRA_LONG_HEIGHT := 132
 const COMPLETE_ACTION_FIREWORKS_SIZE := Vector2(210, 68)
 const LANDSCAPE_MIN_AVAILABLE_WIDTH := 1060.0
 const LANDSCAPE_MIN_ASPECT := 1.25
@@ -123,6 +125,44 @@ const COMPLETE_ORBIT_LAUNCH_FADE_SECONDS := 0.07
 const COMPLETE_ORBIT_LAUNCH_EVENT_SECONDS := 0.58
 const ANIMATION_POINT_BOUNDS_PADDING := 96.0
 const ANIMATION_POINT_ORIGIN_EPSILON := 1.0
+const GUIDE_HIGHLIGHT_PADDING := 14.0
+const GUIDE_ARROW_COLOR := Color(1.0, 0.78, 0.16, 0.97)
+const GUIDE_ARROW_WIDTH := 10.0
+const GUIDE_ARROW_HEAD_LENGTH := 28.0
+const GUIDE_ARROW_HEAD_WIDTH := 18.0
+
+
+class GuideArrowOverlay:
+	extends Control
+
+	var start_point := Vector2.ZERO
+	var end_point := Vector2.ZERO
+	var arrow_color := GUIDE_ARROW_COLOR
+
+	func configure(start: Vector2, finish: Vector2, color: Color) -> void:
+		start_point = start
+		end_point = finish
+		arrow_color = color
+		queue_redraw()
+
+	func _draw() -> void:
+		var delta := end_point - start_point
+		if delta.length() < 12.0:
+			return
+		var direction := delta.normalized()
+		var normal := Vector2(-direction.y, direction.x)
+		var tip := end_point
+		var shaft_end := tip - direction * (GUIDE_ARROW_HEAD_LENGTH * 0.78)
+		if (shaft_end - start_point).length() > 2.0:
+			draw_line(start_point, shaft_end, Color(0.28, 0.16, 0.04, 0.38), GUIDE_ARROW_WIDTH + 4.0, true)
+			draw_line(start_point, shaft_end, arrow_color, GUIDE_ARROW_WIDTH, true)
+		var head := PackedVector2Array([
+			tip,
+			tip - direction * GUIDE_ARROW_HEAD_LENGTH + normal * GUIDE_ARROW_HEAD_WIDTH,
+			tip - direction * GUIDE_ARROW_HEAD_LENGTH - normal * GUIDE_ARROW_HEAD_WIDTH
+		])
+		draw_colored_polygon(head, Color(0.28, 0.16, 0.04, 0.38))
+		draw_colored_polygon(head, arrow_color)
 
 
 class BasketBackdrop:
@@ -614,11 +654,19 @@ var _offer_popup: PopupPanel
 var _offer_popup_scroller: ScrollContainer
 var _offer_popup_list: VBoxContainer
 var _overlay_layer: Control
+var _guide_overlay_layer: Control
+var _guide_highlight_panel: PanelContainer
+var _guide_arrow_overlay: GuideArrowOverlay
+var _guide_highlight_panels: Array = []
+var _guide_arrow_overlays: Array = []
 var _menu_canvas: CanvasLayer
 var _menu_button: Button
 var _main_menu_overlay_button: Button
 var _menu_popup: PopupPanel
 var _menu_popup_list: VBoxContainer
+var _guide_popup: PopupPanel
+var _guide_popup_scroller: ScrollContainer
+var _guide_popup_list: VBoxContainer
 var _basket_slot_by_ingredient := {}
 var _basket_slot_table_key := ""
 var _fast_bots_enabled := true
@@ -635,6 +683,12 @@ var _complete_orbit_transition_active := false
 var _shared_food_orbit_items: Array = []
 var _compacted_complete_orbit_replay_suppression_active := false
 var _debug_mobile_turn_catchup_enabled := false
+var _guidance_tour_dismissed := false
+var _guide_step_index := 0
+var _guide_steps: Array = []
+var _guide_mode := ""
+var _guide_replay := false
+var _last_guidance_hint_key := ""
 
 
 func _ready() -> void:
@@ -652,6 +706,7 @@ func _exit_tree() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		_layout_complete_food_orbit()
+		_sync_guide_overlay()
 
 
 func _get_minimum_size() -> Vector2:
@@ -776,6 +831,7 @@ func _apply_snapshot(snapshot: Dictionary) -> void:
 	_render_inventory()
 	_refresh_food_piece_info_popup()
 	_record_layout_debug()
+	_sync_guidance_hint_pulses()
 	_sync_complete_celebration_effects()
 	_warm_static_animation_assets()
 
@@ -834,6 +890,107 @@ func highlight_incoming_offers_for_viewer() -> void:
 			_animate_offer_badge_arrival(participant_node, "!", Color(0.82, 0.12, 0.10))
 	if first_sender_id != "":
 		_open_offer_popup(first_sender_id)
+
+
+func set_guidance_tour_dismissed(dismissed: bool) -> void:
+	_guidance_tour_dismissed = dismissed
+
+
+func start_table_tour(replay := false) -> void:
+	if _snapshot.is_empty() or str(_snapshot.get("tableCode", "")) == "":
+		return
+	_guide_mode = "tour"
+	_guide_replay = replay
+	_guide_steps = _cookbook_tour_steps()
+	_guide_step_index = 0
+	_open_guide_step()
+
+
+func open_cookbook_help() -> void:
+	_guide_mode = "help"
+	_guide_replay = false
+	_clear_guide_overlay()
+	_clear(_guide_popup_list)
+	_guide_popup_list.add_child(_guide_popup_header("Cookbook Help", false))
+	_guide_popup_list.add_child(_guide_popup_wrapped_text("Recipes is a table game about cooking, helping, and keeping promises fair.", 318))
+	_guide_popup_list.add_child(_guide_popup_section("1. Cook 3 recipes", "Collect the promise cards shown in your recipe. Redeem / Pass turns useful cards into real ingredients and fills recipe slots."))
+	_guide_popup_list.add_child(_guide_popup_section("2. Help neighbors", "When you finish your 3 recipes, trade spare promise cards or food pieces so other cooks can finish too."))
+	_guide_popup_list.add_child(_guide_popup_section("3. Rebalance promises", "End like the start: 2 of your promise cards in the Common Basket, 6 in your hand, and no other cooks' cards."))
+	_guide_popup_list.add_child(_guide_popup_section("Promise cards", "Promise cards are claims on real ingredients. They help cooks trade fairly because every card points back to real food."))
+	_guide_popup_list.add_child(_guide_popup_section("Common Basket", "Swap one card you hold for one visible card in the basket. Later, food you create can also be swapped here."))
+	var row := _offer_popup_button_row()
+	row.add_child(_offer_popup_button("Replay Tour", func() -> void:
+		start_table_tour(true)
+	))
+	row.add_child(_offer_popup_button("Close", func() -> void:
+		_close_guide_popup(false)
+	))
+	_guide_popup_list.add_child(row)
+	_show_guide_popup(360, 480, true)
+	debug_stats["guideMode"] = _guide_mode
+	debug_stats["guidePopupVisible"] = true
+
+
+func debug_open_cookbook_help() -> void:
+	open_cookbook_help()
+
+
+func debug_start_table_tour(replay := true) -> void:
+	start_table_tour(replay)
+
+
+func debug_guide_popup_visible() -> bool:
+	return is_instance_valid(_guide_popup) and _guide_popup.visible
+
+
+func debug_guide_step_index() -> int:
+	return _guide_step_index
+
+
+func debug_guide_mode() -> String:
+	return _guide_mode
+
+
+func debug_guide_target() -> String:
+	return str(debug_stats.get("guideTarget", ""))
+
+
+func debug_guide_highlight_visible() -> bool:
+	return debug_guide_highlight_count() > 0
+
+
+func debug_guide_arrow_visible() -> bool:
+	return debug_guide_arrow_count() > 0
+
+
+func debug_guide_highlight_count() -> int:
+	var count := 0
+	for raw_highlight in _guide_highlight_panels:
+		var highlight := raw_highlight as PanelContainer
+		if is_instance_valid(highlight) and highlight.visible:
+			count += 1
+	return count
+
+
+func debug_guide_arrow_count() -> int:
+	var count := 0
+	for raw_arrow in _guide_arrow_overlays:
+		var arrow := raw_arrow as GuideArrowOverlay
+		if is_instance_valid(arrow) and arrow.visible:
+			count += 1
+	return count
+
+
+func debug_guidance_tour_dismissed_flag() -> bool:
+	return _guidance_tour_dismissed
+
+
+func debug_guide_next() -> void:
+	_next_guide_step()
+
+
+func debug_guide_done() -> void:
+	_finish_guide_tour()
 
 
 func debug_selected_hand_ingredient() -> String:
@@ -1356,6 +1513,27 @@ func _build() -> void:
 	_animation_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_overlay_layer.add_child(_animation_layer)
 
+	_guide_overlay_layer = Control.new()
+	_guide_overlay_layer.name = "CookbookGuideOverlayLayer"
+	_guide_overlay_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_guide_overlay_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_guide_overlay_layer.visible = false
+	_overlay_layer.add_child(_guide_overlay_layer)
+
+	_guide_highlight_panel = PanelContainer.new()
+	_guide_highlight_panel.name = "CookbookTourHighlight"
+	_guide_highlight_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_guide_highlight_panel.add_theme_stylebox_override("panel", _guide_highlight_style())
+	_guide_overlay_layer.add_child(_guide_highlight_panel)
+	_guide_highlight_panels.append(_guide_highlight_panel)
+
+	_guide_arrow_overlay = GuideArrowOverlay.new()
+	_guide_arrow_overlay.name = "CookbookTourArrow"
+	_guide_arrow_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_guide_arrow_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_guide_overlay_layer.add_child(_guide_arrow_overlay)
+	_guide_arrow_overlays.append(_guide_arrow_overlay)
+
 	_menu_canvas = CanvasLayer.new()
 	_menu_canvas.layer = 9
 	add_child(_menu_canvas)
@@ -1604,6 +1782,24 @@ func _build() -> void:
 	_menu_popup.add_child(_menu_popup_list)
 	add_child(_menu_popup)
 
+	_guide_popup = PopupPanel.new()
+	_guide_popup.name = "CookbookHelpPopup"
+	_configure_persistent_popup(_guide_popup)
+	_guide_popup.add_theme_stylebox_override("panel", _offer_popup_panel_style())
+	_guide_popup_scroller = ScrollContainer.new()
+	_guide_popup_scroller.name = "CookbookHelpScroller"
+	_guide_popup_scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_guide_popup_scroller.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_guide_popup_scroller.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_guide_popup_list = VBoxContainer.new()
+	_guide_popup_list.name = "CookbookHelpList"
+	_guide_popup_list.add_theme_constant_override("separation", 6)
+	_guide_popup_list.custom_minimum_size = Vector2(318, 0)
+	_guide_popup_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_guide_popup_scroller.add_child(_guide_popup_list)
+	_guide_popup.add_child(_guide_popup_scroller)
+	add_child(_guide_popup)
+
 
 func _should_use_landscape_layout(area: Vector2) -> bool:
 	if area.x < LANDSCAPE_MIN_AVAILABLE_WIDTH:
@@ -1713,6 +1909,7 @@ func _render_menu() -> void:
 
 
 func _process(_delta: float) -> void:
+	_sync_guide_overlay()
 	if _visual_paused:
 		_sync_menu_visibility(false)
 		return
@@ -1853,7 +2050,7 @@ func _position_menu_button() -> void:
 
 func _table_menu_actions() -> Array[String]:
 	var phase := str(_snapshot.get("phase", ""))
-	var actions: Array[String] = ["View History", "Debug Sync", "Catch Up"]
+	var actions: Array[String] = ["How To Play", "Replay Table Tour", "View History", "Debug Sync", "Catch Up"]
 	if phase != "" and phase != "lobby":
 		actions.append("Play Animations" if _skip_animations else "Skip Animations")
 	if _can_use_pause_menu_action(phase):
@@ -1945,6 +2142,12 @@ func _menu_popup_button(action: String) -> Button:
 		if selected_action == "Fast Bots" or selected_action == "Slow Bots":
 			_toggle_bot_animation_speed()
 			return
+		if selected_action == "How To Play":
+			open_cookbook_help()
+			return
+		if selected_action == "Replay Table Tour":
+			start_table_tour(true)
+			return
 		menu_requested.emit(selected_action)
 		)
 	button.custom_minimum_size = Vector2(196, 38)
@@ -1961,6 +2164,8 @@ func _menu_popup_button(action: String) -> Button:
 		_apply_button_style(button, Color(0.40, 0.53, 0.53), Color(0.18, 0.30, 0.30), 2)
 	elif action == "Fast Bots" or action == "Slow Bots":
 		_apply_button_style(button, Color(0.82, 0.58, 0.23), Color(0.42, 0.25, 0.08), 2)
+	elif action == "How To Play" or action == "Replay Table Tour":
+		_apply_button_style(button, Color(0.96, 0.84, 0.52), Color(0.50, 0.32, 0.12), 2)
 	elif action == "Main Menu":
 		_apply_button_style(button, Color(0.76, 0.62, 0.36), Color(0.40, 0.27, 0.13), 2)
 	else:
@@ -2358,10 +2563,10 @@ func _render_pass_turn_action() -> void:
 
 func _render_deposit_action_controls() -> void:
 	if not _can_act_in_deposit():
-		_redeem_box.add_child(_action_label("Offering given. Waiting for the table."))
+		_redeem_box.add_child(_action_label("Opening offerings are automatic. You have put 2 promise cards in the Common Basket and kept 6 in hand."))
 		return
 	if _selected_hand_voucher_id == "":
-		_redeem_box.add_child(_action_label("Tap a promise card to select it."))
+		_redeem_box.add_child(_action_label("Opening offerings are automatic. You have put 2 promise cards in the Common Basket and kept 6 in hand."))
 		return
 	_redeem_box.add_child(_action_label("Selected: %s" % _ingredient_display(_selected_hand_ingredient_id)))
 	_redeem_box.add_child(_action_button("Offer", _offer_selected_to_common_basket))
@@ -2372,12 +2577,12 @@ func _render_playing_action_controls() -> void:
 		_redeem_box.add_child(_finished_dishes_help_label())
 		return
 	if _is_round_robin_off_turn("playing"):
-		_redeem_box.add_child(_action_label("Wait while other cooks take their turns."))
+		_redeem_box.add_child(_action_label("Waiting for %s. Check your recipe, watch the basket, and review offers." % _participant_name(str(_snapshot.get("currentTurnParticipantId", "")))))
 		return
 	if _selected_hand_voucher_id == "" and _selected_inventory_asset_key == "":
-		_redeem_box.add_child(_action_label("Tap a promise card to select it."))
+		_redeem_box.add_child(_action_label("Stage 1: Cook 3 recipes. Collect the cards shown in your recipe. Redeem / Pass fills useful slots."))
 	else:
-		_redeem_box.add_child(_action_label("Choose a needed card in basket or from another player."))
+		_redeem_box.add_child(_action_label("Choose a useful card in the Common Basket or tap a cook to make a trade."))
 
 
 func _render_settlement_action_controls() -> void:
@@ -2405,11 +2610,15 @@ func _render_eating_action_controls() -> void:
 		else:
 			_redeem_box.add_child(_action_label("All food is shared. Finishing the table."))
 		return
-	_redeem_box.add_child(_action_label("Food is being shared automatically."))
+	_redeem_box.add_child(_action_label("Promises are balanced. Food is sharing automatically."))
 
 
 func _render_complete_action_controls() -> void:
-	_redeem_box.add_child(_action_label("All food is shared."))
+	var complete_label := _action_label("Congratulations! Everyone cooked, balanced promises, and shared food.")
+	complete_label.add_theme_font_size_override("font_size", 12)
+	complete_label.fixed_minimum_size = Vector2(206, 52)
+	complete_label.custom_minimum_size = Vector2(206, 52)
+	_redeem_box.add_child(complete_label)
 	_redeem_box.add_child(_action_button("Game Stats", _open_game_stats_popup))
 	var fireworks := FireworksShow.new()
 	fireworks.name = "ActionFireworks"
@@ -2430,17 +2639,17 @@ func _viewer_has_finished_dish_goal() -> bool:
 
 
 func _finished_dishes_help_label() -> Label:
-	var label := _action_label("Help the other cooks make their dishes.")
-	label.fixed_minimum_size = Vector2(206, ACTION_LABEL_MEDIUM_HEIGHT)
-	label.custom_minimum_size = Vector2(206, ACTION_LABEL_MEDIUM_HEIGHT)
+	var label := _action_label("Stage 2: Help neighbors. You cooked 3 recipes. Trade spare cards or food pieces so others can finish.")
+	label.fixed_minimum_size = Vector2(206, ACTION_LABEL_LONG_HEIGHT)
+	label.custom_minimum_size = Vector2(206, ACTION_LABEL_LONG_HEIGHT)
 	return label
 
 
 func _settlement_debt_label() -> Label:
-	var label := _action_label("Everyone has to settle and return to how the game started (2 cards in the common basket, and 6 cards in their hand)")
+	var label := _action_label("Stage 3: Rebalance promises. End like the start: 2 of your cards in the basket, 6 in your hand, and no other cooks' cards.")
 	label.add_theme_font_size_override("font_size", 12)
-	label.fixed_minimum_size = Vector2(206, 132)
-	label.custom_minimum_size = Vector2(206, 132)
+	label.fixed_minimum_size = Vector2(206, ACTION_LABEL_EXTRA_LONG_HEIGHT)
+	label.custom_minimum_size = Vector2(206, ACTION_LABEL_EXTRA_LONG_HEIGHT)
 	return label
 
 
@@ -10276,7 +10485,10 @@ func _action_label(text: String) -> FixedLabel:
 	label.text = text
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label.add_theme_color_override("font_color", TEXT_MUTED)
+	label.add_theme_color_override("font_color", TEXT_DARK)
+	label.add_theme_color_override("font_outline_color", Color(0.96, 0.90, 0.72, 0.40))
+	label.add_theme_constant_override("outline_size", 1)
+	label.add_theme_font_size_override("font_size", _action_label_font_size(text))
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	var label_height := _action_label_height(text)
@@ -10292,7 +10504,22 @@ func _action_label_height(text: String) -> int:
 		return ACTION_LABEL_SHORT_HEIGHT
 	if length <= 42:
 		return ACTION_LABEL_MEDIUM_HEIGHT
+	if length > 112:
+		return ACTION_LABEL_EXTRA_LONG_HEIGHT
 	return ACTION_LABEL_LONG_HEIGHT
+
+
+func _action_label_font_size(text: String) -> int:
+	var length := text.strip_edges().length()
+	if length > 120:
+		return 13
+	if length > 88:
+		return 14
+	if length > 58:
+		return 15
+	if length > 36:
+		return 16
+	return 18
 
 
 func _offer_popup_title(text: String) -> Label:
@@ -10448,6 +10675,695 @@ func _safe_popup_width(preferred_width: int, min_width: int, horizontal_margin: 
 	return clampi(available, mini(min_width, available), preferred_width)
 
 
+func _cookbook_tour_steps() -> Array:
+	return [
+		{
+			"title": "You At The Table",
+			"target": "viewer_cook",
+			"targets": ["viewer_cook", "promise_cards"],
+			"text": "This is you. You bring one real ingredient and you hold promise cards for that ingredient.",
+			"targetLabel": "Your cook and hand"
+		},
+		{
+			"title": "Opening Offerings",
+			"target": "own_basket_card",
+			"targets": ["own_basket_card", "promise_cards"],
+			"text": "The table already put 2 of your promise cards in the Common Basket. The other 6 stayed in your hand.",
+			"targetLabel": "Your basket card and 6 in hand"
+		},
+		{
+			"title": "Recipe Slots",
+			"target": "recipe_slots",
+			"targets": ["recipe_slots_each"],
+			"text": "These slots show the ingredients your recipe needs. Filled slots mean progress toward your dish.",
+			"targetLabel": "All recipe slots"
+		},
+		{
+			"title": "Other Cooks",
+			"target": "other_cook_ingredient",
+			"targets": ["other_cook_ingredient"],
+			"text": "Each other cook owns a different real ingredient. Tap a cook to see what they need and trade with them.",
+			"targetLabel": "Another cook's ingredient"
+		},
+		{
+			"title": "Promise Cards",
+			"target": "promise_card_items",
+			"targets": ["promise_card_items"],
+			"text": "Promise cards are claims on real ingredients. They help everyone trade fairly because each card points back to real food.",
+			"targetLabel": "Promise cards in hand"
+		},
+		{
+			"title": "The Common Basket",
+			"target": "specific_basket_card",
+			"targets": ["specific_basket_card"],
+			"text": "This is one card in the Common Basket. Swap one card you hold for one visible card here.",
+			"targetLabel": "A basket card"
+		},
+		{
+			"title": "Redeem And Pass",
+			"target": "redeem_button",
+			"targets": ["promise_cards", "redeem_button"],
+			"text": "Your promise cards appear here. Press Redeem / Pass to fill useful recipe slots, then pass the turn.",
+			"targetLabel": "Hand and Redeem / Pass"
+		},
+		{
+			"title": "Finish Fair",
+			"target": "own_basket_card",
+			"targets": ["own_basket_card", "promise_cards"],
+			"text": "To end the game and start eating, return to how you began: 2 of your cards in the Common Basket and 6 cards in your hand.",
+			"targetLabel": "2 in basket, 6 in hand"
+		}
+	]
+
+
+func _open_guide_step() -> void:
+	if _guide_steps.is_empty() or not is_instance_valid(_guide_popup_list):
+		return
+	_guide_step_index = clampi(_guide_step_index, 0, _guide_steps.size() - 1)
+	var step: Dictionary = _guide_steps[_guide_step_index]
+	var title := str(step.get("title", "Cookbook Help"))
+	var target := str(step.get("target", ""))
+	_clear(_guide_popup_list)
+	_guide_popup_list.add_child(_guide_popup_header(title, true))
+	_guide_popup_list.add_child(_guide_popup_target_label(str(step.get("targetLabel", "")), _guide_step_index + 1, _guide_steps.size()))
+	_guide_popup_list.add_child(_guide_popup_wrapped_text(str(step.get("text", "")), 318))
+	var row := _offer_popup_button_row()
+	if _guide_step_index > 0:
+		row.add_child(_offer_popup_button("Back", func() -> void:
+			_previous_guide_step()
+		))
+	row.add_child(_offer_popup_button("Next" if _guide_step_index < _guide_steps.size() - 1 else "Done", func() -> void:
+		if _guide_step_index < _guide_steps.size() - 1:
+			_next_guide_step()
+		else:
+			_finish_guide_tour()
+	))
+	_guide_popup_list.add_child(row)
+	_show_guide_popup(360, 330, false)
+	debug_stats["guideMode"] = _guide_mode
+	debug_stats["guidePopupVisible"] = true
+	debug_stats["guideStepIndex"] = _guide_step_index
+	debug_stats["guideTitle"] = title
+	debug_stats["guideTarget"] = target
+	call_deferred("_sync_guide_overlay")
+
+
+func _previous_guide_step() -> void:
+	if _guide_step_index <= 0:
+		return
+	_guide_step_index -= 1
+	_open_guide_step()
+
+
+func _next_guide_step() -> void:
+	if _guide_step_index >= _guide_steps.size() - 1:
+		_finish_guide_tour()
+		return
+	_guide_step_index += 1
+	_open_guide_step()
+
+
+func _finish_guide_tour() -> void:
+	_close_guide_popup(true)
+
+
+func _close_guide_popup(mark_tour_dismissed: bool) -> void:
+	if is_instance_valid(_guide_popup):
+		_guide_popup.hide()
+	_clear_guide_overlay()
+	debug_stats["guidePopupVisible"] = false
+	if mark_tour_dismissed and _guide_mode == "tour":
+		_guidance_tour_dismissed = true
+		guidance_tour_dismissed.emit()
+	_guide_mode = ""
+
+
+func _guide_popup_header(text: String, mark_tour_dismissed_on_close: bool) -> Control:
+	var row := HBoxContainer.new()
+	row.name = "CookbookHelpHeader"
+	row.add_theme_constant_override("separation", 4)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(24, 24)
+	row.add_child(spacer)
+	var title := _offer_popup_title(text)
+	title.name = "CookbookHelpTitle"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(title)
+	row.add_child(_guide_popup_close_button(mark_tour_dismissed_on_close))
+	return row
+
+
+func _guide_popup_close_button(mark_tour_dismissed: bool) -> Button:
+	var button := Button.new()
+	button.name = "CookbookHelpClose"
+	button.text = "X"
+	button.custom_minimum_size = Vector2(24, 24)
+	button.focus_mode = Control.FOCUS_NONE
+	button.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.pressed.connect(func() -> void:
+		_close_guide_popup(mark_tour_dismissed)
+	)
+	var normal := _panel_style(Color(0.88, 0.82, 0.68), PANEL_BORDER, 1, 5)
+	var hover := _panel_style(Color(0.94, 0.89, 0.76), PANEL_BORDER.darkened(0.08), 1, 5)
+	var pressed := _panel_style(Color(0.78, 0.70, 0.56), PANEL_BORDER.darkened(0.16), 1, 5)
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_color_override("font_color", TEXT_DARK)
+	button.add_theme_color_override("font_hover_color", TEXT_DARK)
+	button.add_theme_color_override("font_pressed_color", TEXT_DARK)
+	button.add_theme_font_size_override("font_size", 12)
+	return button
+
+
+func _guide_popup_target_label(target_label: String, step_index: int, step_count: int) -> Label:
+	var text := "Step %s/%s" % [step_index, step_count]
+	if target_label.strip_edges() != "":
+		text = "%s - %s" % [text, target_label]
+	var label := _offer_popup_text(text)
+	label.name = "CookbookHelpTarget"
+	label.add_theme_color_override("font_color", Color(0.46, 0.25, 0.08))
+	label.add_theme_font_size_override("font_size", 12)
+	return label
+
+
+func _guide_popup_wrapped_text(text: String, width: int) -> Label:
+	var label := _offer_popup_wrapped_text(text, width)
+	label.name = "CookbookHelpText"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 14)
+	return label
+
+
+func _guide_popup_section(title: String, text: String) -> Control:
+	var box := VBoxContainer.new()
+	box.name = "CookbookHelpSection"
+	box.add_theme_constant_override("separation", 1)
+	var title_label := _offer_popup_text(title)
+	title_label.add_theme_font_size_override("font_size", 13)
+	title_label.add_theme_color_override("font_color", Color(0.36, 0.18, 0.05))
+	box.add_child(title_label)
+	box.add_child(_guide_popup_wrapped_text(text, 318))
+	return box
+
+
+func _show_guide_popup(width: int, max_height: int, allow_scroll: bool) -> void:
+	if not is_instance_valid(_guide_popup) or not is_instance_valid(_guide_popup_scroller):
+		return
+	_guide_popup.hide()
+	_guide_popup_scroller.custom_minimum_size = Vector2(0, 0)
+	_guide_popup.size = Vector2i(0, 0)
+	width = _safe_popup_width(width, mini(300, width), 28)
+	var content_height := int(ceil(_guide_popup_list.get_combined_minimum_size().y))
+	var panel_padding := 18
+	var min_height := 120
+	var needs_scroll := allow_scroll and content_height + panel_padding > max_height
+	_guide_popup_scroller.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO if needs_scroll else ScrollContainer.SCROLL_MODE_DISABLED
+	var height := clampi(content_height + panel_padding, min_height, max_height)
+	if needs_scroll:
+		height = max_height
+	_guide_popup_scroller.custom_minimum_size = Vector2(width - panel_padding, height - panel_padding)
+	var popup_size := Vector2i(width, height)
+	_guide_popup.popup_centered(popup_size)
+	call_deferred("_position_guide_popup_away_from_targets", popup_size)
+
+
+func _sync_guide_overlay() -> void:
+	if _guide_mode != "tour" or not is_instance_valid(_guide_popup) or not _guide_popup.visible:
+		_clear_guide_overlay()
+		return
+	if not is_instance_valid(_guide_overlay_layer):
+		return
+	var target_rects := _guide_step_target_global_rects()
+	if target_rects.is_empty():
+		_clear_guide_overlay()
+		return
+	_guide_overlay_layer.visible = true
+	_guide_overlay_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_guide_overlay_layer.offset_left = 0
+	_guide_overlay_layer.offset_top = 0
+	_guide_overlay_layer.offset_right = 0
+	_guide_overlay_layer.offset_bottom = 0
+	if is_instance_valid(_overlay_layer):
+		_overlay_layer.move_child(_guide_overlay_layer, _overlay_layer.get_child_count() - 1)
+
+	var popup_rect := Rect2(Vector2(_guide_popup.position), Vector2(_guide_popup.size))
+	var popup_center := popup_rect.get_center()
+	var popup_target_overlap := 0.0
+	for target_rect in target_rects:
+		popup_target_overlap += _rect_intersection_area(popup_rect, target_rect.grow(GUIDE_HIGHLIGHT_PADDING))
+	_ensure_guide_overlay_item_count(target_rects.size())
+	for index in range(_guide_highlight_panels.size()):
+		var highlight := _guide_highlight_panels[index] as PanelContainer
+		var arrow := _guide_arrow_overlays[index] as GuideArrowOverlay
+		var visible := index < target_rects.size()
+		if is_instance_valid(highlight):
+			highlight.visible = visible
+		if is_instance_valid(arrow):
+			arrow.visible = visible
+		if not visible:
+			continue
+		var target_rect: Rect2 = target_rects[index]
+		var local_rect := _guide_overlay_local_rect(target_rect).grow(GUIDE_HIGHLIGHT_PADDING)
+		highlight.position = local_rect.position
+		highlight.size = local_rect.size
+		var start := _guide_overlay_local(popup_center)
+		var finish := _guide_overlay_local(target_rect.get_center())
+		arrow.configure(start, finish, GUIDE_ARROW_COLOR)
+	debug_stats["guideHighlightVisible"] = true
+	debug_stats["guideArrowVisible"] = true
+	debug_stats["guideTargetRectCount"] = target_rects.size()
+	debug_stats["guidePopupTargetOverlapArea"] = popup_target_overlap
+
+
+func _position_guide_popup_away_from_targets(popup_size: Vector2i) -> void:
+	if _guide_mode != "tour" or not is_instance_valid(_guide_popup) or not _guide_popup.visible:
+		return
+	var target_rects := _guide_step_target_global_rects()
+	if target_rects.is_empty():
+		_sync_guide_overlay()
+		return
+	var viewport_rect := get_viewport_rect()
+	var viewport_size := viewport_rect.size
+	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
+		_sync_guide_overlay()
+		return
+	var target_union := _merge_rects(target_rects)
+	var size := Vector2(float(popup_size.x), float(popup_size.y))
+	if size.x <= 0.0 or size.y <= 0.0:
+		size = Vector2(_guide_popup.size)
+	var margin := 18.0
+	var candidates: Array[Vector2] = [
+		Vector2((viewport_size.x - size.x) * 0.5, margin),
+		Vector2((viewport_size.x - size.x) * 0.5, viewport_size.y - size.y - margin),
+		Vector2(margin, (viewport_size.y - size.y) * 0.5),
+		Vector2(viewport_size.x - size.x - margin, (viewport_size.y - size.y) * 0.5),
+		Vector2(margin, margin),
+		Vector2(viewport_size.x - size.x - margin, margin),
+		Vector2(margin, viewport_size.y - size.y - margin),
+		Vector2(viewport_size.x - size.x - margin, viewport_size.y - size.y - margin)
+	]
+	var best_position := Vector2(_guide_popup.position)
+	var best_score := -INF
+	for raw_candidate in candidates:
+		var candidate := _clamp_popup_position(raw_candidate, size, viewport_size, margin)
+		var candidate_rect := Rect2(candidate, size)
+		var score := _guide_popup_position_score(candidate_rect, target_union, target_rects, viewport_size)
+		if score > best_score:
+			best_score = score
+			best_position = candidate
+	_guide_popup.position = Vector2i(roundi(best_position.x), roundi(best_position.y))
+	_sync_guide_overlay()
+
+
+func _guide_popup_position_score(candidate: Rect2, target_union: Rect2, target_rects: Array[Rect2], viewport_size: Vector2) -> float:
+	var candidate_center := candidate.get_center()
+	var score := candidate_center.distance_to(target_union.get_center()) * 0.08
+	for target_rect in target_rects:
+		score += candidate_center.distance_to(target_rect.get_center()) * 0.02
+		score -= _rect_intersection_area(candidate, target_rect.grow(GUIDE_HIGHLIGHT_PADDING + 10.0)) * 4.0
+	score -= _rect_intersection_area(candidate, target_union.grow(28.0)) * 2.0
+	var ideal_y := viewport_size.y * 0.52
+	score -= absf(candidate_center.y - ideal_y) * 0.08
+	return score
+
+
+func _clamp_popup_position(position: Vector2, popup_size: Vector2, viewport_size: Vector2, margin: float) -> Vector2:
+	return Vector2(
+		clampf(position.x, margin, maxf(margin, viewport_size.x - popup_size.x - margin)),
+		clampf(position.y, margin, maxf(margin, viewport_size.y - popup_size.y - margin))
+	)
+
+
+func _merge_rects(rects: Array[Rect2]) -> Rect2:
+	if rects.is_empty():
+		return Rect2()
+	var merged := rects[0]
+	for index in range(1, rects.size()):
+		merged = merged.merge(rects[index])
+	return merged
+
+
+func _rect_intersection_area(a: Rect2, b: Rect2) -> float:
+	var left := maxf(a.position.x, b.position.x)
+	var top := maxf(a.position.y, b.position.y)
+	var right := minf(a.end.x, b.end.x)
+	var bottom := minf(a.end.y, b.end.y)
+	if right <= left or bottom <= top:
+		return 0.0
+	return (right - left) * (bottom - top)
+
+
+func _clear_guide_overlay() -> void:
+	if is_instance_valid(_guide_overlay_layer):
+		_guide_overlay_layer.visible = false
+	for raw_highlight in _guide_highlight_panels:
+		var highlight := raw_highlight as PanelContainer
+		if is_instance_valid(highlight):
+			highlight.visible = false
+	for raw_arrow in _guide_arrow_overlays:
+		var arrow := raw_arrow as GuideArrowOverlay
+		if is_instance_valid(arrow):
+			arrow.visible = false
+	debug_stats["guideHighlightVisible"] = false
+	debug_stats["guideArrowVisible"] = false
+
+
+func _ensure_guide_overlay_item_count(count: int) -> void:
+	if not is_instance_valid(_guide_overlay_layer):
+		return
+	while _guide_highlight_panels.size() < count:
+		var highlight := PanelContainer.new()
+		highlight.name = "CookbookTourHighlight_%s" % _guide_highlight_panels.size()
+		highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		highlight.add_theme_stylebox_override("panel", _guide_highlight_style())
+		_guide_overlay_layer.add_child(highlight)
+		_guide_highlight_panels.append(highlight)
+	while _guide_arrow_overlays.size() < count:
+		var arrow := GuideArrowOverlay.new()
+		arrow.name = "CookbookTourArrow_%s" % _guide_arrow_overlays.size()
+		arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		arrow.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_guide_overlay_layer.add_child(arrow)
+		_guide_arrow_overlays.append(arrow)
+
+
+func _guide_step_target_global_rects() -> Array[Rect2]:
+	var rects: Array[Rect2] = []
+	if _guide_steps.is_empty():
+		return rects
+	var step: Dictionary = _guide_steps[clampi(_guide_step_index, 0, _guide_steps.size() - 1)]
+	var target_names: Array = step.get("targets", [])
+	if target_names.is_empty():
+		target_names = [step.get("target", "")]
+	for raw_target in target_names:
+		for rect in _guide_target_global_rects(str(raw_target)):
+			if rect.size.x > 0.0 and rect.size.y > 0.0:
+				rects.append(rect)
+	return rects
+
+
+func _guide_target_global_rects(target: String) -> Array[Rect2]:
+	match target:
+		"viewer_cook":
+			return _single_rect_array(_viewer_cook_rect())
+		"own_basket_card":
+			return _single_rect_array(_own_basket_card_rect())
+		"specific_basket_card":
+			return _single_rect_array(_specific_basket_card_rect())
+		"recipe_slots_each":
+			return _child_rects(_recipe_grid, "")
+		"other_cook_ingredient":
+			return _single_rect_array(_other_cook_ingredient_rect())
+		"promise_card_items":
+			return _hand_card_rects()
+		"redeem_button":
+			return _single_rect_array(_redeem_button_rect())
+		"cooks":
+			return _single_rect_array(_children_global_rect(_participant_row, "Participant_"))
+		"promise_cards":
+			if is_instance_valid(_hand_row) and _hand_row.get_child_count() > 0:
+				return _single_rect_array(_children_global_rect(_hand_row, ""))
+			return _single_rect_array(_control_global_rect(_hand_panel as Control))
+		"hand_food":
+			var inventory_rect := _children_global_rect(_inventory_row, "")
+			if inventory_rect.size.x > 0.0 and inventory_rect.size.y > 0.0:
+				return _single_rect_array(inventory_rect)
+			return _single_rect_array(_control_global_rect(_inventory_lower_panel))
+		_:
+			return _single_rect_array(_control_global_rect(_guide_target_control(target)))
+
+
+func _single_rect_array(rect: Rect2) -> Array[Rect2]:
+	var rects: Array[Rect2] = []
+	if rect.size.x > 0.0 and rect.size.y > 0.0:
+		rects.append(rect)
+	return rects
+
+
+func _child_rects(parent: Control, name_prefix: String) -> Array[Rect2]:
+	var rects: Array[Rect2] = []
+	if not is_instance_valid(parent):
+		return rects
+	for child in parent.get_children():
+		var control := child as Control
+		if not is_instance_valid(control) or not control.visible:
+			continue
+		if name_prefix != "" and not control.name.begins_with(name_prefix):
+			continue
+		var rect := _control_global_rect(control)
+		if rect.size.x > 0.0 and rect.size.y > 0.0:
+			rects.append(rect)
+	return rects
+
+
+func _viewer_cook_rect() -> Rect2:
+	var participant_node := find_child("Participant_%s" % _viewer_id(), true, false) as Control
+	if not is_instance_valid(participant_node):
+		return _control_global_rect(_participant_row)
+	var avatar := participant_node.find_child("CookAvatar", true, false) as Control
+	if is_instance_valid(avatar):
+		return _control_global_rect(avatar)
+	return _control_global_rect(participant_node)
+
+
+func _own_basket_card_rect() -> Rect2:
+	var viewer := _participant_by_id(_viewer_id())
+	var ingredient_id := str(viewer.get("ingredientId", ""))
+	if ingredient_id != "":
+		var slot := find_child("BasketSlot_%s" % ingredient_id, true, false) as Control
+		if is_instance_valid(slot):
+			return _control_global_rect(slot)
+	return _specific_basket_card_rect()
+
+
+func _specific_basket_card_rect() -> Rect2:
+	if not is_instance_valid(_basket_grid):
+		return Rect2()
+	for child in _basket_grid.get_children():
+		var control := child as Control
+		if not is_instance_valid(control) or not control.visible:
+			continue
+		if control.name.begins_with("BasketSlot_empty"):
+			continue
+		var rect := _control_global_rect(control)
+		if rect.size.x > 0.0 and rect.size.y > 0.0:
+			return rect
+	return _control_global_rect(_basket_grid)
+
+
+func _other_cook_ingredient_rect() -> Rect2:
+	var viewer_id := _viewer_id()
+	for raw_participant in _snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		var participant_id := str(participant.get("id", ""))
+		if participant_id == "" or participant_id == viewer_id or str(participant.get("role", "")) != "active":
+			continue
+		var participant_node := find_child("Participant_%s" % participant_id, true, false) as Control
+		if not is_instance_valid(participant_node):
+			continue
+		var ingredient_icon := participant_node.find_child("CookIngredientIcon", true, false) as Control
+		if is_instance_valid(ingredient_icon):
+			return _control_global_rect(ingredient_icon)
+		return _control_global_rect(participant_node)
+	return _control_global_rect(_participant_row)
+
+
+func _hand_card_rects() -> Array[Rect2]:
+	var rects := _child_rects(_hand_row, "HandCard_")
+	if rects.is_empty():
+		rects = _single_rect_array(_control_global_rect(_hand_row))
+	return rects
+
+
+func _redeem_button_rect() -> Rect2:
+	var button := _find_button_with_text(_redeem_box, "Redeem / Pass")
+	if is_instance_valid(button):
+		return _control_global_rect(button)
+	button = _find_button_with_text(_redeem_box, "Pass Turn")
+	if is_instance_valid(button):
+		return _control_global_rect(button)
+	return _control_global_rect(find_child("ActionPanel", true, false) as Control)
+
+
+func _find_button_with_text(root: Node, text_part: String) -> Button:
+	if not is_instance_valid(root):
+		return null
+	if root is Button:
+		var button := root as Button
+		if button.text.find(text_part) >= 0:
+			return button
+	for child in root.get_children():
+		var found := _find_button_with_text(child, text_part)
+		if is_instance_valid(found):
+			return found
+	return null
+
+
+func _children_global_rect(parent: Control, name_prefix: String) -> Rect2:
+	if not is_instance_valid(parent):
+		return Rect2()
+	var found := false
+	var merged := Rect2()
+	for child in parent.get_children():
+		var control := child as Control
+		if not is_instance_valid(control) or not control.visible:
+			continue
+		if name_prefix != "" and not control.name.begins_with(name_prefix):
+			continue
+		var rect := _control_global_rect(control)
+		if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+			continue
+		if not found:
+			merged = rect
+			found = true
+		else:
+			merged = merged.merge(rect)
+	return merged if found else _control_global_rect(parent)
+
+
+func _control_global_rect(control: Control) -> Rect2:
+	if not is_instance_valid(control):
+		return Rect2()
+	var rect := control.get_global_rect()
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return Rect2()
+	return rect
+
+
+func _guide_overlay_local(global_point: Vector2) -> Vector2:
+	if not is_instance_valid(_guide_overlay_layer):
+		return global_point
+	return _guide_overlay_layer.get_global_transform_with_canvas().affine_inverse() * global_point
+
+
+func _guide_overlay_local_rect(global_rect: Rect2) -> Rect2:
+	var top_left := _guide_overlay_local(global_rect.position)
+	var bottom_right := _guide_overlay_local(global_rect.end)
+	var position := Vector2(minf(top_left.x, bottom_right.x), minf(top_left.y, bottom_right.y))
+	var end := Vector2(maxf(top_left.x, bottom_right.x), maxf(top_left.y, bottom_right.y))
+	return Rect2(position, end - position)
+
+
+func _rect_edge_point_toward(rect: Rect2, point: Vector2) -> Vector2:
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return rect.position
+	var center := rect.get_center()
+	var delta := point - center
+	if absf(delta.x) < 0.001 and absf(delta.y) < 0.001:
+		return center
+	var scale_x := absf((rect.size.x * 0.5) / delta.x) if absf(delta.x) > 0.001 else INF
+	var scale_y := absf((rect.size.y * 0.5) / delta.y) if absf(delta.y) > 0.001 else INF
+	return center + delta * minf(scale_x, scale_y)
+
+
+func _pulse_guide_target(target: String) -> void:
+	var control := _guide_target_control(target)
+	if is_instance_valid(control):
+		_pulse_control(control, Color(1.0, 0.74, 0.18))
+
+
+func _guide_target_control(target: String) -> Control:
+	match target:
+		"recipe_slots":
+			return _recipe_grid
+		"cooks":
+			return _participant_row
+		"promise_cards":
+			return _hand_panel as Control
+		"common_basket":
+			var backdrop := find_child("BasketBackdrop", true, false) as Control
+			return backdrop if is_instance_valid(backdrop) else _basket_grid
+		"hand_food":
+			return _inventory_lower_panel
+		"action_panel":
+			return find_child("ActionPanel", true, false) as Control
+		"welcome":
+			return _board_panel
+		_:
+			return _board_panel
+
+
+func _sync_guidance_hint_pulses() -> void:
+	if not _snapshot.has("phase"):
+		return
+	if is_instance_valid(_guide_popup) and _guide_popup.visible:
+		return
+	var phase := str(_snapshot.get("phase", ""))
+	var key := "%s:%s:%s:%s:%s" % [
+		str(_snapshot.get("tableCode", "")),
+		phase,
+		str(_snapshot.get("currentTurnParticipantId", "")),
+		str(_snapshot.get("transactionCursor", _snapshot.get("version", ""))),
+		_selected_inventory_asset_key
+	]
+	if key == _last_guidance_hint_key:
+		return
+	_last_guidance_hint_key = key
+	if _offer_count(true) > 0:
+		_pulse_first_incoming_offer_sender()
+	if phase == "playing" and _can_act_now("playing") and not _viewer_has_finished_dish_goal():
+		if _selected_hand_voucher_id == "" and _selected_inventory_asset_key == "":
+			_pulse_control(_recipe_grid, Color(0.95, 0.68, 0.22))
+			_pulse_control(_hand_row, Color(0.95, 0.68, 0.22))
+		var needed_basket := _first_needed_basket_control()
+		if is_instance_valid(needed_basket):
+			_pulse_control(needed_basket, Color(0.22, 0.62, 0.92))
+	elif phase == "settlement":
+		var viewer := _participant_by_id(_viewer_id())
+		if not bool(viewer.get("cleared", false)):
+			_pulse_control(_basket_grid, Color(0.95, 0.68, 0.22))
+			_pulse_control(_recipe_grid, Color(0.95, 0.68, 0.22))
+
+
+func _pulse_first_incoming_offer_sender() -> void:
+	var viewer_id := _viewer_id()
+	for raw_offer in _snapshot.get("offers", []):
+		var offer: Dictionary = raw_offer
+		if str(offer.get("status", "")) != "pending" or str(offer.get("toParticipantId", "")) != viewer_id:
+			continue
+		var sender_id := str(offer.get("fromParticipantId", ""))
+		var participant_node := find_child("Participant_%s" % sender_id, true, false) as Control
+		if is_instance_valid(participant_node):
+			_pulse_control(participant_node, Color(1.0, 0.74, 0.18))
+			var badge := participant_node.find_child("OfferBadgeIncoming", true, false) as Control
+			if is_instance_valid(badge):
+				_pulse_control(badge, Color(1.0, 0.74, 0.18))
+		if is_instance_valid(_inventory_lower_panel):
+			_pulse_control(_inventory_lower_panel, Color(1.0, 0.74, 0.18))
+		return
+
+
+func _first_needed_basket_control() -> Control:
+	var needed := _needed_recipe_ingredient_ids()
+	if needed.is_empty():
+		return null
+	for ingredient_id in needed:
+		var slot := find_child("BasketSlot_%s" % ingredient_id, true, false) as Control
+		if not is_instance_valid(slot):
+			continue
+		var group := _voucher_group_for_ingredient(_snapshot.get("platter", []), str(ingredient_id))
+		if not group.is_empty():
+			return slot
+	return null
+
+
+func _needed_recipe_ingredient_ids() -> Array[String]:
+	var ids: Array[String] = []
+	var recipe: Dictionary = _snapshot.get("ownRecipe", {})
+	for raw_requirement in recipe.get("requirements", []):
+		var requirement: Dictionary = raw_requirement
+		var ingredient_id := str(requirement.get("ingredientId", ""))
+		if ingredient_id == "" or ids.has(ingredient_id):
+			continue
+		var placed_ids: Array = requirement.get("placedVoucherIds", [])
+		var remaining := int(requirement.get("requiredQty", 0)) - int(requirement.get("redeemedQty", 0)) - placed_ids.size()
+		if remaining > 0:
+			ids.append(ingredient_id)
+	return ids
+
+
 func _board_surface_style() -> StyleBoxFlat:
 	var style := _panel_style(BOARD_PANEL_BG, Color(0.46, 0.38, 0.25), 1, 8)
 	_apply_surface_panel_metrics(style, BOARD_PANEL_MARGIN_X, BOARD_PANEL_MARGIN_Y)
@@ -10563,6 +11479,18 @@ func _pulse_style(color: Color) -> StyleBoxFlat:
 	style.content_margin_top = 0
 	style.content_margin_right = 0
 	style.content_margin_bottom = 0
+	return style
+
+
+func _guide_highlight_style() -> StyleBoxFlat:
+	var style := _panel_style(Color(GUIDE_ARROW_COLOR.r, GUIDE_ARROW_COLOR.g, GUIDE_ARROW_COLOR.b, 0.22), GUIDE_ARROW_COLOR, 5, 14)
+	style.content_margin_left = 0
+	style.content_margin_top = 0
+	style.content_margin_right = 0
+	style.content_margin_bottom = 0
+	style.shadow_color = Color(0.24, 0.12, 0.03, 0.48)
+	style.shadow_size = 8
+	style.shadow_offset = Vector2(0, 2)
 	return style
 
 

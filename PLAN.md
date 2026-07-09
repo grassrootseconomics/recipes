@@ -49,6 +49,7 @@
 - [x] Add editable pre-start seat grid with ingredient image, name field, and Player/Bot toggle for all 8 seats.
 - [x] Arrange the 8 cooks around the Common Basket and align lobby order, visual order, and round-robin turn order clockwise.
 - [x] Automatically contribute two opening promise cards from every active player into the Common Basket at start.
+- [x] Add player-facing Cookbook Help, a replayable guided table tour, and fixed-size action-panel guidance for cooking, helping, and settlement.
 - [x] Add public/private hosted table visibility and a server-backed browser for public joinable online tables.
 - [x] Add explicit end-game metrics for player turns, cycles, interactions, swaps, exchanges, redemptions, settlement swaps, and food-piece settlement swaps.
 - [ ] Add a dedicated analysis package for richer post-game reports and batch simulation comparisons.
