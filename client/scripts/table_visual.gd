@@ -715,6 +715,9 @@ func _get_minimum_size() -> Vector2:
 
 func render(snapshot: Dictionary) -> void:
 	var previous_snapshot := _snapshot.duplicate(true)
+	if _should_reveal_complete_snapshot_immediately(previous_snapshot, snapshot):
+		_reveal_complete_snapshot_immediately(previous_snapshot, snapshot)
+		return
 	if _skip_animations and _skip_animations_can_bypass_snapshot(previous_snapshot, snapshot):
 		if _visual_update_waiting():
 			_flush_visual_updates(false, false)
@@ -755,6 +758,51 @@ func render(snapshot: Dictionary) -> void:
 			return
 
 	_apply_snapshot(snapshot)
+
+
+func _should_reveal_complete_snapshot_immediately(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> bool:
+	if previous_snapshot.is_empty() or current_snapshot.is_empty():
+		return false
+	if str(previous_snapshot.get("tableCode", "")) == "" or str(previous_snapshot.get("tableCode", "")) != str(current_snapshot.get("tableCode", "")):
+		return false
+	if str(previous_snapshot.get("phase", "")) == "complete" or str(current_snapshot.get("phase", "")) != "complete":
+		return false
+	return current_snapshot.get("tableClosure", {}).is_empty()
+
+
+func _reveal_complete_snapshot_immediately(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> void:
+	var events := _animation_events(previous_snapshot, current_snapshot)
+	var detected_event_types: Array[String] = []
+	for raw_event in events:
+		detected_event_types.append(str((raw_event as Dictionary).get("type", "")))
+	events = _events_with_visual_milestones(previous_snapshot, current_snapshot, events)
+	var orbit_events: Array = []
+	for raw_event in events:
+		var event: Dictionary = raw_event
+		if str(event.get("type", "")) != "eat" or not bool(event.get("completeOrbit", false)):
+			continue
+		var orbit_event := event.duplicate(true)
+		for snapshot_key in ["_snapshotStart", "_snapshotMid", "_snapshotTakeStart", "_snapshotAfter"]:
+			orbit_event.erase(snapshot_key)
+		orbit_events.append(orbit_event)
+
+	# Completion is authoritative UI state. Orbit launches are decorative and must
+	# never hold Congratulations, fireworks, or Game Stats behind their queue.
+	_pending_visual_snapshot = {}
+	_has_pending_visual_snapshot = false
+	_pending_visual_snapshots.clear()
+	_animation_queue.clear()
+	_apply_snapshot(current_snapshot)
+	_record_animation_debug(orbit_events)
+	debug_stats["completeImmediateDetectedEventTypes"] = detected_event_types
+	debug_stats["completeImmediateOrbitEventCount"] = orbit_events.size()
+	if orbit_events.is_empty():
+		_process_queued_basket_swaps()
+		return
+	_animation_queue.append_array(orbit_events)
+	_compact_animation_queue_if_needed()
+	if not _animation_running:
+		_request_animation_start()
 
 
 func _skip_animations_can_bypass_snapshot(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> bool:
@@ -6178,6 +6226,7 @@ func _compact_animation_queue_if_needed() -> void:
 	var compacted_orbit_visible := 0
 	var final_orbit_compaction := _complete_snapshot_pending() and _animation_queue_has_complete_orbit_event()
 	var kept_viewer_final_orbit := false
+	var kept_final_orbit_index := -1
 	for raw_event in _animation_queue:
 		var event: Dictionary = raw_event
 		if final_orbit_compaction and bool(event.get("completeOrbit", false)):
@@ -6188,9 +6237,15 @@ func _compact_animation_queue_if_needed() -> void:
 				if payload_visible >= compacted_orbit_visible or payload_items.size() > compacted_orbit_items.size():
 					compacted_orbit_items = payload_items.duplicate(true)
 					compacted_orbit_visible = payload_visible
-			if _event_involves_viewer(event) and not kept_viewer_final_orbit:
+			var involves_viewer := _event_involves_viewer(event)
+			if kept_final_orbit_index < 0:
 				compacted.append(event)
+				kept_final_orbit_index = compacted.size() - 1
+				kept_viewer_final_orbit = involves_viewer
+			elif involves_viewer and not kept_viewer_final_orbit:
+				compacted[kept_final_orbit_index] = event
 				kept_viewer_final_orbit = true
+				removed += 1
 			else:
 				removed += 1
 			continue
@@ -7325,6 +7380,8 @@ func _finish_animation_event() -> void:
 	_clear_animation_timers()
 	_apply_animation_event_snapshot(finished_event)
 	if _animation_queue.is_empty():
+		if str(_snapshot.get("phase", "")) == "complete":
+			_complete_orbit_transition_active = false
 		_apply_pending_visual_snapshot_after_layout()
 	else:
 		_request_animation_start()
@@ -7343,6 +7400,8 @@ func _apply_animation_event_snapshot(event: Dictionary) -> void:
 	if bool(event.get("completeOrbit", false)) and event.has("completeOrbitItems"):
 		var orbit_items: Array = event.get("completeOrbitItems", [])
 		_remember_shared_food_orbit_items(orbit_items, int(event.get("completeOrbitRevealCount", orbit_items.size())))
+	if str(_snapshot.get("phase", "")) == "complete":
+		return
 	if event.has("_snapshotAfter"):
 		var snapshot: Dictionary = event.get("_snapshotAfter", {})
 		if not snapshot.is_empty():
@@ -7425,6 +7484,8 @@ func _apply_pending_visual_snapshot(defer_remaining := true) -> void:
 
 
 func _animation_actor_id(event: Dictionary) -> String:
+	if bool(event.get("completeOrbit", false)) and str(_snapshot.get("phase", "")) == "complete":
+		return ""
 	match str(event.get("type", "")):
 		"deposit":
 			return str(event.get("participantId", ""))
@@ -7994,7 +8055,9 @@ func _animate_eat_to_complete_orbit(event: Dictionary) -> float:
 	var existing_visible := 0
 	if is_instance_valid(_complete_food_orbit):
 		existing_visible = int(_complete_food_orbit.get_meta("visible_orbit_item_count", 0))
-	_ensure_complete_food_orbit_for_items(items, existing_visible)
+	var complete_ui_visible := str(_snapshot.get("phase", "")) == "complete" and is_instance_valid(_complete_food_orbit)
+	if not complete_ui_visible:
+		_ensure_complete_food_orbit_for_items(items, existing_visible)
 	_complete_orbit_transition_active = true
 
 	var dish_name := str(event.get("dishName", "Dish"))
@@ -8012,7 +8075,12 @@ func _animate_eat_to_complete_orbit(event: Dictionary) -> float:
 	debug_stats["lastCompleteOrbitTargetPoint"] = target
 	debug_stats["lastCompleteOrbitPhase"] = float(event.get("completeOrbitPhase", -1.0))
 	debug_stats["completeFoodOrbitTransition"] = true
-	_animate_texture_to_complete_orbit(texture, start, target, int(event.get("completeOrbitRevealCount", items.size())), items)
+	var reveal_count := int(event.get("completeOrbitRevealCount", items.size()))
+	var reveal_items := items
+	if complete_ui_visible:
+		reveal_count = int(_complete_food_orbit.get_meta("orbit_item_count", reveal_count))
+		reveal_items = []
+	_animate_texture_to_complete_orbit(texture, start, target, reveal_count, reveal_items)
 	if _is_usable_animation_point(start):
 		_emit_sparkles(start, 8, Color(0.95, 0.62, 0.34))
 	return COMPLETE_ORBIT_LAUNCH_EVENT_SECONDS

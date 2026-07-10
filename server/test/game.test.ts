@@ -3904,6 +3904,25 @@ describe("winning and eating", () => {
       expect(participant.ingredientId).toBeDefined();
     }
   });
+
+  it("does not let a host close an already completed table for other cooks", () => {
+    const { store, table, hostToken } = makeHarness(8, "completed-host-leave");
+    store.handleIntent(table.code, hostToken, { type: "start" }, false);
+    store.handleIntent(table.code, hostToken, { type: "stop" }, false);
+    expect(table.phase).toBe("complete");
+    expect(table.idle.closure).toBeUndefined();
+    const version = table.version;
+    const turn = table.turn;
+
+    expect(() => store.handleIntent(table.code, hostToken, { type: "close_table" }, false)).toThrowError(
+      "The table is already complete."
+    );
+
+    expect(table.phase).toBe("complete");
+    expect(table.idle.closure).toBeUndefined();
+    expect(table.version).toBe(version);
+    expect(table.turn).toBe(turn);
+  });
 });
 
 describe("HTTP app", () => {

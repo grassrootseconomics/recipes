@@ -526,12 +526,12 @@ func _initialize() -> void:
 	_assert_animation_count(visual, _eating_many_before(), _eating_many_after(), "eat", 2, "share-food queues one launch per held dish bundle")
 	await _assert_eat_animation_starts_at_held_food_part(visual)
 	await _assert_eat_animation_reanchors_after_food_group_reflow(visual)
-	await _assert_final_eat_starts_orbit_before_congratulations(visual)
+	await _assert_final_eat_starts_orbit_with_congratulations(visual)
 	await _assert_skip_animations_preserves_final_orbit(visual)
 	await _assert_compacted_final_orbit_reveals_all_cooks(visual)
 	await _assert_settlement_share_burst_reaches_complete_panel(visual)
 	_assert_public_final_eat_uses_avatar_source(visual)
-	_assert_animation_event(visual, _complete_before(), _complete_after(), "complete", "complete confirmation queues animation")
+	_assert_complete_without_food_is_immediate(visual)
 	visual.render(snapshot)
 	visual.debug_play_animation_event({"type": "deposit", "ingredientId": "rice", "participantId": "p1"})
 	visual.debug_play_animation_event({"type": "swap", "giveKind": "voucher", "giveIngredientId": "rice", "takeKind": "voucher", "takeIngredientId": "beans"})
@@ -1293,27 +1293,33 @@ func _assert_eat_animation_reanchors_after_food_group_reflow(visual: Node) -> vo
 	visual.debug_flush_animations()
 
 
-func _assert_final_eat_starts_orbit_before_congratulations(visual: Node) -> void:
-	visual.debug_apply_snapshot(_final_eating_before())
+func _assert_final_eat_starts_orbit_with_congratulations(visual: Node) -> void:
+	var before := _final_eating_before()
+	var after := _final_eating_after()
+	_require(bool(visual.call("_should_reveal_complete_snapshot_immediately", before, after)), "final eating transition qualifies for immediate completion")
+	visual.debug_apply_snapshot(before)
 	await process_frame
-	visual.render(_final_eating_after())
+	visual.render(after)
 	await process_frame
 	var event := _first_animation_event_of_type(visual, "eat")
-	_require(not event.is_empty(), "final bite queues an eat animation")
+	_require(not event.is_empty(), "final bite queues an eat animation; detected=%s orbit=%s" % [visual.debug_stats.get("completeImmediateDetectedEventTypes", []), visual.debug_stats.get("completeImmediateOrbitEventCount", -1)])
 	_require(bool(event.get("completeOrbit", false)), "final bite is marked as the orbit transition")
 	_require(_event_has_randomized_orbit_phase(event), "final bite chooses a randomized orbit entry point")
 	_require(not visual.debug_stats.get("lastAnimationTypes", []).has("complete"), "final bite transition suppresses the separate complete animation")
-	_require(visual.find_child("CompleteFoodOrbit", true, false) != null, "final bite starts the table food orbit before the complete snapshot")
+	_require(visual.find_child("CompleteFoodOrbit", true, false) != null, "final bite keeps the table food orbit visible alongside the complete screen")
 	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "final bite flies the dish piece into the orbit")
 	_assert_orbit_matches_table_panel(visual, "final eating")
 	var flying_food := visual.find_child("CompleteOrbitFlyingFood", true, false) as Control
 	var flying_food_size := flying_food.get_global_rect().size if flying_food != null else Vector2.INF
 	_require(flying_food != null and flying_food_size.x <= 48.0 and flying_food_size.y <= 48.0, "final bite flying dish sprite renders at the readable orbit size: %s" % flying_food_size)
-	_require(str(visual.debug_stats.get("phase", "")) == "eating", "congratulations are held until the orbit transition finishes")
-	_require(not bool(visual.debug_stats.get("completeCelebration", true)), "complete celebration is not shown before orbit transition finishes")
+	_require(str(visual.debug_stats.get("phase", "")) == "complete", "authoritative completion is visible as soon as the final orbit starts")
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "complete celebration appears while the final food is moving into orbit")
+	_require(bool(visual.debug_stats.get("completeFireworks", false)), "fireworks begin with the final food orbit")
+	var immediate_actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(immediate_actions.has("Game Stats"), "Game Stats is available while the final food is moving into orbit")
 	await create_timer(1.05).timeout
 	await process_frame
-	_require(bool(visual.debug_stats.get("completeCelebration", false)), "complete celebration appears after orbit transition finishes")
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "complete celebration remains after the orbit transition finishes")
 	_require(str(visual.debug_stats.get("recipeName", "")) == "Congratulations!", "final orbit transition lands on the Congratulations recipe panel")
 	var actions: Array = visual.debug_stats.get("actionButtonTexts", [])
 	_require(actions.has("Game Stats"), "final orbit transition exposes the Game Stats action")
@@ -1331,7 +1337,9 @@ func _assert_skip_animations_preserves_final_orbit(visual: Node) -> void:
 	_require(not event.is_empty(), "skip animations still queues the final bite animation")
 	_require(bool(event.get("completeOrbit", false)), "skip animations preserves the final food orbit transition")
 	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "skip animations does not suppress the final orbit flying dish")
-	_require(not bool(visual.debug_stats.get("completeCelebration", true)), "skip animations keeps congratulations held until the final orbit lands")
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "skip animations still shows Congratulations when the final orbit starts")
+	var actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(actions.has("Game Stats"), "skip animations exposes Game Stats while preserving the final orbit")
 	visual.debug_flush_animations()
 	visual.call("set_skip_animations", false)
 	await process_frame
@@ -1385,6 +1393,14 @@ func _assert_settlement_share_burst_reaches_complete_panel(visual: Node) -> void
 	_require(not _has_text_containing(visual, "Stage 3: Rebalance promises"), "settlement-to-complete share burst removes the stale settlement action message")
 	_require(int(visual.debug_stats.get("completeFoodOrbitVisibleCount", 0)) == int(visual.debug_stats.get("completeFoodOrbitCount", 0)), "settlement-to-complete share burst reveals the full orbit")
 	visual.debug_flush_animations()
+
+
+func _assert_complete_without_food_is_immediate(visual: Node) -> void:
+	visual.debug_apply_snapshot(_complete_before())
+	visual.render(_complete_after())
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "completion without a food launch shows Congratulations immediately")
+	var actions: Array = visual.debug_stats.get("actionButtonTexts", [])
+	_require(actions.has("Game Stats"), "completion without a food launch exposes Game Stats immediately")
 
 
 func _assert_public_final_eat_uses_avatar_source(visual: Node) -> void:

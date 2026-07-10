@@ -769,6 +769,9 @@ function leaveTable(table: Table, actor: Participant): void {
 
 function closeTable(table: Table, actor: Participant): void {
   requireHost(actor);
+  if (table.phase === "complete") {
+    throw new GameError("The table is already complete.", "invalid_phase");
+  }
   closeTableWithNotice(table, "host_stopped", "Host has stopped cooking.");
 }
 

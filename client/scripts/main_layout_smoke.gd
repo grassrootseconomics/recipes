@@ -73,6 +73,12 @@ func _initialize() -> void:
 	_require(host_close_confirm != null and host_close_confirm.text == "Close Table" and host_close_confirm.custom_minimum_size.x >= 136.0, "host close overlay has a full-size Close Table button")
 	_require(host_close_cancel != null and host_close_cancel.text == "Keep Cooking" and host_close_cancel.custom_minimum_size.x >= 136.0, "host close overlay has a full-size Keep Cooking button")
 	host_close_overlay.hide()
+	var active_host_snapshot := _online_playing_snapshot()
+	_require(bool(main.call("_should_confirm_host_table_close", active_host_snapshot)), "online host still confirms before closing an active table")
+	var completed_host_snapshot := active_host_snapshot.duplicate(true)
+	completed_host_snapshot["phase"] = "complete"
+	completed_host_snapshot["currentTurnParticipantId"] = ""
+	_require(not bool(main.call("_should_confirm_host_table_close", completed_host_snapshot)), "completed online host leaves locally without closing the table for other cooks")
 	var online_ready_snapshot := _online_lobby_snapshot(true)
 	_require(str(main.call("_host_lobby_start_label", online_ready_snapshot)) == "Start Cooking", "online host lobby start label restores after another cook joins")
 	_require(bool(main.call("_host_lobby_start_enabled", online_ready_snapshot)), "online host lobby enables start after another cook joins")
@@ -94,6 +100,14 @@ func _initialize() -> void:
 	_require(idle_yes != null and idle_yes.text == "Yes" and idle_yes.get_global_rect().size.x >= 120.0, "idle cooking prompt has a clear Yes button")
 	_require(idle_no != null and idle_no.text == "No" and idle_no.get_global_rect().size.x >= 120.0, "idle cooking prompt has a clear No button")
 	idle_overlay.hide()
+	var closure_overlay := _control_from_property(main, "_table_closure_dialog")
+	var closure_panel := closure_overlay.find_child("TableClosurePanel", true, false) as PanelContainer if closure_overlay != null else null
+	var closure_message := closure_overlay.find_child("TableClosureMessage", true, false) as Label if closure_overlay != null else null
+	var closure_menu_button := closure_overlay.find_child("TableClosureMainMenuButton", true, false) as Button if closure_overlay != null else null
+	_require(closure_overlay != null and closure_overlay.name == "TableClosureOverlay", "table closure notice uses a themed in-tree overlay")
+	_require(closure_panel != null, "table closure notice uses the warm confirmation panel")
+	_require(closure_message != null and closure_message.get_theme_color("font_color").is_equal_approx(Color(0.17, 0.12, 0.07)), "table closure notice uses readable dark message text")
+	_require(closure_menu_button != null and closure_menu_button.text == "Main Menu" and closure_menu_button.custom_minimum_size.x >= 180.0, "table closure notice has a readable Main Menu button")
 
 	recipes_client.latest_snapshot = online_waiting_snapshot.duplicate(true)
 	main.call("_remember_lobby_seat_name_edit", "p1", "FastHost")

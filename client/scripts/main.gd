@@ -139,7 +139,8 @@ var _confirm_close_dialog: ConfirmationDialog
 var _pending_offer_guard_dialog: Control
 var _confirm_offline_end_dialog: ConfirmationDialog
 var _idle_prompt_dialog: Control
-var _table_closure_dialog: AcceptDialog
+var _table_closure_dialog: Control
+var _table_closure_message_label: Label
 var _offline_end_popup: Control
 var _host_close_popup: Control
 var _floating_status_label: Label
@@ -567,11 +568,8 @@ func _build_ui() -> void:
 	_idle_prompt_dialog = _build_idle_prompt_popup()
 	add_child(_idle_prompt_dialog)
 
-	_table_closure_dialog = AcceptDialog.new()
-	_table_closure_dialog.title = "Table closed"
-	_table_closure_dialog.dialog_text = "The table has closed."
+	_table_closure_dialog = _build_table_closure_popup()
 	add_child(_table_closure_dialog)
-	_configure_notice_dialog(_table_closure_dialog)
 
 	_confirm_offline_end_dialog = ConfirmationDialog.new()
 	_confirm_offline_end_dialog.title = "Stop cooking?"
@@ -1782,7 +1780,7 @@ func _open_grassroots_economics() -> void:
 
 func _quit_game() -> void:
 	if _table_exists(RecipesClient.latest_snapshot):
-		if not RecipesClient.offline_mode and _current_viewer_is_host():
+		if _should_confirm_host_table_close(RecipesClient.latest_snapshot):
 			_confirm_close_table()
 		else:
 			_return_to_main_menu()
@@ -2073,21 +2071,6 @@ func _configure_confirmation_dialog(dialog: ConfirmationDialog) -> void:
 	_style_confirmation_button(dialog.get_cancel_button(), false)
 
 
-func _configure_notice_dialog(dialog: AcceptDialog) -> void:
-	_configure_persistent_popup(dialog)
-	dialog.add_theme_stylebox_override("panel", _confirmation_panel_style())
-	dialog.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
-	dialog.add_theme_color_override("title_color", Color(0.24, 0.15, 0.07))
-	dialog.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
-	var label := dialog.call("get_label") as Label if dialog.has_method("get_label") else null
-	if is_instance_valid(label):
-		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		label.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
-		label.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
-	_style_confirmation_button(dialog.get_ok_button(), false)
-
-
 func _configure_persistent_popup(window: Window) -> void:
 	if not is_instance_valid(window):
 		return
@@ -2184,6 +2167,75 @@ func _build_idle_prompt_popup() -> Control:
 	no_button.custom_minimum_size = Vector2(132, 44)
 	row.add_child(no_button)
 	return overlay
+
+
+func _build_table_closure_popup() -> Control:
+	var overlay := Control.new()
+	overlay.name = "TableClosureOverlay"
+	overlay.visible = false
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 230
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0.10, 0.07, 0.04, 0.24)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(shade)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.name = "TableClosurePanel"
+	panel.custom_minimum_size = Vector2(360, 176)
+	panel.add_theme_stylebox_override("panel", _confirmation_panel_style())
+	center.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(box)
+
+	var title := Label.new()
+	title.text = "Table closed"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(23))
+	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
+	box.add_child(title)
+
+	_table_closure_message_label = Label.new()
+	_table_closure_message_label.name = "TableClosureMessage"
+	_table_closure_message_label.text = "The table has closed."
+	_table_closure_message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_table_closure_message_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_table_closure_message_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_table_closure_message_label.custom_minimum_size = Vector2(0, 48)
+	_table_closure_message_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(18))
+	_table_closure_message_label.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	box.add_child(_table_closure_message_label)
+
+	var menu_button := _button("Main Menu", _on_table_closure_main_menu_pressed)
+	menu_button.name = "TableClosureMainMenuButton"
+	_style_confirmation_button(menu_button, true)
+	menu_button.custom_minimum_size = Vector2(180, 44)
+	box.add_child(menu_button)
+	return overlay
+
+
+func _on_table_closure_main_menu_pressed() -> void:
+	var message := _table_closure_message_label.text if is_instance_valid(_table_closure_message_label) else "The table has closed."
+	_return_to_main_menu_after_table_closure(_active_table_closure_key, message)
 
 
 func _build_offline_end_popup() -> Control:
@@ -2916,6 +2968,9 @@ func _close_table_and_return_to_menu() -> void:
 	if RecipesClient.table_code == "":
 		_return_to_main_menu()
 		return
+	if str(RecipesClient.latest_snapshot.get("phase", "")) == "complete":
+		_return_to_main_menu()
+		return
 	if bool(RecipesClient.latest_snapshot.get("offline", false)) or RecipesClient.offline_mode:
 		RecipesClient.send_host_intent({"type": "close_table"})
 		_return_to_main_menu()
@@ -3301,8 +3356,10 @@ func _handle_table_closure_snapshot(snapshot: Dictionary) -> void:
 		_table_closure_returning = false
 		return
 	if is_instance_valid(_table_closure_dialog):
-		_table_closure_dialog.dialog_text = message
-		_table_closure_dialog.popup_centered()
+		if is_instance_valid(_table_closure_message_label):
+			_table_closure_message_label.text = message
+		_table_closure_dialog.show()
+		_table_closure_dialog.move_to_front()
 	_set_status_message(message)
 	var delay_seconds := 2.0
 	var return_to_menu_at_ms := int(closure.get("returnToMenuAtMs", 0))
@@ -3815,12 +3872,12 @@ func _on_table_visual_menu_requested(action: String) -> void:
 		"Skip Animations", "Play Animations":
 			_toggle_skip_animations(not _skip_animations_enabled)
 		"Main Menu":
-			if not RecipesClient.offline_mode and _current_viewer_is_host() and _table_exists(RecipesClient.latest_snapshot):
+			if _should_confirm_host_table_close(RecipesClient.latest_snapshot):
 				_confirm_close_table()
 			else:
 				_return_to_main_menu()
 		"Quit Game":
-			if not RecipesClient.offline_mode and _current_viewer_is_host() and _table_exists(RecipesClient.latest_snapshot):
+			if _should_confirm_host_table_close(RecipesClient.latest_snapshot):
 				_confirm_close_table()
 			else:
 				_return_to_main_menu()
@@ -3829,6 +3886,14 @@ func _on_table_visual_menu_requested(action: String) -> void:
 				_confirm_offline_end_game()
 			else:
 				_confirm_close_table()
+
+
+func _should_confirm_host_table_close(snapshot: Dictionary) -> bool:
+	if not _table_exists(snapshot) or RecipesClient.offline_mode or bool(snapshot.get("offline", false)):
+		return false
+	if str(snapshot.get("phase", "")) == "complete":
+		return false
+	return bool(snapshot.get("viewerCanUseHostControls", false))
 
 
 func _open_debug_sync_popup() -> void:
