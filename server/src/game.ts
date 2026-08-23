@@ -127,6 +127,7 @@ export function createEmptyTable(code: string, seed: string, hostName: string, s
     version: 0,
     phase: "lobby",
     paused: false,
+    animationsEnabled: true,
     hostParticipantId: host.id,
     participants: { [host.id]: host },
     participantOrder: [host.id],
@@ -286,11 +287,15 @@ export function disconnectParticipant(table: Table, participant: Participant): b
 export function applyIntent(table: Table, actorParticipantId: string, intent: Intent): void {
   const before = cloneTable(table);
   const actor = requireParticipant(table, actorParticipantId);
+  let turnAdvanceParticipantId = actor.id;
   try {
     if (
       table.paused &&
       intent.type !== "set_pause" &&
       intent.type !== "convert_to_bot" &&
+      intent.type !== "host_skip_turn" &&
+      intent.type !== "set_animations_enabled" &&
+      intent.type !== "rename_participant" &&
       intent.type !== "leave_table" &&
       intent.type !== "close_table" &&
       intent.type !== "reset_table" &&
@@ -334,6 +339,12 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
         break;
       case "convert_to_bot":
         convertParticipantToBot(table, actor, intent.participantId, intent.botType ?? "mixed");
+        break;
+      case "host_skip_turn":
+        turnAdvanceParticipantId = hostSkipTurn(table, actor, intent.participantId).id;
+        break;
+      case "set_animations_enabled":
+        setAnimationsEnabled(table, actor, intent.enabled);
         break;
       case "set_timer":
         setTimer(table, actor, intent.seconds);
@@ -415,7 +426,7 @@ export function applyIntent(table: Table, actorParticipantId: string, intent: In
       advanceSettlementIfReady(table);
     }
     if (shouldAdvanceTurnAfterIntent(table, intent)) {
-      advanceTurn(table, actor.id);
+      advanceTurn(table, turnAdvanceParticipantId);
     }
     table.version += 1;
   } catch (error) {
@@ -623,7 +634,7 @@ function existingNames(table: Table): string[] {
 
 function resolveHumanName(existing: string[], requestedName: string, ordinal: number): string {
   const trimmed = requestedName.trim();
-  const base = GENERIC_HUMAN_NAMES.has(trimmed.toLowerCase()) ? generatedBaseName(ordinal) : trimmed;
+  const base = shortDisplayName(GENERIC_HUMAN_NAMES.has(trimmed.toLowerCase()) ? generatedBaseName(ordinal) : trimmed);
   return uniqueName(existing, base);
 }
 
@@ -659,11 +670,11 @@ function botNameSuffix(botType: BotType): string {
 }
 
 function shortBotBase(base: string): string {
-  const letters = base.replace(/[^A-Za-z0-9]/g, "");
-  if (letters.length === 0) {
+  const visibleName = base.trim();
+  if (visibleName.length === 0) {
     return "Bot";
   }
-  return letters.slice(0, 3);
+  return [...visibleName].slice(0, 16).join("");
 }
 
 function uniqueBotName(existing: string[], rawBase: string, botType: BotType): string {
@@ -675,7 +686,7 @@ function uniqueBotName(existing: string[], rawBase: string, botType: BotType): s
   }
   for (let index = 2; index < 100; index += 1) {
     const marker = String(index);
-    const prefixLength = Math.max(1, 3 - marker.length);
+    const prefixLength = Math.max(1, 16 - marker.length);
     const candidate = `${base.slice(0, prefixLength)}${marker}${suffix}`;
     if (!existing.includes(candidate)) {
       return candidate;
@@ -717,16 +728,23 @@ function generatedBaseName(ordinal: number): string {
 
 function uniqueName(existing: string[], baseName: string): string {
   const existingSet = new Set(existing);
-  if (!existingSet.has(baseName)) {
-    return baseName;
+  const normalizedBase = shortDisplayName(baseName);
+  if (!existingSet.has(normalizedBase)) {
+    return normalizedBase;
   }
   for (let suffix = 2; suffix < 100; suffix += 1) {
-    const candidate = `${baseName}_${suffix}`;
+    const marker = `_${suffix}`;
+    const candidate = `${[...normalizedBase].slice(0, Math.max(1, 16 - marker.length)).join("")}${marker}`;
     if (!existingSet.has(candidate)) {
       return candidate;
     }
   }
   throw new GameError("Could not allocate participant name.", "name_allocation_failed");
+}
+
+function shortDisplayName(name: string): string {
+  const trimmed = name.trim();
+  return [...(trimmed || "Cook")].slice(0, 16).join("");
 }
 
 function createParticipant(
@@ -780,6 +798,7 @@ function resetTable(table: Table, actor: Participant): void {
   cancelAllPendingOffers(table);
   table.phase = "lobby";
   table.paused = false;
+  table.animationsEnabled = true;
   table.vouchers = {};
   table.recipes = {};
   table.offers = {};
@@ -864,7 +883,12 @@ function setRole(table: Table, actor: Participant, participantId: string, role: 
 }
 
 function renameParticipant(table: Table, actor: Participant, participantId: string, name: string): void {
-  requireLobby(table);
+  if (table.phase === "complete") {
+    throw new GameError("A complete table cannot be renamed.", "invalid_phase");
+  }
+  if (table.phase !== "lobby" && !actor.isHost) {
+    throw new GameError("Only the host can rename cooks after cooking starts.", "host_required");
+  }
   const participant = requireParticipant(table, participantId);
   if (!actor.isHost && actor.id !== participant.id) {
     throw new GameError("Only the host can rename other seats.", "host_required");
@@ -939,6 +963,10 @@ function convertParticipantToBot(table: Table, actor: Participant, participantId
   if (participant.role !== "active") {
     throw new GameError("Only active player seats can become bots.", "active_only");
   }
+  const originalName = participant.name;
+  const originalSeatToken = participant.seatToken;
+  const wasConnected = participant.connected;
+  const wasControlledSeat = Boolean(participant.controllerParticipantId);
   participant.kind = "bot";
   participant.botType = botType;
   participant.connected = false;
@@ -950,7 +978,41 @@ function convertParticipantToBot(table: Table, actor: Participant, participantId
     botType
   );
   participant.seatToken = `bot:${participant.id}:converted`;
+  if (!wasControlledSeat) {
+    const witness = createParticipant(
+      table,
+      resolveHumanName(existingNames(table), originalName, table.participantOrder.length + 1),
+      "human",
+      "witness",
+      originalSeatToken
+    );
+    witness.connected = wasConnected;
+    table.participants[witness.id] = witness;
+    table.participantOrder.push(witness.id);
+  }
   return participant;
+}
+
+function hostSkipTurn(table: Table, actor: Participant, participantId: string): Participant {
+  requireHost(actor);
+  const participant = requireParticipant(table, participantId);
+  requireActive(participant);
+  if (table.currentTurnParticipantId !== participant.id) {
+    throw new GameError("That cook no longer has the current turn.", "not_current_turn");
+  }
+  passTurn(table, participant, {
+    turnPassSource: "host_skip",
+    initiatedByParticipantId: actor.id
+  });
+  return participant;
+}
+
+function setAnimationsEnabled(table: Table, actor: Participant, enabled: boolean): void {
+  requireHost(actor);
+  if (table.phase === "complete") {
+    throw new GameError("A complete table cannot change animation settings.", "invalid_phase");
+  }
+  table.animationsEnabled = enabled;
 }
 
 function setTimer(table: Table, actor: Participant, seconds: number | null): void {
@@ -1085,14 +1147,14 @@ function stopTable(table: Table, actor: Participant): void {
   enterSettlementPhase(table);
 }
 
-function passTurn(table: Table, actor: Participant): void {
+function passTurn(table: Table, actor: Participant, metadata?: TransactionMetadata): void {
   if (table.phase !== "playing" && table.phase !== "settlement" && table.phase !== "eating") {
     throw new GameError("Only a running turn can be passed.", "invalid_phase");
   }
   requireActive(actor);
   const nextParticipantId = nextTurnParticipantId(table, actor.id);
   const nextParticipant = nextParticipantId ? table.participants[nextParticipantId] : undefined;
-  recordTransaction(table, actor, "Pass Turn", nextParticipant?.name ?? "Table", "Turn", "None", nextParticipant?.id);
+  recordTransaction(table, actor, "Pass Turn", nextParticipant?.name ?? "Table", "Turn", "None", nextParticipant?.id, metadata);
 }
 
 function redeemUsefulHandVouchersAndPassTurn(table: Table, actor: Participant): void {
@@ -2333,7 +2395,7 @@ function shouldGateTurn(table: Table, intent: Intent): boolean {
 }
 
 function shouldAdvanceTurnAfterIntent(table: Table, intent: Intent): boolean {
-  return intent.type === "pass_turn" || intent.type === "redeem_all_and_pass_turn" || intent.type === "bite_all";
+  return intent.type === "pass_turn" || intent.type === "redeem_all_and_pass_turn" || intent.type === "host_skip_turn" || intent.type === "bite_all";
 }
 
 function requireCurrentTurn(table: Table, actor: Participant): void {

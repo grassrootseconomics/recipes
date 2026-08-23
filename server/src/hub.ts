@@ -6,6 +6,7 @@ export interface HubConnection {
   tableCode: string;
   participantId: string;
   connectionParticipantId: string;
+  seatToken: string;
   send: (payload: string) => void;
   lastVersion?: number;
   lastTransactionCursor?: number;
@@ -27,11 +28,17 @@ export class ConnectionHub {
   private readonly lastBroadcasts = new Map<string, BroadcastMetadata>();
   private nextId = 1;
 
-  register(connection: Omit<HubConnection, "id" | "connectionParticipantId"> & { connectionParticipantId?: string }): HubConnection {
+  register(
+    connection: Omit<HubConnection, "id" | "connectionParticipantId" | "seatToken"> & {
+      connectionParticipantId?: string;
+      seatToken?: string;
+    }
+  ): HubConnection {
     const registered: HubConnection = {
       ...connection,
       tableCode: connection.tableCode.toUpperCase(),
       connectionParticipantId: connection.connectionParticipantId ?? connection.participantId,
+      seatToken: connection.seatToken ?? "",
       id: `conn_${this.nextId}`
     };
     this.nextId += 1;
@@ -59,6 +66,7 @@ export class ConnectionHub {
       return;
     }
     for (const connection of connections.values()) {
+      reconcileConnectionIdentity(table, connection);
       const snapshot = buildSnapshot(table, connection.participantId, connection.connectionParticipantId);
       if (shouldSendSnapshot(connection, table)) {
         connection.send(JSON.stringify({ type: "snapshot", snapshot }));
@@ -90,6 +98,7 @@ export class ConnectionHub {
   }
 
   sendSnapshot(table: Table, connection: HubConnection): void {
+    reconcileConnectionIdentity(table, connection);
     const snapshot = buildSnapshot(table, connection.participantId, connection.connectionParticipantId);
     connection.send(JSON.stringify({ type: "snapshot", snapshot }));
     connection.lastVersion = table.version;
@@ -118,6 +127,29 @@ export class ConnectionHub {
 
   lastBroadcastMetadata(tableCode: string): BroadcastMetadata | undefined {
     return this.lastBroadcasts.get(tableCode.toUpperCase());
+  }
+}
+
+function reconcileConnectionIdentity(table: Table, connection: HubConnection): void {
+  if (!connection.seatToken) {
+    return;
+  }
+  const resolved = Object.values(table.participants).find((participant) => participant.seatToken === connection.seatToken);
+  if (!resolved) {
+    return;
+  }
+  const identityChanged = connection.connectionParticipantId !== resolved.id;
+  const viewed = table.participants[connection.participantId];
+  const canKeepView = Boolean(
+    viewed &&
+      (viewed.id === resolved.id || viewed.controllerParticipantId === resolved.id || (!identityChanged && resolved.role === "witness"))
+  );
+  connection.connectionParticipantId = resolved.id;
+  if (identityChanged || !canKeepView) {
+    connection.participantId = resolved.id;
+    connection.lastVersion = undefined;
+    connection.lastTransactionCursor = undefined;
+    connection.lastSnapshot = undefined;
   }
 }
 

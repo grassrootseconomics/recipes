@@ -60,7 +60,7 @@ Bots see only legal player information: their own hand, their own recipe, groupe
 
 During a cooking turn, bots may make useful non-ending moves first: swap with the central platter when it helps their current recipe, respond to offers, and create a legal structured offer. Bots must protect only the number of useful cards still needed for the current recipe, so duplicate cards beyond outstanding recipe demand are true surplus and can be traded before redemption. When a bot reaches the redemption step, it uses the same batch `Redeem / Pass` behavior as a human: every currently redeemable useful card is redeemed with the authoritative rules, a completed recipe is prepared automatically, and then the bot's turn ends. Bot behavior should be deterministic from the table seed.
 
-If an active human player leaves an online table, their seat stays reserved for that same reconnect token so they can come back. No new player can claim an already-started active seat. The host may manually switch a connected or disconnected active player seat to a `mixed` bot at any time. This conversion should require an explicit confirmation in the client because the original player can no longer reclaim that seat after conversion.
+If an active human player leaves an online table, their seat stays reserved for that same reconnect token so they can come back. No new player can claim an already-started active seat. The host may manually switch a connected or disconnected active player seat to a `mixed` bot at any time. This conversion requires an explicit confirmation and is irreversible for that active seat. The seat keeps its ingredient, cards, recipe, food, offers, score, and turn position. An independently connected player keeps the same reconnect token but is reassigned to a new witness identity, so their live socket immediately continues in read-only witness mode. A host-controlled local seat becomes a bot without creating a witness.
 
 ## Offline Mode
 
@@ -79,6 +79,16 @@ For hosted online tables, the host should be able to take the place of several a
 A host-controlled seat is still a normal active participant for ingredient identity, vouchers, recipe assignment, scoring, visibility, turn order, settlement, and final food sharing. The implementation should track the seat/participant identity separately from the human controller, so one host connection can submit intents for multiple controlled seats while each action is validated as the selected seat.
 
 Host-controlled seats must not weaken hidden-information rules. The host can act for seats they control, but active seats still receive filtered snapshots according to their own participant perspective. Witness visibility remains separate from active seat control.
+
+## Host Table Management
+
+During a running online or offline table, the host has a themed `Manage Table` overlay in the hamburger menu. It lists all eight active cooks with their ingredient, 16-character display name, Player/Bot state, connection state, and current-turn marker. The host can rename any cook without interrupting queued gameplay animations.
+
+Only the authoritative current-turn row exposes `Skip Turn`. A confirmed host skip is a normal pass by that cook: it does not redeem cards, cancel offers, or convert the seat. The request includes the expected participant id and must fail if the turn changed before the server received it. The host may use this recovery action while the table is paused and may skip either a human or bot turn.
+
+The host can irreversibly switch any non-host active human seat to a `mixed` bot. Online independent players become witnesses as described above; offline and host-controlled seats do not create witness identities. If the converted seat owns the current turn and the table is not paused, normal bot maintenance continues the game.
+
+The host can also turn table animations off or on for everyone. Off flushes non-final visual backlogs to the latest authoritative state. On restores each device's own `Skip Animations` preference. Final food-orbit and fireworks animations are never disabled by either setting.
 
 ## Turns
 
@@ -103,7 +113,7 @@ End-game statistics use explicit terms:
 
 The MVP dish goal is fixed at 3 dishes per active player. Starting stock is fixed at 40 real units per active ingredient owner. The current MVP active participant count is fixed at 8. Each player starts with 8 promise cards for their ingredient, automatically contributes 2 cards to the Common Basket at start, and begins play with 6 own cards in hand. When a player prepares a dish below the target, they receive a new recipe. When a player reaches the target, they stop receiving new recipes while the rest of the table finishes.
 
-The MVP does not expose a timer in the normal client setup flow. The host can pause or resume the game for everyone. While paused, gameplay actions and bot turns stop. Only the host can stop the game for everyone. When the host stops the game, the player with the most prepared dishes wins.
+The MVP does not expose a timer in the normal client setup flow. The host can pause or resume the game for everyone. While paused, gameplay actions and bot turns stop, except that the host can still use explicit table-management recovery actions. Only the host can stop the game for everyone. When the host stops the game, the player with the most prepared dishes wins.
 
 Winning can also mean that all active players have reached the configured dish goal. Players that have made an equal number of dishes can tie as winners. Before final food sharing, the table must settle the central platter accounts and all outstanding promise-card debts. Sharing begins automatically only when every active player has exactly two own cards in the platter, exactly six own cards in their own hand, no other players' cards in their hand, no own cards in other players' hands, and no food parts remain in the platter. Once those conditions are met, all held food bundles are treated as shared, animate into the table orbit, and the game completes without requiring a manual Share Food button.
 
@@ -194,6 +204,8 @@ The server should include focused unit and integration tests for:
 - only the host can stop the game for everyone.
 - disconnected active humans stay reclaimable until the host manually converts them to `mixed` bots.
 - host pause blocks gameplay actions and bot turns.
+- only the host can rename cooks during active phases, force a stale-safe normal pass for the current cook, convert a non-host active human to a bot, or change the table-wide animation setting.
+- converting an independent online player preserves the active seat state and moves the old reconnect token to a witness identity.
 - prepared dishes create exactly 10 named food parts from the recipe catalog.
 - settlement swaps allow any held card or food part to be swapped 1:1 with any platter card or food part.
 - platter clearance requires exactly two own cards in the platter for every active player.

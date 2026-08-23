@@ -9,14 +9,14 @@ import { transactionsToCsv } from "./transactions.js";
 import type { Intent } from "./types.js";
 
 const createTableSchema = z.object({
-  hostName: z.string().max(40).default(""),
+  hostName: z.string().max(16).default(""),
   seed: z.string().min(1).max(120).optional(),
   requestedCode: z.string().min(4).max(24).optional(),
   isPublic: z.boolean().default(true)
 });
 
 const joinTableSchema = z.object({
-  name: z.string().max(40).default(""),
+  name: z.string().max(16).default(""),
   asWitness: z.boolean().default(false)
 });
 
@@ -52,10 +52,12 @@ const intentSchema: z.ZodType<Intent> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("idle_response"), promptId: z.string().min(1).max(120), response: z.enum(["yes", "no"]) }),
   z.object({ type: z.literal("set_table_visibility"), isPublic: z.boolean() }),
   z.object({ type: z.literal("set_role"), participantId: z.string(), role: z.enum(["active", "witness"]) }),
-  z.object({ type: z.literal("rename_participant"), participantId: z.string(), name: z.string().max(40) }),
-  z.object({ type: z.literal("add_bot"), name: z.string().optional(), botType: z.enum(["pool_only", "barter_only", "mixed"]) }),
-  z.object({ type: z.literal("add_controlled_seat"), name: z.string().optional(), participantId: z.string().optional() }),
+  z.object({ type: z.literal("rename_participant"), participantId: z.string(), name: z.string().max(16) }),
+  z.object({ type: z.literal("add_bot"), name: z.string().max(16).optional(), botType: z.enum(["pool_only", "barter_only", "mixed"]) }),
+  z.object({ type: z.literal("add_controlled_seat"), name: z.string().max(16).optional(), participantId: z.string().optional() }),
   z.object({ type: z.literal("convert_to_bot"), participantId: z.string(), botType: z.enum(["pool_only", "barter_only", "mixed"]).optional() }),
+  z.object({ type: z.literal("host_skip_turn"), participantId: z.string() }),
+  z.object({ type: z.literal("set_animations_enabled"), enabled: z.boolean() }),
   z.object({ type: z.literal("set_timer"), seconds: z.number().int().positive().nullable() }),
   z.object({ type: z.literal("set_target_dish_count"), count: z.number().int().min(MIN_TARGET_DISH_COUNT).max(MAX_TARGET_DISH_COUNT) }),
   z.object({ type: z.literal("set_stock"), count: z.number().int().min(MIN_STOCK_PER_INGREDIENT).max(MAX_STOCK_PER_INGREDIENT) }),
@@ -178,6 +180,8 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       features: [
         "pause",
         "manual_bot_conversion",
+        "host_table_management",
+        "table_animation_control",
         "transaction_history",
         "dish_part_settlement",
         "host_controlled_seats",
@@ -276,6 +280,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         tableCode,
         participantId: participant.id,
         connectionParticipantId: participant.id,
+        seatToken: query.seatToken,
         send: (payload) => socket.send(payload)
       });
       connectionId = connection.id;

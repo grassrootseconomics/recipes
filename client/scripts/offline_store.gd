@@ -64,6 +64,7 @@ func create_table(host_name: String, seed: String) -> Dictionary:
 		"version": 0,
 		"phase": "lobby",
 		"paused": false,
+		"animationsEnabled": true,
 		"hostParticipantId": "p1",
 		"participants": {
 			"p1": _participant("p1", name, "human", "active", true, "", "")
@@ -146,7 +147,7 @@ func _apply_intent(actor_id: String, intent: Dictionary) -> bool:
 	var actor := _participant_by_id(actor_id)
 	if actor.is_empty():
 		return _fail("Participant not found.")
-	if bool(table.get("paused", false)) and not str(intent.get("type", "")) in ["set_pause", "convert_to_bot", "close_table", "reset_table"]:
+	if bool(table.get("paused", false)) and not str(intent.get("type", "")) in ["set_pause", "convert_to_bot", "host_skip_turn", "set_animations_enabled", "rename_participant", "close_table", "reset_table"]:
 		return _fail("The table is paused.")
 	table["turn"] = int(table.get("turn", 0)) + 1
 	if _should_gate_turn(intent) and not _require_current_turn(actor_id):
@@ -173,6 +174,14 @@ func _apply_intent(actor_id: String, intent: Dictionary) -> bool:
 			return _add_controlled_seat(actor, str(intent.get("name", "")), str(intent.get("participantId", "")))
 		"convert_to_bot":
 			return _convert_to_bot(actor, str(intent.get("participantId", "")), str(intent.get("botType", "mixed")))
+		"host_skip_turn":
+			return _host_skip_turn(actor, str(intent.get("participantId", "")))
+		"set_animations_enabled":
+			if not _require_host(actor):
+				return false
+			if str(table.get("phase", "")) == "complete":
+				return _fail("A complete table cannot change animation settings.")
+			table["animationsEnabled"] = bool(intent.get("enabled", true))
 		"set_timer":
 			if not _require_host(actor) or not _require_lobby():
 				return false
@@ -426,17 +435,42 @@ func _convert_to_bot(actor: Dictionary, target_id: String, bot_type: String) -> 
 		return _fail("Participant not found.")
 	if bool(participant.get("isHost", false)):
 		return _fail("The host seat cannot be converted to a bot.")
+	if str(participant.get("kind", "human")) == "bot":
+		return _fail("Participant is already a bot.")
+	if str(participant.get("role", "")) != "active":
+		return _fail("Only active player seats can become bots.")
 	participant["kind"] = "bot"
 	participant["botType"] = bot_type
 	participant["connected"] = false
 	participant.erase("controllerParticipantId")
 	participant["name"] = _bot_name_excluding(str(participant.get("name", "")), bot_type, target_id)
+	if acting_participant_id == target_id:
+		acting_participant_id = participant_id
 	return true
 
 
-func _rename_participant(actor: Dictionary, target_id: String, requested_name: String) -> bool:
-	if not _require_lobby():
+func _host_skip_turn(actor: Dictionary, target_id: String) -> bool:
+	if not _require_host(actor):
 		return false
+	var participant := _participant_by_id(target_id)
+	if participant.is_empty():
+		return _fail("Participant not found.")
+	if str(participant.get("role", "")) != "active":
+		return _fail("Only active cooks can have their turn skipped.")
+	if str(table.get("currentTurnParticipantId", "")) != target_id:
+		return _fail("That cook no longer has the current turn.")
+	return _pass_turn(participant, {
+		"turnPassSource": "host_skip",
+		"initiatedByParticipantId": str(actor.get("id", ""))
+	})
+
+
+func _rename_participant(actor: Dictionary, target_id: String, requested_name: String) -> bool:
+	var phase := str(table.get("phase", "lobby"))
+	if phase == "complete":
+		return _fail("A complete table cannot be renamed.")
+	if phase != "lobby" and not bool(actor.get("isHost", false)):
+		return _fail("Only the host can rename cooks after cooking starts.")
 	var participant := _participant_by_id(target_id)
 	if participant.is_empty():
 		return _fail("Participant not found.")
@@ -523,6 +557,7 @@ func _reset_table() -> void:
 	_cancel_all_pending_offers()
 	table["phase"] = "lobby"
 	table["paused"] = false
+	table["animationsEnabled"] = true
 	table["vouchers"] = {}
 	table["recipes"] = {}
 	table["offers"] = {}
@@ -924,7 +959,7 @@ func _redeem_all_and_pass_turn(actor: Dictionary) -> bool:
 	return _pass_turn(actor)
 
 
-func _pass_turn(actor: Dictionary) -> bool:
+func _pass_turn(actor: Dictionary, metadata := {}) -> bool:
 	if not _require_phase_any(["playing", "settlement", "eating"]):
 		return false
 	if not _require_active(actor):
@@ -938,7 +973,8 @@ func _pass_turn(actor: Dictionary) -> bool:
 		str(next_participant.get("name", "Table")) if not next_participant.is_empty() else "Table",
 		"Turn",
 		"None",
-		next_id
+		next_id,
+		metadata
 	)
 	_advance_turn(actor_id)
 	return true
@@ -1164,6 +1200,7 @@ func _build_snapshot(viewer_id: String) -> Dictionary:
 		"offline": true,
 		"phase": table.get("phase", "lobby"),
 		"paused": bool(table.get("paused", false)),
+		"animationsEnabled": bool(table.get("animationsEnabled", true)),
 		"viewerParticipantId": viewer_id,
 		"connectionParticipantId": participant_id,
 		"viewerRole": viewer.get("role", "active"),
@@ -3143,19 +3180,22 @@ func _generated_name(index: int) -> String:
 
 
 func _unique_name(base: String) -> String:
+	base = _short_display_name(base)
 	var existing := {}
 	for participant in table.get("participants", {}).values():
 		existing[str(participant.get("name", ""))] = true
 	if not existing.has(base):
 		return base
 	for suffix in range(2, 100):
-		var candidate := "%s_%s" % [base, suffix]
+		var marker := "_%s" % suffix
+		var candidate := "%s%s" % [base.substr(0, maxi(1, 16 - marker.length())), marker]
 		if not existing.has(candidate):
 			return candidate
 	return "%s_%s" % [base, table.get("nextId", 0)]
 
 
 func _unique_name_excluding(base: String, excluded_participant_id: String) -> String:
+	base = _short_display_name(base)
 	var existing := {}
 	for participant in table.get("participants", {}).values():
 		if str(participant.get("id", "")) == excluded_participant_id:
@@ -3164,10 +3204,18 @@ func _unique_name_excluding(base: String, excluded_participant_id: String) -> St
 	if not existing.has(base):
 		return base
 	for suffix in range(2, 100):
-		var candidate := "%s_%s" % [base, suffix]
+		var marker := "_%s" % suffix
+		var candidate := "%s%s" % [base.substr(0, maxi(1, 16 - marker.length())), marker]
 		if not existing.has(candidate):
 			return candidate
 	return "%s_%s" % [base, table.get("nextId", 0)]
+
+
+func _short_display_name(base: String) -> String:
+	var clean := base.strip_edges()
+	if clean == "":
+		clean = "Cook"
+	return clean.substr(0, mini(16, clean.length()))
 
 
 func _bot_name(base: String, bot_type: String) -> String:
@@ -3280,7 +3328,7 @@ func _unique_bot_name(base: String, bot_type: String) -> String:
 		return first
 	for index in range(2, 100):
 		var marker := str(index)
-		var prefix_length := maxi(1, 3 - marker.length())
+		var prefix_length := maxi(1, 16 - marker.length())
 		var candidate := "%s%s%s" % [short_base.substr(0, prefix_length), marker, suffix]
 		if not existing.has(candidate):
 			return candidate
@@ -3300,7 +3348,7 @@ func _unique_bot_name_excluding(base: String, bot_type: String, excluded_partici
 		return first
 	for index in range(2, 100):
 		var marker := str(index)
-		var prefix_length := maxi(1, 3 - marker.length())
+		var prefix_length := maxi(1, 16 - marker.length())
 		var candidate := "%s%s%s" % [short_base.substr(0, prefix_length), marker, suffix]
 		if not existing.has(candidate):
 			return candidate
@@ -3328,20 +3376,10 @@ func _bot_base_key(base: String) -> String:
 
 
 func _short_bot_base(base: String) -> String:
-	var out := ""
-	for index in range(base.length()):
-		var character := base.substr(index, 1)
-		var code := character.unicode_at(0)
-		var is_digit := code >= 48 and code <= 57
-		var is_upper := code >= 65 and code <= 90
-		var is_lower := code >= 97 and code <= 122
-		if is_digit or is_upper or is_lower:
-			out += character
-		if out.length() >= 3:
-			break
-	if out == "":
+	var clean := base.strip_edges()
+	if clean == "":
 		return "Bot"
-	return out
+	return clean.substr(0, mini(16, clean.length()))
 
 
 func _bot_suffix(bot_type: String) -> String:

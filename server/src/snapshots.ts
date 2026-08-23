@@ -72,6 +72,7 @@ export function buildSnapshot(table: Table, viewerParticipantId?: string, connec
     version: table.version,
     phase: table.phase,
     paused: table.paused,
+    animationsEnabled: table.animationsEnabled ?? true,
     viewerParticipantId,
     connectionParticipantId,
     viewerRole: viewer?.role,

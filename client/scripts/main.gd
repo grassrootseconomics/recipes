@@ -133,7 +133,6 @@ var _platter_controls: VBoxContainer
 var _offer_controls: VBoxContainer
 var _dish_controls: VBoxContainer
 var _transaction_controls: VBoxContainer
-var _confirm_bot_dialog: ConfirmationDialog
 var _confirm_leave_dialog: ConfirmationDialog
 var _confirm_close_dialog: ConfirmationDialog
 var _pending_offer_guard_dialog: Control
@@ -143,6 +142,15 @@ var _table_closure_dialog: Control
 var _table_closure_message_label: Label
 var _offline_end_popup: Control
 var _host_close_popup: Control
+var _manage_table_overlay: Control
+var _manage_table_panel: PanelContainer
+var _manage_table_rows: VBoxContainer
+var _manage_table_status_label: Label
+var _manage_table_animations_toggle: CheckButton
+var _host_action_confirm_overlay: Control
+var _host_action_confirm_panel: PanelContainer
+var _host_action_confirm_message: Label
+var _host_action_confirm_button: Button
 var _floating_status_label: Label
 var _history_popup: PopupPanel
 var _history_popup_controls: VBoxContainer
@@ -197,7 +205,8 @@ var _selected_take_asset_key := ""
 var _selected_offer_target_id := ""
 var _selected_offer_ingredient_id := ""
 var _selected_participant_id := ""
-var _pending_bot_participant_id := ""
+var _pending_host_action := ""
+var _pending_host_action_participant_id := ""
 var _pending_csv := ""
 var _pending_csv_filename := ""
 var _csv_download_filename := ""
@@ -227,6 +236,11 @@ var _public_tables_poll_elapsed := 0.0
 var _public_tables_request_quiet := false
 var _deferred_lobby_controls_refresh := false
 var _native_lobby_name_prompt_active := false
+var _web_safari_detection := -1
+var _manage_table_name_inputs := {}
+var _manage_table_rows_signature := ""
+var _manage_table_animation_syncing := false
+var _last_snapshot_connection_participant_id := ""
 var _native_invite_code_prompt_active := false
 var _active_game_scroll_reset_key := ""
 var _active_game_auto_scroll_key := ""
@@ -234,6 +248,7 @@ var _close_table_after_reconnect := false
 var _return_to_menu_after_close_table := false
 var _local_pause_hotkey_state := false
 var _skip_animations_enabled := false
+var _table_animations_enabled := true
 var _cookbook_tour_dismissed := false
 var _cookbook_tour_auto_key := ""
 
@@ -387,6 +402,7 @@ func _notification(what: int) -> void:
 		_apply_layout_density(_table_exists(RecipesClient.latest_snapshot), _game_started(RecipesClient.latest_snapshot))
 		_fit_home_panel_to_window()
 		_fit_table_visual_to_window()
+		_layout_manage_table_overlay()
 
 
 func _exit_tree() -> void:
@@ -541,13 +557,6 @@ func _build_ui() -> void:
 	root.add_child(_back_to_online_setup_button)
 	root.add_child(_main_menu_button)
 
-	_confirm_bot_dialog = ConfirmationDialog.new()
-	_confirm_bot_dialog.title = "Switch to bot?"
-	_confirm_bot_dialog.dialog_text = "Switch this player seat to a mixed bot?"
-	_confirm_bot_dialog.confirmed.connect(_on_confirm_switch_to_bot)
-	add_child(_confirm_bot_dialog)
-	_configure_confirmation_dialog(_confirm_bot_dialog)
-
 	_confirm_leave_dialog = ConfirmationDialog.new()
 	_confirm_leave_dialog.title = "Leave table?"
 	_confirm_leave_dialog.dialog_text = "Are you sure you want to leave?\n\nYou will not be able to rejoin as a player, but you can rejoin as a witness."
@@ -583,6 +592,10 @@ func _build_ui() -> void:
 	add_child(_offline_end_popup)
 	_host_close_popup = _build_host_close_popup()
 	add_child(_host_close_popup)
+	_manage_table_overlay = _build_manage_table_overlay()
+	add_child(_manage_table_overlay)
+	_host_action_confirm_overlay = _build_host_action_confirm_overlay()
+	add_child(_host_action_confirm_overlay)
 	_floating_status_label = _build_floating_status_label()
 	add_child(_floating_status_label)
 
@@ -1373,6 +1386,26 @@ func _web_touch_device() -> bool:
 		return false
 	var has_touch = JavaScriptBridge.eval("Boolean(('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0))", true)
 	return bool(has_touch)
+
+
+func _web_safari_browser() -> bool:
+	if OS.get_name() != "Web":
+		return false
+	if _web_safari_detection >= 0:
+		return _web_safari_detection == 1
+	var user_agent := str(JavaScriptBridge.eval("navigator.userAgent || ''", true))
+	_web_safari_detection = 1 if _user_agent_is_safari(user_agent) else 0
+	return _web_safari_detection == 1
+
+
+func _user_agent_is_safari(user_agent: String) -> bool:
+	var normalized := user_agent.to_lower()
+	if not normalized.contains("safari"):
+		return false
+	for excluded in ["chrome", "chromium", "crios", "edg", "opr", "android"]:
+		if normalized.contains(excluded):
+			return false
+	return true
 
 
 func _should_use_native_invite_code_editor() -> bool:
@@ -2392,6 +2425,187 @@ func _build_host_close_popup() -> Control:
 	return overlay
 
 
+func _build_manage_table_overlay() -> Control:
+	var overlay := Control.new()
+	overlay.name = "ManageTableOverlay"
+	overlay.visible = false
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 235
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0.10, 0.07, 0.04, 0.30)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(shade)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+
+	_manage_table_panel = PanelContainer.new()
+	_manage_table_panel.name = "ManageTablePanel"
+	_manage_table_panel.add_theme_stylebox_override("panel", _confirmation_panel_style())
+	center.add_child(_manage_table_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	_manage_table_panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(box)
+
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(header)
+
+	var title := Label.new()
+	title.text = "Manage Table"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(22))
+	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
+	header.add_child(title)
+
+	var close_icon := _button("X", _close_manage_table_overlay)
+	close_icon.name = "ManageTableCloseIcon"
+	close_icon.custom_minimum_size = Vector2(44, 40)
+	close_icon.size_flags_horizontal = Control.SIZE_SHRINK_END
+	_style_confirmation_button(close_icon, false)
+	header.add_child(close_icon)
+
+	var animation_row := HBoxContainer.new()
+	animation_row.add_theme_constant_override("separation", 10)
+	animation_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(animation_row)
+
+	var animation_label := Label.new()
+	animation_label.text = "Animations for everyone"
+	animation_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	animation_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	animation_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(17))
+	animation_label.add_theme_color_override("font_color", Color(0.20, 0.13, 0.07))
+	animation_row.add_child(animation_label)
+
+	_manage_table_animations_toggle = CheckButton.new()
+	_manage_table_animations_toggle.name = "ManageTableAnimationsToggle"
+	_manage_table_animations_toggle.text = "On"
+	_manage_table_animations_toggle.custom_minimum_size = Vector2(104, 42)
+	_manage_table_animations_toggle.add_theme_font_size_override("font_size", _scaled_ui_font_size(16))
+	_manage_table_animations_toggle.add_theme_color_override("font_color", Color(0.20, 0.13, 0.07))
+	_manage_table_animations_toggle.toggled.connect(_on_manage_table_animations_toggled)
+	animation_row.add_child(_manage_table_animations_toggle)
+
+	_manage_table_status_label = Label.new()
+	_manage_table_status_label.name = "ManageTableStatus"
+	_manage_table_status_label.text = ""
+	_manage_table_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_manage_table_status_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(13))
+	_manage_table_status_label.add_theme_color_override("font_color", Color(0.48, 0.22, 0.10))
+	box.add_child(_manage_table_status_label)
+
+	var scroller := ScrollContainer.new()
+	scroller.name = "ManageTableScroller"
+	scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroller.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroller.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(scroller)
+
+	_manage_table_rows = VBoxContainer.new()
+	_manage_table_rows.name = "ManageTableRows"
+	_manage_table_rows.add_theme_constant_override("separation", 7)
+	_manage_table_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroller.add_child(_manage_table_rows)
+
+	var done_button := _button("Done", _close_manage_table_overlay)
+	done_button.name = "ManageTableDoneButton"
+	_style_confirmation_button(done_button, true)
+	done_button.custom_minimum_size = Vector2(160, 42)
+	box.add_child(done_button)
+	return overlay
+
+
+func _build_host_action_confirm_overlay() -> Control:
+	var overlay := Control.new()
+	overlay.name = "HostActionConfirmOverlay"
+	overlay.visible = false
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 245
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0.10, 0.07, 0.04, 0.34)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(shade)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(center)
+
+	_host_action_confirm_panel = PanelContainer.new()
+	_host_action_confirm_panel.name = "HostActionConfirmPanel"
+	_host_action_confirm_panel.custom_minimum_size = Vector2(390, 230)
+	_host_action_confirm_panel.add_theme_stylebox_override("panel", _confirmation_panel_style())
+	center.add_child(_host_action_confirm_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	_host_action_confirm_panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(box)
+
+	var title := Label.new()
+	title.text = "Host action"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", _scaled_ui_font_size(22))
+	title.add_theme_color_override("font_color", Color(0.24, 0.15, 0.07))
+	box.add_child(title)
+
+	_host_action_confirm_message = Label.new()
+	_host_action_confirm_message.name = "HostActionConfirmMessage"
+	_host_action_confirm_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_host_action_confirm_message.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_host_action_confirm_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_host_action_confirm_message.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_host_action_confirm_message.add_theme_font_size_override("font_size", _scaled_ui_font_size(17))
+	_host_action_confirm_message.add_theme_color_override("font_color", Color(0.17, 0.12, 0.07))
+	box.add_child(_host_action_confirm_message)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+
+	var cancel_button := _button("Cancel", _cancel_pending_host_action)
+	cancel_button.name = "HostActionCancelButton"
+	_style_confirmation_button(cancel_button, false)
+	cancel_button.custom_minimum_size = Vector2(142, 42)
+	row.add_child(cancel_button)
+
+	_host_action_confirm_button = _button("Continue", _execute_pending_host_action)
+	_host_action_confirm_button.name = "HostActionConfirmButton"
+	_style_confirmation_button(_host_action_confirm_button, true)
+	_host_action_confirm_button.custom_minimum_size = Vector2(156, 42)
+	row.add_child(_host_action_confirm_button)
+	return overlay
+
+
 func _build_pending_offer_popup() -> Control:
 	var overlay := Control.new()
 	overlay.name = "PendingOfferOverlay"
@@ -3196,9 +3410,11 @@ func _csv_field(value: Variant) -> String:
 
 
 func _on_snapshot_received(snapshot: Dictionary) -> void:
+	_sync_connection_identity_state(snapshot)
 	_save_current_online_session(snapshot)
 	_sync_lobby_pending_names_with_snapshot(snapshot)
 	_render_snapshot(snapshot)
+	_refresh_manage_table_overlay(snapshot)
 	_handle_idle_prompt_snapshot(snapshot)
 	_handle_table_closure_snapshot(snapshot)
 	_maybe_advance_acting_as_after_deposit(snapshot)
@@ -3206,10 +3422,39 @@ func _on_snapshot_received(snapshot: Dictionary) -> void:
 	_track_last_controlled_turn(snapshot)
 
 
+func _sync_connection_identity_state(snapshot: Dictionary) -> void:
+	var connection_id := str(snapshot.get("connectionParticipantId", ""))
+	if connection_id == "":
+		_last_snapshot_connection_participant_id = ""
+		return
+	if _last_snapshot_connection_participant_id == "":
+		_last_snapshot_connection_participant_id = connection_id
+		return
+	if _last_snapshot_connection_participant_id == connection_id:
+		return
+	_last_snapshot_connection_participant_id = connection_id
+	_selected_hand_voucher_id = ""
+	_selected_platter_voucher_id = ""
+	_selected_give_asset_key = ""
+	_selected_take_asset_key = ""
+	_selected_offer_target_id = ""
+	_selected_offer_ingredient_id = ""
+	_selected_participant_id = ""
+	_pending_offer_guard_intent = {}
+	_pending_offer_guard_status = ""
+	_pending_offer_guard_actor_id = ""
+	_pending_controlled_deposit_actor_id = ""
+	_pending_controlled_follow_participant_id = ""
+	_active_select_key = ""
+	if is_instance_valid(_table_visual) and _table_visual.has_method("clear_action_selections"):
+		_table_visual.call("clear_action_selections")
+
+
 func _render_snapshot(snapshot: Dictionary) -> void:
 	var table_exists := _table_exists(snapshot)
 	var game_started := _game_started(snapshot)
 	var snapshot_paused := game_started and bool(snapshot.get("paused", false))
+	_table_animations_enabled = bool(snapshot.get("animationsEnabled", true))
 	_local_pause_hotkey_state = snapshot_paused
 	if table_exists and not bool(snapshot.get("offline", false)):
 		_code_input.text = str(snapshot.get("tableCode", RecipesClient.table_code))
@@ -3229,7 +3474,7 @@ func _render_snapshot(snapshot: Dictionary) -> void:
 	if is_instance_valid(_table_visual):
 		_table_visual.visible = true
 		_fit_table_visual_to_window()
-		_apply_skip_animation_state(_skip_animations_enabled)
+		_apply_skip_animation_state()
 		if _table_visual.has_method("set_guidance_tour_dismissed"):
 			_table_visual.call("set_guidance_tour_dismissed", _cookbook_tour_dismissed)
 		_table_visual.render(snapshot)
@@ -3405,6 +3650,8 @@ func _on_error_received(error: Dictionary) -> void:
 			RecipesClient.connect_socket()
 	_set_status_message(description if show_plain_message or description.begins_with("The server") else "Error: %s" % description)
 	_summary_label.text = "Last error: %s" % description
+	if is_instance_valid(_manage_table_overlay) and _manage_table_overlay.visible and is_instance_valid(_manage_table_status_label):
+		_manage_table_status_label.text = description
 	_refresh_online_setup_ready_state()
 
 
@@ -3499,7 +3746,9 @@ func _skip_animations_hotkey_can_toggle(snapshot: Dictionary) -> bool:
 	if _pause_hotkey_text_focus_active():
 		return false
 	var phase := str(snapshot.get("phase", ""))
-	return phase != "" and phase != "lobby"
+	if phase == "" or phase == "lobby":
+		return false
+	return bool(snapshot.get("animationsEnabled", true))
 
 
 func _pause_hotkey_text_focus_active() -> bool:
@@ -3526,12 +3775,16 @@ func _apply_visual_pause_state(paused: bool) -> void:
 
 func _toggle_skip_animations(skip: bool) -> void:
 	_skip_animations_enabled = skip
-	_apply_skip_animation_state(skip)
+	_apply_skip_animation_state()
 
 
-func _apply_skip_animation_state(skip: bool) -> void:
-	if is_instance_valid(_table_visual) and _table_visual.has_method("set_skip_animations"):
-		_table_visual.call("set_skip_animations", skip)
+func _apply_skip_animation_state() -> void:
+	if not is_instance_valid(_table_visual):
+		return
+	if _table_visual.has_method("set_animation_control_state"):
+		_table_visual.call("set_animation_control_state", _skip_animations_enabled, _table_animations_enabled)
+	elif _table_visual.has_method("set_skip_animations"):
+		_table_visual.call("set_skip_animations", _skip_animations_enabled or not _table_animations_enabled)
 
 
 func debug_pause_hotkey_can_toggle(snapshot: Dictionary) -> bool:
@@ -3544,6 +3797,10 @@ func debug_skip_animations_hotkey_can_toggle(snapshot: Dictionary) -> bool:
 
 func debug_skip_animations_enabled() -> bool:
 	return _skip_animations_enabled
+
+
+func debug_effective_skip_animations() -> bool:
+	return _skip_animations_enabled or not _table_animations_enabled
 
 
 func _refresh_connection_buttons(snapshot: Dictionary) -> void:
@@ -3867,6 +4124,8 @@ func _on_table_visual_menu_requested(action: String) -> void:
 			_open_debug_sync_popup()
 		"Catch Up":
 			_catch_up_visuals()
+		"Manage Table":
+			_open_manage_table_overlay()
 		"Pause Game", "Resume Game":
 			_toggle_pause_intent(not _effective_pause_state())
 		"Skip Animations", "Play Animations":
@@ -4800,7 +5059,7 @@ func _should_use_native_lobby_name_editor(input: LineEdit) -> bool:
 		return false
 	if input == null or not is_instance_valid(input) or not input.editable:
 		return false
-	return _web_touch_device()
+	return _web_touch_device() or _web_safari_browser()
 
 
 func _open_native_lobby_name_editor(participant_id: String, input: LineEdit) -> void:
@@ -5916,19 +6175,373 @@ func _can_switch_to_bot(snapshot: Dictionary, participant: Dictionary) -> bool:
 	return bool(snapshot.get("viewerCanUseHostControls", false))
 
 
+func _open_manage_table_overlay() -> void:
+	var snapshot := RecipesClient.latest_snapshot
+	if not _table_exists(snapshot) or not bool(snapshot.get("viewerCanUseHostControls", false)):
+		return
+	if str(snapshot.get("phase", "")) == "complete":
+		return
+	_manage_table_overlay.visible = true
+	_manage_table_status_label.text = ""
+	_layout_manage_table_overlay()
+	_rebuild_manage_table_rows(snapshot)
+	_sync_manage_table_animation_toggle(snapshot)
+
+
+func _close_manage_table_overlay() -> void:
+	if is_instance_valid(_manage_table_overlay):
+		_manage_table_overlay.hide()
+	_manage_table_name_inputs.clear()
+	_manage_table_rows_signature = ""
+	_cancel_pending_host_action()
+
+
+func _layout_manage_table_overlay() -> void:
+	if not is_instance_valid(_manage_table_panel):
+		return
+	var viewport_size := get_viewport_rect().size
+	var panel_width := clampf(viewport_size.x - 24.0, 300.0, 760.0)
+	var panel_height := clampf(viewport_size.y - 32.0, 360.0, 820.0)
+	_manage_table_panel.custom_minimum_size = Vector2(panel_width, panel_height)
+	if is_instance_valid(_host_action_confirm_panel):
+		_host_action_confirm_panel.custom_minimum_size = Vector2(minf(390.0, viewport_size.x - 24.0), 230.0)
+
+
+func _refresh_manage_table_overlay(snapshot: Dictionary) -> void:
+	if not is_instance_valid(_manage_table_overlay) or not _manage_table_overlay.visible:
+		return
+	if not _table_exists(snapshot) or not bool(snapshot.get("viewerCanUseHostControls", false)) or str(snapshot.get("phase", "")) == "complete":
+		_close_manage_table_overlay()
+		return
+	_sync_manage_table_animation_toggle(snapshot)
+	if _manage_table_name_input_has_focus():
+		_sync_manage_table_names(snapshot)
+		return
+	_manage_table_status_label.text = ""
+	_rebuild_manage_table_rows(snapshot)
+
+
+func _sync_manage_table_animation_toggle(snapshot: Dictionary) -> void:
+	if not is_instance_valid(_manage_table_animations_toggle):
+		return
+	_manage_table_animation_syncing = true
+	var enabled := bool(snapshot.get("animationsEnabled", true))
+	_manage_table_animations_toggle.button_pressed = enabled
+	_manage_table_animations_toggle.text = "On" if enabled else "Off"
+	_manage_table_animation_syncing = false
+
+
+func _on_manage_table_animations_toggled(enabled: bool) -> void:
+	if _manage_table_animation_syncing:
+		return
+	var snapshot := RecipesClient.latest_snapshot
+	if not bool(snapshot.get("viewerCanUseHostControls", false)):
+		_sync_manage_table_animation_toggle(snapshot)
+		return
+	_manage_table_status_label.text = "Updating animation setting..."
+	if not RecipesClient.send_host_intent({"type": "set_animations_enabled", "enabled": enabled}):
+		_manage_table_status_label.text = "Could not update animation setting."
+		_sync_manage_table_animation_toggle(snapshot)
+
+
+func _rebuild_manage_table_rows(snapshot: Dictionary) -> void:
+	if not is_instance_valid(_manage_table_rows):
+		return
+	var signature := _manage_table_signature(snapshot)
+	if signature == _manage_table_rows_signature and not _manage_table_name_inputs.is_empty():
+		_sync_manage_table_names(snapshot)
+		return
+	_manage_table_rows_signature = signature
+	_manage_table_name_inputs.clear()
+	for child in _manage_table_rows.get_children():
+		child.queue_free()
+	var seat_index := 0
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		_manage_table_rows.add_child(_manage_table_cook_row(snapshot, participant, seat_index))
+		seat_index += 1
+
+
+func _manage_table_signature(snapshot: Dictionary) -> String:
+	var rows: Array = []
+	for raw_participant in snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		if str(participant.get("role", "")) != "active":
+			continue
+		rows.append({
+			"id": str(participant.get("id", "")),
+			"name": _display_participant_name(participant, "Cook"),
+			"kind": str(participant.get("kind", "human")),
+			"connected": bool(participant.get("connected", false)),
+			"ingredientId": str(participant.get("ingredientId", "")),
+			"current": str(participant.get("id", "")) == str(snapshot.get("currentTurnParticipantId", ""))
+		})
+	return JSON.stringify(rows)
+
+
+func _manage_table_cook_row(snapshot: Dictionary, participant: Dictionary, seat_index: int) -> Control:
+	var participant_id := str(participant.get("id", ""))
+	var is_bot := str(participant.get("kind", "human")) == "bot"
+	var is_host := bool(participant.get("isHost", false))
+	var is_current := participant_id == str(snapshot.get("currentTurnParticipantId", ""))
+	var panel := PanelContainer.new()
+	panel.name = "ManageCookRow_%s" % participant_id
+	panel.custom_minimum_size = Vector2(0, 112)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override("panel", _seat_setup_row_style(is_bot))
+
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 5)
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_child(content)
+
+	var identity_row := HBoxContainer.new()
+	identity_row.add_theme_constant_override("separation", 7)
+	identity_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_child(identity_row)
+
+	var ingredient_id := _seat_ingredient_id(snapshot, participant, seat_index)
+	var ingredient_icon := TextureRect.new()
+	ingredient_icon.name = "ManageIngredient_%s" % participant_id
+	ingredient_icon.custom_minimum_size = Vector2(48, 42)
+	ingredient_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	ingredient_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	ingredient_icon.texture_filter = VisualAssets.preferred_texture_filter()
+	var ingredient_texture = VisualAssets.ingredient_meta(ingredient_id).get("texture", null)
+	if ingredient_texture is Texture2D:
+		ingredient_icon.texture = ingredient_texture
+	identity_row.add_child(ingredient_icon)
+
+	var name_input := _line_edit("Cook name", _sanitize_lobby_seat_name(_display_participant_name(participant, "Cook")))
+	name_input.name = "ManageName_%s" % participant_id
+	name_input.max_length = MAX_LOBBY_SEAT_NAME_LENGTH
+	name_input.custom_minimum_size = Vector2(132, 42)
+	name_input.tooltip_text = "Rename this cook"
+	identity_row.add_child(name_input)
+	_manage_table_name_inputs[participant_id] = name_input
+
+	var kind_label := Label.new()
+	kind_label.name = "ManageKind_%s" % participant_id
+	kind_label.text = "Host" if is_host else ("Bot" if is_bot else "Player")
+	kind_label.custom_minimum_size = Vector2(66, 0)
+	kind_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	kind_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	kind_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(15))
+	kind_label.add_theme_color_override("font_color", Color(0.26, 0.16, 0.08))
+	identity_row.add_child(kind_label)
+
+	var detail_row := HFlowContainer.new()
+	detail_row.add_theme_constant_override("h_separation", 7)
+	detail_row.add_theme_constant_override("v_separation", 4)
+	detail_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_child(detail_row)
+
+	var connection_label := Label.new()
+	connection_label.name = "ManageStatus_%s" % participant_id
+	var connection_text := "Bot" if is_bot else ("Online" if bool(participant.get("connected", false)) else "Disconnected")
+	connection_label.text = "%s | %s%s" % [
+		_participant_ingredient_label(snapshot, participant),
+		connection_text,
+		" | Current turn" if is_current else ""
+	]
+	connection_label.custom_minimum_size = Vector2(180, 36)
+	connection_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	connection_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	connection_label.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
+	connection_label.add_theme_color_override("font_color", Color(0.27, 0.19, 0.10))
+	detail_row.add_child(connection_label)
+
+	var save_button := _button("Save Name", func(target_id := participant_id, input := name_input) -> void:
+		_submit_manage_table_name(target_id, input)
+	)
+	save_button.name = "ManageSaveName_%s" % participant_id
+	save_button.custom_minimum_size = Vector2(104, 36)
+	save_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+	save_button.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
+	detail_row.add_child(save_button)
+
+	if is_current:
+		var skip_button := _button("Skip Turn", func(target_id := participant_id) -> void:
+			_confirm_host_skip_turn(target_id)
+		)
+		skip_button.name = "ManageSkipTurn_%s" % participant_id
+		skip_button.custom_minimum_size = Vector2(100, 36)
+		skip_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+		skip_button.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
+		_style_confirmation_button(skip_button, false)
+		detail_row.add_child(skip_button)
+
+	if not is_host and not is_bot:
+		var bot_button := _button("Switch to Bot", func(target_id := participant_id, target_name := _display_participant_name(participant, "Cook")) -> void:
+			_confirm_switch_to_bot(target_id, target_name)
+		)
+		bot_button.name = "ManageSwitchToBot_%s" % participant_id
+		bot_button.custom_minimum_size = Vector2(122, 36)
+		bot_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+		bot_button.add_theme_font_size_override("font_size", _scaled_ui_font_size(14))
+		_style_confirmation_button(bot_button, true)
+		detail_row.add_child(bot_button)
+
+	name_input.focus_entered.connect(func(target_id := participant_id, input := name_input) -> void:
+		if _should_use_native_lobby_name_editor(input):
+			call_deferred("_open_native_manage_name_editor", target_id, input)
+	)
+	name_input.text_changed.connect(func(_text: String, input := name_input) -> void:
+		if input.has_meta("submitted_name"):
+			input.remove_meta("submitted_name")
+	)
+	name_input.text_submitted.connect(func(_text: String, target_id := participant_id, input := name_input) -> void:
+		_submit_manage_table_name(target_id, input)
+	)
+	name_input.focus_exited.connect(func(target_id := participant_id, input := name_input) -> void:
+		if not _native_lobby_name_prompt_active:
+			_submit_manage_table_name(target_id, input)
+	)
+	return panel
+
+
+func _manage_table_name_input_has_focus() -> bool:
+	for raw_input in _manage_table_name_inputs.values():
+		var input := raw_input as LineEdit
+		if is_instance_valid(input) and input.has_focus():
+			return true
+	return false
+
+
+func _sync_manage_table_names(snapshot: Dictionary) -> void:
+	for raw_participant_id in _manage_table_name_inputs.keys():
+		var participant_id := str(raw_participant_id)
+		var input := _manage_table_name_inputs.get(participant_id) as LineEdit
+		if not is_instance_valid(input) or input.has_focus():
+			continue
+		var participant := _participant_by_id(snapshot, participant_id)
+		if participant.is_empty():
+			continue
+		var current_name := _sanitize_lobby_seat_name(_display_participant_name(participant, "Cook"))
+		if input.text != current_name:
+			input.text = current_name
+		if input.has_meta("submitted_name") and str(input.get_meta("submitted_name")) == current_name:
+			input.remove_meta("submitted_name")
+
+
+func _submit_manage_table_name(participant_id: String, input: LineEdit) -> void:
+	if participant_id == "" or not is_instance_valid(input):
+		return
+	var participant := _participant_by_id(RecipesClient.latest_snapshot, participant_id)
+	if participant.is_empty():
+		return
+	var current_name := _sanitize_lobby_seat_name(_display_participant_name(participant, "Cook"))
+	var desired_name := _sanitize_lobby_seat_name(input.text)
+	if desired_name == "":
+		input.text = current_name
+		return
+	if input.text != desired_name:
+		input.text = desired_name
+	if desired_name == current_name:
+		if input.has_meta("submitted_name"):
+			input.remove_meta("submitted_name")
+		return
+	if input.has_meta("submitted_name") and str(input.get_meta("submitted_name")) == desired_name:
+		return
+	input.set_meta("submitted_name", desired_name)
+	_manage_table_status_label.text = "Renaming %s..." % current_name
+	if not RecipesClient.send_host_intent({"type": "rename_participant", "participantId": participant_id, "name": desired_name}):
+		input.remove_meta("submitted_name")
+		_manage_table_status_label.text = "Could not rename that cook."
+
+
+func _open_native_manage_name_editor(participant_id: String, input: LineEdit) -> void:
+	if participant_id == "" or not _should_use_native_lobby_name_editor(input) or not input.has_focus():
+		return
+	_native_lobby_name_prompt_active = true
+	var result = JavaScriptBridge.eval(
+		"window.prompt(%s, %s)" % [JSON.stringify("Cook name"), JSON.stringify(_sanitize_lobby_seat_name(input.text))],
+		true
+	)
+	_native_lobby_name_prompt_active = false
+	input.release_focus()
+	if result == null:
+		return
+	var desired_name := _sanitize_lobby_seat_name(str(result))
+	if desired_name == "":
+		return
+	input.text = desired_name
+	input.caret_column = desired_name.length()
+	_submit_manage_table_name(participant_id, input)
+
+
+func _confirm_host_skip_turn(participant_id: String) -> void:
+	var snapshot := RecipesClient.latest_snapshot
+	if not bool(snapshot.get("viewerCanUseHostControls", false)):
+		return
+	if participant_id == "" or participant_id != str(snapshot.get("currentTurnParticipantId", "")):
+		_manage_table_status_label.text = "That cook no longer has the current turn."
+		_rebuild_manage_table_rows(snapshot)
+		return
+	var participant := _participant_by_id(snapshot, participant_id)
+	_pending_host_action = "skip_turn"
+	_pending_host_action_participant_id = participant_id
+	_host_action_confirm_message.text = "Skip %s's current turn?\n\nThis performs a normal pass. It does not redeem cards, cancel offers, or turn the cook into a bot." % _display_participant_name(participant, "Cook")
+	_host_action_confirm_button.text = "Skip Turn"
+	_host_action_confirm_overlay.show()
+
+
 func _confirm_switch_to_bot(participant_id: String, participant_name: String) -> void:
 	if participant_id == "":
 		return
-	_pending_bot_participant_id = participant_id
-	_confirm_bot_dialog.dialog_text = "Switch %s to a mixed bot?\n\nThis seat will stop accepting that player's current connection token." % participant_name
-	_confirm_bot_dialog.popup_centered()
-
-
-func _on_confirm_switch_to_bot() -> void:
-	if _pending_bot_participant_id == "":
+	var snapshot := RecipesClient.latest_snapshot
+	if not bool(snapshot.get("viewerCanUseHostControls", false)):
 		return
-	RecipesClient.send_host_intent({"type": "convert_to_bot", "participantId": _pending_bot_participant_id, "botType": "mixed"})
-	_pending_bot_participant_id = ""
+	var participant := _participant_by_id(snapshot, participant_id)
+	if participant.is_empty() or not _can_switch_to_bot(snapshot, participant):
+		return
+	_pending_host_action = "switch_to_bot"
+	_pending_host_action_participant_id = participant_id
+	var is_offline := bool(snapshot.get("offline", false)) or RecipesClient.offline_mode
+	var is_controlled := str(participant.get("controllerParticipantId", "")) != ""
+	var outcome := "The cook keeps all cards, recipes, food, score, offers, and turn position."
+	if not is_offline and not is_controlled:
+		outcome += " %s will continue watching as a witness." % participant_name
+	_host_action_confirm_message.text = "Switch %s to a mixed bot?\n\n%s\n\nThis cannot be undone during this game." % [participant_name, outcome]
+	_host_action_confirm_button.text = "Switch to Bot"
+	_host_action_confirm_overlay.show()
+
+
+func _cancel_pending_host_action() -> void:
+	_pending_host_action = ""
+	_pending_host_action_participant_id = ""
+	if is_instance_valid(_host_action_confirm_overlay):
+		_host_action_confirm_overlay.hide()
+
+
+func _execute_pending_host_action() -> void:
+	var action := _pending_host_action
+	var participant_id := _pending_host_action_participant_id
+	_cancel_pending_host_action()
+	if action == "" or participant_id == "":
+		return
+	var snapshot := RecipesClient.latest_snapshot
+	if not bool(snapshot.get("viewerCanUseHostControls", false)):
+		return
+	if action == "skip_turn":
+		if participant_id != str(snapshot.get("currentTurnParticipantId", "")):
+			_manage_table_status_label.text = "The turn changed before Skip Turn was sent."
+			_rebuild_manage_table_rows(snapshot)
+			return
+		_manage_table_status_label.text = "Skipping the current turn..."
+		if not RecipesClient.send_host_intent({"type": "host_skip_turn", "participantId": participant_id}):
+			_manage_table_status_label.text = "Could not skip the current turn."
+		return
+	if action == "switch_to_bot":
+		var participant := _participant_by_id(snapshot, participant_id)
+		if participant.is_empty() or not _can_switch_to_bot(snapshot, participant):
+			_manage_table_status_label.text = "That cook can no longer be switched to a bot."
+			return
+		_manage_table_status_label.text = "Switching %s to a bot..." % _display_participant_name(participant, "Cook")
+		if not RecipesClient.send_host_intent({"type": "convert_to_bot", "participantId": participant_id, "botType": "mixed"}):
+			_manage_table_status_label.text = "Could not switch that cook to a bot."
 
 
 func _hand_for_participant(snapshot: Dictionary, participant_id: String) -> Array:

@@ -13,6 +13,7 @@ func _initialize() -> void:
 	)
 	_regression_lobby_seat_editor(store)
 	_regression_lobby_rename_then_start_from_controlled_view(store)
+	_regression_host_table_management(store)
 	_regression_public_recipe_summary(store)
 	_regression_own_redeem_returns_card_for_swap(store)
 	_regression_redeem_all_and_pass_turn(store)
@@ -83,6 +84,51 @@ func _regression_lobby_rename_then_start_from_controlled_view(store: Node) -> vo
 	_require(str(store.table.get("participants", {}).get("p3", {}).get("name", "")) == "Pip_b", "host-edited bot name survives start")
 	_require(bool(store.table.get("participants", {}).get("p3", {}).get("depositedInitial", false)), "renamed bot participates in automatic offering")
 	_require(int(store.table.get("participants", {}).get("p3", {}).get("openingOfferingsCount", 0)) == 2, "renamed bot contributes two opening offerings")
+
+
+func _regression_host_table_management(store: Node) -> void:
+	_require(not store.create_table("Amina", "offline-host-management").is_empty(), "create host-management table")
+	_require(store.handle_host_intent({"type": "add_controlled_seat", "participantId": "p2", "name": "Ravi"}), "create managed player seat: %s" % _last_error)
+	_require(store.handle_intent({"type": "start"}, "p1", false), "start host-management table: %s" % _last_error)
+	_require(bool(store.latest_snapshot.get("animationsEnabled", false)), "offline animations default to enabled")
+	_require(
+		not store.handle_intent({"type": "rename_participant", "participantId": "p3", "name": "Not Allowed"}, "p2", false),
+		"non-host cannot rename another active cook"
+	)
+	_require(store.handle_host_intent({"type": "rename_participant", "participantId": "p2", "name": "Ravi Chandrasekar"}), "host renames active cook: %s" % _last_error)
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "Ravi Chandraseka", "active cook names are limited to 16 characters")
+
+	store.table["currentTurnParticipantId"] = "p2"
+	var hand_before: Array = []
+	for voucher in store._hand_vouchers("p2"):
+		hand_before.append(str(voucher.get("id", "")))
+	hand_before.sort()
+	var recipe_before: Dictionary = store.table.get("recipes", {}).get("p2", {}).duplicate(true)
+	_require(store.handle_host_intent({"type": "set_pause", "paused": true}), "pause before forced skip: %s" % _last_error)
+	_require(store.handle_host_intent({"type": "host_skip_turn", "participantId": "p2"}), "host skips paused cook: %s" % _last_error)
+	_require(str(store.table.get("currentTurnParticipantId", "")) != "p2", "offline forced skip advances current turn")
+	var last_transaction: Dictionary = store.table.get("transactionHistory", [])[-1]
+	_require(str(last_transaction.get("action", "")) == "Pass Turn", "offline forced skip records an ordinary pass")
+	_require(str(last_transaction.get("metadata", {}).get("turnPassSource", "")) == "host_skip", "offline forced skip records host metadata")
+
+	_require(store.view_as("p2"), "host views controlled seat before bot conversion")
+	var participant_count: int = store.table.get("participants", {}).size()
+	_require(store.handle_host_intent({"type": "convert_to_bot", "participantId": "p2", "botType": "mixed"}), "offline host converts active cook: %s" % _last_error)
+	_require(str(store.acting_participant_id) == "p1", "offline conversion returns the host view to its own seat")
+	_require(store.table.get("participants", {}).size() == participant_count, "offline conversion does not create a witness")
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("kind", "")) == "bot", "offline converted seat becomes a bot")
+	_require(str(store.table.get("participants", {}).get("p2", {}).get("name", "")) == "Ravi Chandraseka_b", "offline bot conversion preserves the full display name")
+	var hand_after: Array = []
+	for voucher in store._hand_vouchers("p2"):
+		hand_after.append(str(voucher.get("id", "")))
+	hand_after.sort()
+	_require(hand_after == hand_before, "offline conversion preserves the seat's hand")
+	_require(store.table.get("recipes", {}).get("p2", {}) == recipe_before, "offline conversion preserves the seat's recipe")
+
+	_require(store.handle_host_intent({"type": "set_animations_enabled", "enabled": false}), "host disables offline table animations: %s" % _last_error)
+	_require(not bool(store.latest_snapshot.get("animationsEnabled", true)), "offline snapshots expose disabled animations")
+	_require(store.handle_host_intent({"type": "set_animations_enabled", "enabled": true}), "host restores offline table animations: %s" % _last_error)
+	_require(bool(store.latest_snapshot.get("animationsEnabled", false)), "offline snapshots expose restored animations")
 
 
 func _regression_public_recipe_summary(store: Node) -> void:

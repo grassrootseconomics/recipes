@@ -13,6 +13,8 @@
 ## Deployment Notes
 
 - 2026-06-30: Pushed annotated Git tag `v0.2.0` with message `server rebuild v0.2.0` for the server sync/bot-stall recovery rebuild.
+- Recorded annotated Git tag `v0.2.3` with message `server rebuild v0.2.3` for the subsequent live server rebuild.
+- 2026-08-23: Prepared host recovery/table management release with client `0.0.60` and npm/server packages `0.1.11`.
 
 ## Phase 1 - Server Rules And Protocol
 
@@ -99,6 +101,7 @@
 - [ ] Optimize live deltas so mature 8-seat game deltas stay near the 4 KB p95 target, with 20-seat budgets reserved for future expansion.
 - [ ] Add full golden parity tests so offline rule traces stay aligned with online server rule traces.
 - [x] Add tests for host-controlled seats and round-robin turn enforcement.
+- [x] Add host `Manage Table` recovery controls for active renaming, stale-safe forced passes, irreversible bot takeover with online witness reassignment, and table-wide animation control.
 - [x] Expand offline parity tests beyond smoke coverage to swaps, offers, redemption, preparation, settlement, eating, timers, and invalid rollback.
 - [x] Add fixture coverage for the generated 8-player recipe catalog and shared client rule constants.
 - [x] Generate and consume shared client rule constants so online/offline validation bounds cannot drift silently.

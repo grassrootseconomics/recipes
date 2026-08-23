@@ -3080,16 +3080,87 @@ describe("platter, offers, and visibility", () => {
       kind: "bot",
       botType: "mixed",
       connected: false,
-      name: "Rav_b"
+      name: "Ravi_b"
     });
     expect(created.table.participants[disconnected.participant.id]).toMatchObject({
       kind: "bot",
       botType: "mixed",
       connected: false,
-      name: "Lin_b"
+      name: "Lina_b"
     });
-    expect(() => store.connectParticipantByToken(created.table.code, connected.seatToken)).toThrow(GameError);
-    expect(() => store.connectParticipantByToken(created.table.code, disconnected.seatToken)).toThrow(GameError);
+    expect(store.connectParticipantByToken(created.table.code, connected.seatToken)).toMatchObject({
+      kind: "human",
+      role: "witness",
+      name: "Ravi",
+      connected: true
+    });
+    expect(store.connectParticipantByToken(created.table.code, disconnected.seatToken)).toMatchObject({
+      kind: "human",
+      role: "witness",
+      name: "Lina",
+      connected: true
+    });
+  });
+
+  it("reassigns a connected converted player's socket identity to a full witness snapshot", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "connected-takeover");
+    const joined = store.joinTable(created.table.code, "Ravi");
+    const hub = new ConnectionHub();
+    const messages: Array<{ type: string; snapshot?: ReturnType<typeof buildSnapshot> }> = [];
+    const connection = hub.register({
+      tableCode: created.table.code,
+      participantId: joined.participant.id,
+      seatToken: joined.seatToken,
+      send: (payload) => messages.push(JSON.parse(payload))
+    });
+    hub.broadcastTable(created.table);
+    messages.length = 0;
+
+    store.handleIntent(
+      created.table.code,
+      created.seatToken,
+      { type: "convert_to_bot", participantId: joined.participant.id, botType: "mixed" },
+      false
+    );
+    hub.broadcastTable(created.table);
+
+    const message = messages.at(-1);
+    expect(message?.type).toBe("snapshot");
+    expect(message?.snapshot).toMatchObject({ viewerRole: "witness" });
+    expect(message?.snapshot?.connectionParticipantId).not.toBe(joined.participant.id);
+    expect(message?.snapshot?.viewerParticipantId).toBe(message?.snapshot?.connectionParticipantId);
+    expect(message?.snapshot?.participants.find((participant) => participant.id === joined.participant.id)).toMatchObject({
+      kind: "bot",
+      role: "active",
+      name: "Ravi_b"
+    });
+    expect(connection.connectionParticipantId).toBe(message?.snapshot?.connectionParticipantId);
+    expect(connection.participantId).toBe(message?.snapshot?.viewerParticipantId);
+  });
+
+  it("converts a host-controlled seat without creating a witness", () => {
+    const store = new TableStore();
+    const created = store.createTable("Host", "controlled-takeover");
+    const bot = activeParticipants(created.table).find((participant) => participant.kind === "bot") as Participant;
+    store.handleIntent(
+      created.table.code,
+      created.seatToken,
+      { type: "add_controlled_seat", participantId: bot.id, name: "Local Cook" },
+      false
+    );
+    const participantCount = Object.keys(created.table.participants).length;
+
+    store.handleIntent(
+      created.table.code,
+      created.seatToken,
+      { type: "convert_to_bot", participantId: bot.id, botType: "mixed" },
+      false
+    );
+
+    expect(created.table.participants[bot.id]).toMatchObject({ kind: "bot", role: "active", name: "Local Cook_b" });
+    expect(created.table.participants[bot.id].controllerParticipantId).toBeUndefined();
+    expect(Object.keys(created.table.participants)).toHaveLength(participantCount);
   });
 
   it("blocks non-host and host-seat bot conversion", () => {
@@ -3109,6 +3180,175 @@ describe("platter, offers, and visibility", () => {
         participantId: created.participant.id
       })
     ).toThrow(GameError);
+  });
+
+  it("lets only the host skip the authoritative current turn without redeeming or cancelling offers", () => {
+    const { store, table, hostToken } = startAndDeposit(8, "host-skip-human");
+    const host = table.participants[table.hostParticipantId];
+    const target = activeParticipants(table).find((participant) => participant.id !== host.id) as Participant;
+    const offeredVoucherId = handVoucherIds(table, host.id)[0] as string;
+    applyAsTurn(table, host.id, {
+      type: "create_offer",
+      toParticipantId: target.id,
+      offeredVoucherIds: [offeredVoucherId],
+      requested: { ingredientId: target.ingredientId as string, quantity: 1 }
+    });
+    const offer = Object.values(table.offers)[0];
+    const handBefore = handVoucherIds(table, target.id).sort();
+    const recipeBefore = structuredClone(table.recipes[target.id]);
+    table.currentTurnParticipantId = target.id;
+
+    expect(() =>
+      store.handleIntent(
+        table.code,
+        target.seatToken,
+        { type: "host_skip_turn", participantId: target.id },
+        false
+      )
+    ).toThrow(GameError);
+
+    store.handleIntent(table.code, hostToken, { type: "host_skip_turn", participantId: target.id }, false);
+
+    expect(table.currentTurnParticipantId).not.toBe(target.id);
+    expect(handVoucherIds(table, target.id).sort()).toEqual(handBefore);
+    expect(table.recipes[target.id]).toEqual(recipeBefore);
+    expect(table.offers[offer.id]).toMatchObject({ status: "pending" });
+    expect(table.transactionHistory.at(-1)).toMatchObject({
+      participantId: target.id,
+      action: "Pass Turn",
+      metadata: {
+        turnPassSource: "host_skip",
+        initiatedByParticipantId: host.id
+      }
+    });
+  });
+
+  it("rejects a stale host skip and permits an explicit skip while paused", () => {
+    const { store, table, hostToken } = startAndDeposit(8, "host-skip-stale-paused");
+    const host = table.participants[table.hostParticipantId];
+    const current = table.participants[table.currentTurnParticipantId as string];
+    const stale = firstOtherActive(table, current.id);
+    const turnBefore = table.turn;
+    const versionBefore = table.version;
+
+    expect(() =>
+      store.handleIntent(table.code, hostToken, { type: "host_skip_turn", participantId: stale.id }, false)
+    ).toThrowError("That cook no longer has the current turn.");
+    expect(table.turn).toBe(turnBefore);
+    expect(table.version).toBe(versionBefore);
+
+    store.handleIntent(table.code, hostToken, { type: "set_pause", paused: true }, false);
+    const pausedCurrentId = table.currentTurnParticipantId as string;
+    store.handleIntent(table.code, hostToken, { type: "host_skip_turn", participantId: pausedCurrentId }, false);
+    expect(table.paused).toBe(true);
+    expect(table.currentTurnParticipantId).not.toBe(pausedCurrentId);
+    expect(table.transactionHistory.at(-1)?.metadata?.turnPassSource).toBe("host_skip");
+    expect(host.isHost).toBe(true);
+  });
+
+  it("lets the host skip a bot turn without changing that seat", () => {
+    const { table } = startAndDeposit(8, "host-skip-bot");
+    const host = table.participants[table.hostParticipantId];
+    const target = firstOtherActive(table, host.id);
+    applyIntent(table, host.id, { type: "convert_to_bot", participantId: target.id, botType: "mixed" });
+    table.currentTurnParticipantId = target.id;
+
+    applyIntent(table, host.id, { type: "host_skip_turn", participantId: target.id });
+
+    expect(table.participants[target.id]).toMatchObject({ kind: "bot", role: "active" });
+    expect(table.currentTurnParticipantId).not.toBe(target.id);
+    expect(table.transactionHistory.at(-1)).toMatchObject({ participantId: target.id, action: "Pass Turn" });
+  });
+
+  it("supports host renaming and table-wide animation state during active play", () => {
+    const { store, table, hostToken } = startAndDeposit(8, "active-admin-state");
+    const host = table.participants[table.hostParticipantId];
+    const target = firstOtherActive(table, host.id);
+    const hub = new ConnectionHub();
+    const messages: Array<{
+      type: string;
+      snapshot?: ReturnType<typeof buildSnapshot>;
+      patch?: Partial<ReturnType<typeof buildSnapshot>>;
+      append?: { participants?: unknown[] };
+    }> = [];
+    hub.register({
+      tableCode: table.code,
+      participantId: host.id,
+      seatToken: hostToken,
+      send: (payload) => messages.push(JSON.parse(payload))
+    });
+    hub.broadcastTable(table);
+    expect(messages.at(-1)?.snapshot?.animationsEnabled).toBe(true);
+    messages.length = 0;
+
+    expect(() =>
+      store.handleIntent(
+        table.code,
+        target.seatToken,
+        { type: "rename_participant", participantId: target.id, name: "Not Allowed" },
+        false
+      )
+    ).toThrow(GameError);
+    expect(() =>
+      store.handleIntent(table.code, target.seatToken, { type: "set_animations_enabled", enabled: false }, false)
+    ).toThrow(GameError);
+
+    store.handleIntent(
+      table.code,
+      hostToken,
+      { type: "rename_participant", participantId: target.id, name: "Kitchen Captain" },
+      false
+    );
+    store.handleIntent(table.code, hostToken, { type: "set_animations_enabled", enabled: false }, false);
+    hub.broadcastTable(table);
+
+    expect(table.participants[target.id].name).toBe("Kitchen Captain");
+    expect(table.animationsEnabled).toBe(false);
+    expect(messages.at(-1)?.type).toBe("delta");
+    expect(messages.at(-1)?.patch?.animationsEnabled).toBe(false);
+    expect(messages.at(-1)?.append?.participants).toContainEqual(
+      expect.objectContaining({ id: target.id, name: "Kitchen Captain" })
+    );
+    expect(buildSnapshot(table, target.id).animationsEnabled).toBe(false);
+  });
+
+  it("recovers an eight-human table by skipping and converting a stalled seat without losing its state", () => {
+    const { store, table, hostToken } = startAndDeposit(8, "eight-human-host-recovery");
+    const host = table.participants[table.hostParticipantId];
+    const stalled = activeParticipants(table)[3] as Participant;
+    const originalToken = stalled.seatToken;
+    const handBefore = handVoucherIds(table, stalled.id).sort();
+    const recipeBefore = structuredClone(table.recipes[stalled.id]);
+    const ingredientBefore = stalled.ingredientId;
+    const stockBefore = stalled.realIngredientStock;
+    const dishCountBefore = stalled.dishCount;
+    table.currentTurnParticipantId = stalled.id;
+
+    store.handleIntent(table.code, hostToken, { type: "host_skip_turn", participantId: stalled.id }, false);
+    expect(table.currentTurnParticipantId).not.toBe(stalled.id);
+    store.handleIntent(
+      table.code,
+      hostToken,
+      { type: "convert_to_bot", participantId: stalled.id, botType: "mixed" },
+      false
+    );
+
+    expect(table.participants[stalled.id]).toMatchObject({
+      kind: "bot",
+      role: "active",
+      ingredientId: ingredientBefore,
+      realIngredientStock: stockBefore,
+      dishCount: dishCountBefore
+    });
+    expect(handVoucherIds(table, stalled.id).sort()).toEqual(handBefore);
+    expect(table.recipes[stalled.id]).toEqual(recipeBefore);
+    expect(store.connectParticipantByToken(table.code, originalToken)).toMatchObject({ role: "witness", kind: "human" });
+
+    table.currentTurnParticipantId = stalled.id;
+    const maintained = store.runBotMaintenance(table.code);
+    expect(maintained).toBe(true);
+    expect(table.currentTurnParticipantId).not.toBe(stalled.id);
+    expect(table.phase).toBe("playing");
   });
 
   it("keeps disconnected witnesses as offline humans", () => {

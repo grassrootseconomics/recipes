@@ -11,6 +11,7 @@ Implemented:
 - Server-owned tables, participants, ingredients, vouchers, recipes, platter, offers, dishes, transaction history, timers, bots, filtered snapshots, and WebSocket updates.
 - Godot client for `Play Offline`, `Play Online`, joining online tables, taking over prefilled bot seats, pausing/resuming, starting, watching automatic opening offerings, swapping with the platter, creating/responding to offers, preparing dishes, viewing dish totals/transaction history, ending the game, and eating.
 - Online host-controlled seats with filtered per-seat views and explicit acting-seat intents.
+- Host recovery through `Manage Table`: active-game renaming, stale-safe `Skip Turn`, irreversible bot takeover with witness reassignment, and a table-wide animation switch.
 - Server-enforced round-robin turns. Each active cook keeps the turn until they pass or use `Redeem / Pass`.
 - End-game stats distinguish player turns, fractional cycles, successful interactions, Common Basket swaps, direct exchanges, redemptions, settlement swaps, food-piece settlement swaps, and bites eaten.
 - Offline pass-and-play rules runtime for one-device local seats and bots, using the same snapshot/intent UI path as online play.
@@ -133,7 +134,11 @@ Manual smoke path:
 5. Online tables are public by default while joinable. The host can toggle `Public Table` / `Private Table` in the lobby; public joinable tables appear in the server browser below the create/join buttons.
 6. Click `Start Cooking`.
 7. Watch the automatic opening offerings fill the Common Basket.
-8. Test host pause/resume, manual player-to-bot conversion, platter swaps, offers, `Redeem / Pass` with automatic dish preparation, dish totals, transaction history, `End Game`, and dish bites.
+8. Open `Manage Table` from the hamburger as host. Test active renaming, `Skip Turn`, player-to-bot conversion, and table-wide animations, then test platter swaps, offers, `Redeem / Pass`, settlement, and completion.
+
+When a connected online cook is switched to a bot, their active seat keeps all gameplay state and continues under bot control. Their existing browser session and reconnect token move to witness mode, where they can keep watching but cannot act. Host-controlled and offline seats become bots without creating witnesses.
+
+On touch Web clients and Safari, cook-name editing uses the browser's native text prompt to avoid unreliable canvas keyboard input. Other desktop browsers use the themed in-game name field. Cook display names are limited to 16 characters.
 
 To test multiple humans locally on one desktop, run each Godot client with a different local profile. Each profile gets its own saved online seat, so one client can reconnect as the host while the others join as separate players:
 

@@ -173,6 +173,8 @@ export type TransactionAction = "Deposit" | "Swap" | "Settlement Swap" | "Exchan
 
 export interface TransactionMetadata {
   redemptionSource?: "voucher" | "own_stock";
+  turnPassSource?: "player" | "host_skip";
+  initiatedByParticipantId?: string;
   ingredientId?: string;
   requirementId?: string;
   ownerParticipantId?: string;
@@ -294,6 +296,7 @@ export interface Table {
   version: number;
   phase: TablePhase;
   paused: boolean;
+  animationsEnabled: boolean;
   hostParticipantId: string;
   participants: Record<string, Participant>;
   participantOrder: string[];
@@ -352,6 +355,7 @@ export interface Snapshot {
   version: number;
   phase: TablePhase;
   paused: boolean;
+  animationsEnabled: boolean;
   viewerParticipantId?: string;
   connectionParticipantId?: string;
   viewerRole?: ParticipantRole;
@@ -429,6 +433,8 @@ export type Intent =
   | { type: "add_bot"; name?: string; botType: BotType }
   | { type: "add_controlled_seat"; name?: string; participantId?: string }
   | { type: "convert_to_bot"; participantId: string; botType?: BotType }
+  | { type: "host_skip_turn"; participantId: string }
+  | { type: "set_animations_enabled"; enabled: boolean }
   | { type: "set_timer"; seconds: number | null }
   | { type: "set_target_dish_count"; count: number }
   | { type: "set_stock"; count: number }

@@ -608,6 +608,8 @@ var _active_animation_tweens: Array = []
 var _animation_timers: Array = []
 var _next_animation_timer_id := 1
 var _skip_animations := false
+var _local_skip_animations := false
+var _table_animations_enabled := true
 var _pending_visual_snapshot: Dictionary = {}
 var _has_pending_visual_snapshot := false
 var _pending_visual_snapshots: Array = []
@@ -699,6 +701,8 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_clear_animation_timers()
+	_kill_animation_tweens()
 	_clear_complete_celebration_effects()
 	VisualAssets.clear_cache()
 
@@ -718,6 +722,14 @@ func render(snapshot: Dictionary) -> void:
 	if _should_reveal_complete_snapshot_immediately(previous_snapshot, snapshot):
 		_reveal_complete_snapshot_immediately(previous_snapshot, snapshot)
 		return
+	if _snapshot_viewer_changed(previous_snapshot, snapshot):
+		if _visual_update_waiting():
+			_flush_visual_updates(false, false)
+		_clear_selections()
+		_record_animation_debug([])
+		_apply_snapshot(snapshot)
+		return
+	var participant_metadata_changed := _sync_live_participant_metadata(snapshot)
 	if _skip_animations and _skip_animations_can_bypass_snapshot(previous_snapshot, snapshot):
 		if _visual_update_waiting():
 			_flush_visual_updates(false, false)
@@ -726,15 +738,12 @@ func render(snapshot: Dictionary) -> void:
 		_process_queued_basket_swaps()
 		return
 	if _visual_update_waiting():
+		if participant_metadata_changed and is_instance_valid(_root):
+			_apply_live_participant_metadata_to_controls(snapshot)
 		if _snapshot_identity_key(snapshot) != _snapshot_identity_key(_snapshot):
 			_queue_pending_visual_snapshot(snapshot)
 		if not _animation_running and _animation_queue.is_empty():
 			_apply_pending_visual_snapshot_after_layout()
-		return
-	if _snapshot_viewer_changed(previous_snapshot, snapshot):
-		_clear_selections()
-		_record_animation_debug([])
-		_apply_snapshot(snapshot)
 		return
 	if _is_start_setup_transition(previous_snapshot, snapshot):
 		_apply_start_setup_transition(snapshot)
@@ -1049,6 +1058,10 @@ func debug_clear_selections() -> void:
 	_clear_selections()
 
 
+func clear_action_selections() -> void:
+	_clear_selections()
+
+
 func debug_press_own_food_part(dish_name: String) -> void:
 	for raw_group in _food_part_group_options(_snapshot.get("ownFoodParts", [])):
 		var group: Dictionary = raw_group
@@ -1193,12 +1206,28 @@ func set_visual_paused(paused: bool) -> void:
 
 
 func set_skip_animations(skip: bool) -> void:
+	_local_skip_animations = skip
+	_table_animations_enabled = true
+	_set_effective_skip_animations(skip)
+
+
+func set_animation_control_state(local_skip: bool, table_enabled: bool) -> void:
+	_local_skip_animations = local_skip
+	_table_animations_enabled = table_enabled
+	_set_effective_skip_animations(local_skip or not table_enabled)
+
+
+func _set_effective_skip_animations(skip: bool) -> void:
 	if _skip_animations == skip:
 		debug_stats["skipAnimations"] = _skip_animations
+		debug_stats["localSkipAnimations"] = _local_skip_animations
+		debug_stats["tableAnimationsEnabled"] = _table_animations_enabled
 		debug_stats["menuActions"] = _table_menu_actions()
 		return
 	_skip_animations = skip
 	debug_stats["skipAnimations"] = _skip_animations
+	debug_stats["localSkipAnimations"] = _local_skip_animations
+	debug_stats["tableAnimationsEnabled"] = _table_animations_enabled
 	debug_stats["menuActions"] = _table_menu_actions()
 	if is_instance_valid(_menu_popup) and _menu_popup.visible:
 		_rebuild_open_table_menu()
@@ -1260,7 +1289,7 @@ func _flush_visual_updates(apply_pending := true, process_basket_swaps := true) 
 	_current_animation_event = {}
 	_animation_actor_participant_id = ""
 	_clear_animation_timers()
-	_active_animation_tweens.clear()
+	_kill_animation_tweens()
 	_clear_animation_layer_transients()
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
@@ -1288,7 +1317,7 @@ func debug_apply_snapshot(snapshot: Dictionary) -> void:
 	_current_animation_event = {}
 	_animation_actor_participant_id = ""
 	_clear_animation_timers()
-	_active_animation_tweens.clear()
+	_kill_animation_tweens()
 	_pending_visual_snapshot = {}
 	_has_pending_visual_snapshot = false
 	_pending_visual_snapshots.clear()
@@ -1974,9 +2003,7 @@ func _create_animation_tween(bound_node: Node = null) -> Tween:
 	else:
 		tween = create_tween()
 	_active_animation_tweens.append(tween)
-	tween.finished.connect(func() -> void:
-		_active_animation_tweens.erase(tween)
-	)
+	tween.finished.connect(_prune_animation_tweens)
 	if _visual_paused:
 		tween.pause()
 	return tween
@@ -1989,6 +2016,14 @@ func _prune_animation_tweens() -> void:
 		if tween != null and tween.is_valid():
 			retained.append(tween)
 	_active_animation_tweens = retained
+
+
+func _kill_animation_tweens() -> void:
+	for raw_tween in _active_animation_tweens.duplicate():
+		var tween := raw_tween as Tween
+		if tween != null and tween.is_valid():
+			tween.kill()
+	_active_animation_tweens.clear()
 
 
 func _schedule_animation_timer(delay_seconds: float, callback: Callable) -> void:
@@ -2017,17 +2052,19 @@ func _start_animation_timer(timer_record: Dictionary) -> void:
 	timer_record["generation"] = int(timer_record.get("generation", 0)) + 1
 	var generation := int(timer_record.get("generation", 0))
 	var delay_seconds := maxf(0.001, float(timer_record.get("remainingMsec", 0)) / 1000.0)
-	get_tree().create_timer(delay_seconds).timeout.connect(func(record := timer_record, expected_generation := generation) -> void:
-		if not _animation_timers.has(record):
-			return
-		if _visual_paused or not bool(record.get("active", false)) or int(record.get("generation", 0)) != expected_generation:
-			return
-		_animation_timers.erase(record)
-		record["active"] = false
-		var callback: Callable = record.get("callback", Callable())
-		if callback.is_valid():
-			callback.call()
-	)
+	get_tree().create_timer(delay_seconds).timeout.connect(_on_animation_timer_timeout.bind(timer_record, generation))
+
+
+func _on_animation_timer_timeout(record: Dictionary, expected_generation: int) -> void:
+	if not _animation_timers.has(record):
+		return
+	if _visual_paused or not bool(record.get("active", false)) or int(record.get("generation", 0)) != expected_generation:
+		return
+	_animation_timers.erase(record)
+	record["active"] = false
+	var callback: Callable = record.get("callback", Callable())
+	if callback.is_valid():
+		callback.call()
 
 
 func _pause_animation_timers() -> void:
@@ -2099,8 +2136,13 @@ func _position_menu_button() -> void:
 func _table_menu_actions() -> Array[String]:
 	var phase := str(_snapshot.get("phase", ""))
 	var actions: Array[String] = ["How To Play", "Replay Table Tour", "View History", "Debug Sync", "Catch Up"]
+	if bool(_snapshot.get("viewerCanUseHostControls", false)) and phase != "" and phase != "lobby" and phase != "complete":
+		actions.insert(2, "Manage Table")
 	if phase != "" and phase != "lobby":
-		actions.append("Play Animations" if _skip_animations else "Skip Animations")
+		if not _table_animations_enabled:
+			actions.append("Animations Off By Host")
+		else:
+			actions.append("Play Animations" if _local_skip_animations else "Skip Animations")
 	if _can_use_pause_menu_action(phase):
 		actions.append("Resume Game" if bool(_snapshot.get("paused", false)) else "Pause Game")
 	actions.append(_bot_speed_menu_label())
@@ -2200,7 +2242,10 @@ func _menu_popup_button(action: String) -> Button:
 		)
 	button.custom_minimum_size = Vector2(196, 38)
 	button.add_theme_font_size_override("font_size", 15)
-	if action == "End Game":
+	if action == "Animations Off By Host":
+		button.disabled = true
+		_apply_button_style(button, Color(0.63, 0.57, 0.45), Color(0.34, 0.30, 0.23), 1)
+	elif action == "End Game":
 		_apply_button_style(button, Color(0.62, 0.24, 0.14), Color(0.34, 0.12, 0.06), 2)
 	elif action == "Resume Game":
 		_apply_button_style(button, Color(0.38, 0.58, 0.26), Color(0.18, 0.32, 0.12), 2)
@@ -2214,6 +2259,8 @@ func _menu_popup_button(action: String) -> Button:
 		_apply_button_style(button, Color(0.82, 0.58, 0.23), Color(0.42, 0.25, 0.08), 2)
 	elif action == "How To Play" or action == "Replay Table Tour":
 		_apply_button_style(button, Color(0.96, 0.84, 0.52), Color(0.50, 0.32, 0.12), 2)
+	elif action == "Manage Table":
+		_apply_button_style(button, Color(0.82, 0.68, 0.36), Color(0.42, 0.27, 0.09), 2)
 	elif action == "Main Menu":
 		_apply_button_style(button, Color(0.76, 0.62, 0.36), Color(0.40, 0.27, 0.13), 2)
 	else:
@@ -5629,6 +5676,92 @@ func _snapshot_viewer_changed(previous_snapshot: Dictionary, current_snapshot: D
 	if str(previous_snapshot.get("tableCode", "")) == "" or str(previous_snapshot.get("tableCode", "")) != str(current_snapshot.get("tableCode", "")):
 		return false
 	return str(previous_snapshot.get("viewerParticipantId", "")) != str(current_snapshot.get("viewerParticipantId", ""))
+
+
+func _sync_live_participant_metadata(source_snapshot: Dictionary) -> bool:
+	if _snapshot.is_empty() or source_snapshot.is_empty():
+		return false
+	if str(_snapshot.get("tableCode", "")) == "" or str(_snapshot.get("tableCode", "")) != str(source_snapshot.get("tableCode", "")):
+		return false
+	var changed := _patch_snapshot_participant_metadata(_snapshot, source_snapshot)
+	if _has_pending_visual_snapshot:
+		_patch_snapshot_participant_metadata(_pending_visual_snapshot, source_snapshot)
+	for index in range(_pending_visual_snapshots.size()):
+		var pending: Dictionary = _pending_visual_snapshots[index]
+		_patch_snapshot_participant_metadata(pending, source_snapshot)
+		_pending_visual_snapshots[index] = pending
+	_patch_animation_event_participant_metadata(_current_animation_event, source_snapshot)
+	for index in range(_animation_queue.size()):
+		var event: Dictionary = _animation_queue[index]
+		_patch_animation_event_participant_metadata(event, source_snapshot)
+		_animation_queue[index] = event
+	return changed
+
+
+func _apply_live_participant_metadata_to_controls(source_snapshot: Dictionary) -> void:
+	for raw_participant in source_snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		var participant_id := str(participant.get("id", ""))
+		var tile := find_child("Participant_%s" % participant_id, true, false) as Control
+		if not is_instance_valid(tile):
+			continue
+		var name_label := tile.find_child("CookNameLabel", true, false) as Label
+		if is_instance_valid(name_label):
+			name_label.text = _participant_display_name(participant)
+
+
+func _patch_animation_event_participant_metadata(event: Dictionary, source_snapshot: Dictionary) -> void:
+	if event.is_empty():
+		return
+	for snapshot_key in ["_snapshotStart", "_snapshotMid", "_snapshotTakeStart", "_snapshotAfter"]:
+		if not event.has(snapshot_key):
+			continue
+		var milestone: Dictionary = event.get(snapshot_key, {})
+		if milestone.is_empty():
+			continue
+		_patch_snapshot_participant_metadata(milestone, source_snapshot)
+		event[snapshot_key] = milestone
+
+
+func _patch_snapshot_participant_metadata(target_snapshot: Dictionary, source_snapshot: Dictionary) -> bool:
+	if target_snapshot.is_empty():
+		return false
+	var source_by_id := {}
+	for raw_participant in source_snapshot.get("participants", []):
+		var participant: Dictionary = raw_participant
+		source_by_id[str(participant.get("id", ""))] = participant
+	var changed := false
+	var seen_ids := {}
+	var target_participants: Array = target_snapshot.get("participants", [])
+	for index in range(target_participants.size()):
+		var target: Dictionary = target_participants[index]
+		var participant_id := str(target.get("id", ""))
+		seen_ids[participant_id] = true
+		if not source_by_id.has(participant_id):
+			continue
+		var source: Dictionary = source_by_id[participant_id]
+		for field in ["name", "kind", "role", "connected", "controllerParticipantId", "botType", "isHost"]:
+			if source.has(field):
+				if not target.has(field) or target.get(field) != source.get(field):
+					target[field] = source.get(field)
+					changed = true
+			elif target.has(field):
+				target.erase(field)
+				changed = true
+		target_participants[index] = target
+	for raw_participant in source_snapshot.get("participants", []):
+		var source: Dictionary = raw_participant
+		var participant_id := str(source.get("id", ""))
+		if seen_ids.has(participant_id):
+			continue
+		target_participants.append(source.duplicate(true))
+		changed = true
+	target_snapshot["participants"] = target_participants
+	for field in ["animationsEnabled", "controlledParticipantIds"]:
+		if source_snapshot.has(field) and target_snapshot.get(field) != source_snapshot.get(field):
+			target_snapshot[field] = source_snapshot.get(field).duplicate(true) if typeof(source_snapshot.get(field)) == TYPE_ARRAY else source_snapshot.get(field)
+			changed = true
+	return changed
 
 
 func _animation_events(previous_snapshot: Dictionary, current_snapshot: Dictionary) -> Array:

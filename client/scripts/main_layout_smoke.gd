@@ -10,6 +10,9 @@ func _initialize() -> void:
 	_require(app_tablecloth != null and app_tablecloth.mouse_filter == Control.MOUSE_FILTER_IGNORE, "main scene renders a tiled tablecloth outside the table panel")
 	_require(bool(main.call("_web_display_mode_is_standalone", true)), "web standalone helper accepts installed PWA display mode")
 	_require(not bool(main.call("_web_display_mode_is_standalone", false)), "web standalone helper rejects normal browser tab display mode")
+	_require(bool(main.call("_user_agent_is_safari", "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/605.1.15 Version/18.5 Safari/605.1.15")), "Safari name editing detection accepts desktop Safari")
+	_require(not bool(main.call("_user_agent_is_safari", "Mozilla/5.0 Chrome/136.0.0.0 Safari/537.36")), "Safari name editing detection excludes Chrome")
+	_require(not bool(main.call("_user_agent_is_safari", "Mozilla/5.0 CriOS/136.0 Mobile/15E148 Safari/604.1")), "Safari name editing detection excludes Chrome on iOS")
 	var version_label := main.find_child("VersionLabel", true, false) as Label
 	var project_version := str(ProjectSettings.get_setting("application/config/version", "")).strip_edges()
 	_require(version_label != null and version_label.text == "v%s" % project_version, "title screen version label follows project config version")
@@ -75,6 +78,75 @@ func _initialize() -> void:
 	host_close_overlay.hide()
 	var active_host_snapshot := _online_playing_snapshot()
 	_require(bool(main.call("_should_confirm_host_table_close", active_host_snapshot)), "online host still confirms before closing an active table")
+	var independent_host_snapshot := active_host_snapshot.duplicate(true)
+	independent_host_snapshot["participants"] = active_host_snapshot.get("participants", []).duplicate(true)
+	independent_host_snapshot["participants"][1] = independent_host_snapshot["participants"][1].duplicate(true)
+	independent_host_snapshot["participants"][1].erase("controllerParticipantId")
+	independent_host_snapshot["participants"][1]["connected"] = true
+	recipes_client.latest_snapshot = independent_host_snapshot
+	main.call("_open_manage_table_overlay")
+	await process_frame
+	var manage_overlay := _control_from_property(main, "_manage_table_overlay")
+	var manage_panel := _control_from_property(main, "_manage_table_panel")
+	var manage_rows := _control_from_property(main, "_manage_table_rows") as VBoxContainer
+	var animation_toggle := _control_from_property(main, "_manage_table_animations_toggle") as CheckButton
+	_require(manage_overlay != null and manage_overlay.visible, "host opens a themed Manage Table overlay during active play")
+	_require(manage_rows != null and manage_rows.get_child_count() == 8, "Manage Table lists all eight active cooks")
+	_require(animation_toggle != null and animation_toggle.button_pressed and animation_toggle.text == "On", "Manage Table exposes the table-wide animation setting")
+	_require(manage_overlay.find_child("ManageSkipTurn_p2", true, false) != null, "only the authoritative current-turn row shows Skip Turn")
+	_require(manage_overlay.find_child("ManageSkipTurn_p1", true, false) == null, "non-current rows do not show Skip Turn")
+	_require(manage_overlay.find_child("ManageSwitchToBot_p1", true, false) == null, "the host seat cannot be switched to a bot")
+	_require(manage_overlay.find_child("ManageSwitchToBot_p2", true, false) != null, "an independent human seat can be switched to a bot")
+
+	var manage_inputs: Dictionary = main.get("_manage_table_name_inputs")
+	var focused_manage_name := manage_inputs.get("p1", null) as LineEdit
+	var remote_manage_name := manage_inputs.get("p3", null) as LineEdit
+	if focused_manage_name != null:
+		focused_manage_name.grab_focus()
+		focused_manage_name.text = "Typing Host"
+	var managed_rename_snapshot := independent_host_snapshot.duplicate(true)
+	managed_rename_snapshot["participants"] = independent_host_snapshot.get("participants", []).duplicate(true)
+	managed_rename_snapshot["participants"][2] = managed_rename_snapshot["participants"][2].duplicate(true)
+	managed_rename_snapshot["participants"][2]["name"] = "Nia Updated_b"
+	main.call("_refresh_manage_table_overlay", managed_rename_snapshot)
+	await process_frame
+	_require(focused_manage_name != null and focused_manage_name.has_focus() and focused_manage_name.text == "Typing Host", "focused management name edits survive incoming snapshots")
+	_require(remote_manage_name != null and remote_manage_name.text == "Nia Updated", "non-focused management names update immediately")
+	if focused_manage_name != null:
+		focused_manage_name.release_focus()
+
+	main.call("_confirm_host_skip_turn", "p2")
+	await process_frame
+	var host_action_overlay := _control_from_property(main, "_host_action_confirm_overlay")
+	var host_action_message := _control_from_property(main, "_host_action_confirm_message") as Label
+	_require(host_action_overlay != null and host_action_overlay.visible, "Skip Turn uses a fixed themed confirmation overlay")
+	_require(host_action_message != null and host_action_message.text.contains("normal pass"), "Skip Turn confirmation explains that it does not redeem")
+	main.call("_cancel_pending_host_action")
+	main.call("_confirm_switch_to_bot", "p2", "BenB")
+	await process_frame
+	_require(host_action_overlay != null and host_action_overlay.visible, "Switch to Bot uses the themed confirmation overlay")
+	_require(host_action_message != null and host_action_message.text.contains("continue watching as a witness"), "online takeover confirmation explains the witness transition")
+	main.call("_cancel_pending_host_action")
+
+	root.size = Vector2i(360, 740)
+	main.call("_layout_manage_table_overlay")
+	await process_frame
+	var portrait_manage_viewport := root.get_viewport().get_visible_rect().size
+	_require(manage_panel != null and manage_panel.custom_minimum_size.x <= portrait_manage_viewport.x - 24.0 and manage_panel.custom_minimum_size.y <= portrait_manage_viewport.y - 32.0, "portrait Manage Table panel stays within the viewport")
+	root.size = Vector2i(1440, 900)
+	main.call("_layout_manage_table_overlay")
+	await process_frame
+	_require(manage_panel != null and manage_panel.custom_minimum_size.x == 760.0 and manage_panel.custom_minimum_size.y <= 820.0, "wide Manage Table panel uses a bounded work area")
+	root.size = original_window_size
+	main.call("_close_manage_table_overlay")
+	await process_frame
+	var non_host_manage_snapshot := independent_host_snapshot.duplicate(true)
+	non_host_manage_snapshot["viewerCanUseHostControls"] = false
+	non_host_manage_snapshot["viewerParticipantId"] = "p2"
+	non_host_manage_snapshot["connectionParticipantId"] = "p2"
+	recipes_client.latest_snapshot = non_host_manage_snapshot
+	main.call("_open_manage_table_overlay")
+	_require(manage_overlay != null and not manage_overlay.visible, "non-host clients cannot open Manage Table")
 	var completed_host_snapshot := active_host_snapshot.duplicate(true)
 	completed_host_snapshot["phase"] = "complete"
 	completed_host_snapshot["currentTurnParticipantId"] = ""
@@ -167,6 +239,19 @@ func _initialize() -> void:
 	_require(str(recipes_client.last_heartbeat.get("currentTurnParticipantId", "")) == "p2", "online heartbeat stores current turn metadata without applying a snapshot")
 	_require(recipes_client.last_heartbeat_age_ms() >= 0, "online heartbeat exposes freshness age")
 	_require(str(recipes_client.call("debug_socket_watchdog_action", _online_playing_snapshot(), true, 0, false, 0)) == "none", "online active table watchdog stays quiet while heartbeats are fresh")
+	recipes_client.participant_id = "p2"
+	recipes_client.acting_participant_id = "p2"
+	recipes_client.call("_sync_online_identity_from_snapshot", {"connectionParticipantId": "p9", "viewerParticipantId": "p9"})
+	_require(str(recipes_client.participant_id) == "p9" and str(recipes_client.acting_participant_id) == "p9", "converted online client stores its reassigned witness identity")
+	main.set("_last_snapshot_connection_participant_id", "p2")
+	main.set("_selected_hand_voucher_id", "stale_card")
+	main.set("_selected_offer_target_id", "stale_target")
+	main.set("_pending_offer_guard_intent", {"type": "pass_turn"})
+	main.call("_sync_connection_identity_state", {"connectionParticipantId": "p9"})
+	_require(str(main.get("_selected_hand_voucher_id")) == "" and str(main.get("_selected_offer_target_id")) == "", "witness reassignment clears obsolete action selections")
+	_require((main.get("_pending_offer_guard_intent") as Dictionary).is_empty(), "witness reassignment clears a pending turn-ending action")
+	recipes_client.participant_id = "p1"
+	recipes_client.acting_participant_id = "p1"
 	var recipe_delete_snapshot := _online_playing_snapshot()
 	recipe_delete_snapshot["version"] = 20
 	recipe_delete_snapshot["transactionCursor"] = 50
@@ -259,6 +344,19 @@ func _initialize() -> void:
 	_require(bool(visual.call("debug_skip_animations")), "offline skip animations hotkey reaches the table visual")
 	var skip_actions: Array = visual.debug_stats.get("menuActions", [])
 	_require(skip_actions.has("Play Animations"), "skip animations hotkey switches hamburger action to Play Animations")
+	_require(skip_actions.has("Manage Table"), "offline host hamburger includes Manage Table")
+	recipes_client.send_host_intent({"type": "set_animations_enabled", "enabled": false})
+	await process_frame
+	_require(not bool(recipes_client.latest_snapshot.get("animationsEnabled", true)), "host can disable animations table-wide")
+	_require(bool(main.call("debug_effective_skip_animations")) and bool(visual.call("debug_skip_animations")), "table-wide animation Off overrides the visual")
+	var host_disabled_actions: Array = visual.debug_stats.get("menuActions", [])
+	_require(host_disabled_actions.has("Animations Off By Host"), "hamburger reports the host animation override")
+	recipes_client.send_host_intent({"type": "set_animations_enabled", "enabled": true})
+	await process_frame
+	_require(bool(recipes_client.latest_snapshot.get("animationsEnabled", false)), "host can restore table-wide animations")
+	_require(bool(visual.call("debug_skip_animations")), "restoring table animations preserves this device's local skip preference")
+	var restored_actions: Array = visual.debug_stats.get("menuActions", [])
+	_require(restored_actions.has("Play Animations"), "restored table animations return to the local Play Animations choice")
 	main.call("_on_table_visual_menu_requested", "Play Animations")
 	await process_frame
 	_require(not bool(main.call("debug_skip_animations_enabled")), "table menu Play Animations disables the local skip flag")
@@ -531,6 +629,7 @@ func _online_lobby_snapshot(joined_cook: bool) -> Dictionary:
 		"viewerParticipantId": "p1",
 		"connectionParticipantId": "p1",
 		"viewerCanUseHostControls": true,
+		"animationsEnabled": true,
 		"hostParticipantId": "p1",
 		"controlledParticipantIds": [],
 		"participants": participants,

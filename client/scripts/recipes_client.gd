@@ -407,6 +407,7 @@ func _handle_socket_message(text: String) -> void:
 			ignored_stale_snapshot_count += 1
 			return
 		latest_snapshot = incoming_snapshot
+		_sync_online_identity_from_snapshot(latest_snapshot)
 		_fresh_snapshot_request_in_flight = false
 		snapshot_received.emit(latest_snapshot)
 	elif parsed.get("type", "") == "delta":
@@ -491,8 +492,20 @@ func _handle_delta_message(message: Dictionary) -> void:
 	if append.has("participants"):
 		_merge_participant_rows(append.get("participants", []))
 	latest_snapshot["version"] = int(message.get("version", latest_snapshot.get("version", 0)))
+	_sync_online_identity_from_snapshot(latest_snapshot)
 	_fresh_snapshot_request_in_flight = false
 	snapshot_received.emit(latest_snapshot)
+
+
+func _sync_online_identity_from_snapshot(snapshot: Dictionary) -> void:
+	if offline_mode or snapshot.is_empty():
+		return
+	var connection_id := str(snapshot.get("connectionParticipantId", ""))
+	if connection_id != "":
+		participant_id = connection_id
+	var viewer_id := str(snapshot.get("viewerParticipantId", connection_id))
+	if viewer_id != "":
+		acting_participant_id = viewer_id
 
 
 func _mark_socket_message(message_type: String) -> void:

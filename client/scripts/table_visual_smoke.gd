@@ -132,6 +132,7 @@ func _initialize() -> void:
 	_require(menu_actions.has("Replay Table Tour"), "table menu exposes Replay Table Tour")
 	_require(menu_actions.has("View History"), "table menu exposes transaction history")
 	_require(menu_actions.has("Catch Up"), "table menu exposes manual visual catch-up")
+	_require(menu_actions.has("Manage Table"), "host table menu exposes Manage Table")
 	_require(menu_actions.has("Skip Animations"), "table menu exposes Skip Animations")
 	_require(menu_actions.has("Pause Game"), "host table menu exposes Pause Game")
 	_require(menu_actions.has("Fast Bots"), "table menu exposes Fast Bots toggle by default")
@@ -178,7 +179,15 @@ func _initialize() -> void:
 	await process_frame
 	menu_actions = visual.debug_stats.get("menuActions", [])
 	_require(menu_actions.has("Play Animations") and not menu_actions.has("Skip Animations"), "skip animations menu toggles to Play Animations")
-	visual.call("set_skip_animations", false)
+	visual.call("set_animation_control_state", true, false)
+	await process_frame
+	menu_actions = visual.debug_stats.get("menuActions", [])
+	_require(menu_actions.has("Animations Off By Host"), "table menu identifies the host-wide animation override")
+	_require(bool(visual.call("debug_skip_animations")), "host-wide animation Off keeps effective skipping enabled")
+	visual.call("set_animation_control_state", true, true)
+	await process_frame
+	_require(bool(visual.call("debug_skip_animations")), "host-wide animation On restores the device's local skip preference")
+	visual.call("set_animation_control_state", false, true)
 	await process_frame
 	var paused_menu_snapshot := snapshot.duplicate(true)
 	paused_menu_snapshot["paused"] = true
@@ -194,6 +203,7 @@ func _initialize() -> void:
 	await process_frame
 	menu_actions = visual.debug_stats.get("menuActions", [])
 	_require(not menu_actions.has("Pause Game") and not menu_actions.has("Resume Game"), "non-host online table menu hides pause actions")
+	_require(not menu_actions.has("Manage Table"), "non-host online table menu hides Manage Table")
 	visual.debug_apply_snapshot(snapshot)
 	await process_frame
 	var main_menu_overlay := visual.find_child("TableMainMenuButton", true, false) as Button
@@ -486,6 +496,8 @@ func _initialize() -> void:
 	_assert_stale_visual_turn_watchdog_flushes(visual)
 	_assert_pending_visual_backlog_preserves_animation_sequence(visual)
 	_assert_visual_backlog_preserves_non_viewer_events(visual)
+	_assert_live_management_metadata_bypasses_visual_backlog(visual)
+	_assert_host_animation_off_flushes_nonfinal_backlog(visual)
 	await _assert_mobile_stale_turn_tap_queues_and_catches_up(visual)
 	_assert_in_place_delta_redeem_pass_waits_for_animation(visual)
 	_assert_redeem_pass_and_public_turns_apply_in_order(visual)
@@ -1329,19 +1341,19 @@ func _assert_final_eat_starts_orbit_with_congratulations(visual: Node) -> void:
 
 func _assert_skip_animations_preserves_final_orbit(visual: Node) -> void:
 	visual.debug_apply_snapshot(_final_eating_before())
-	visual.call("set_skip_animations", true)
+	visual.call("set_animation_control_state", false, false)
 	await process_frame
 	visual.render(_final_eating_after())
 	await process_frame
 	var event := _first_animation_event_of_type(visual, "eat")
-	_require(not event.is_empty(), "skip animations still queues the final bite animation")
-	_require(bool(event.get("completeOrbit", false)), "skip animations preserves the final food orbit transition")
-	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "skip animations does not suppress the final orbit flying dish")
-	_require(bool(visual.debug_stats.get("completeCelebration", false)), "skip animations still shows Congratulations when the final orbit starts")
+	_require(not event.is_empty(), "host-disabled animations still queue the final bite animation")
+	_require(bool(event.get("completeOrbit", false)), "host-disabled animations preserve the final food orbit transition")
+	_require(visual.find_child("CompleteOrbitFlyingFood", true, false) != null, "host-disabled animations do not suppress the final orbit flying dish")
+	_require(bool(visual.debug_stats.get("completeCelebration", false)), "host-disabled animations still show Congratulations when the final orbit starts")
 	var actions: Array = visual.debug_stats.get("actionButtonTexts", [])
-	_require(actions.has("Game Stats"), "skip animations exposes Game Stats while preserving the final orbit")
+	_require(actions.has("Game Stats"), "host-disabled animations expose Game Stats while preserving the final orbit")
 	visual.debug_flush_animations()
-	visual.call("set_skip_animations", false)
+	visual.call("set_animation_control_state", false, true)
 	await process_frame
 
 
@@ -2208,6 +2220,64 @@ func _assert_visual_backlog_preserves_non_viewer_events(visual: Node) -> void:
 	_require(event_types.has("turn") and event_types.has("public_prepare"), "visual backlog preserves turn and prepare events")
 	_require(int(visual.debug_stats.get("animationQueueCompactions", 0)) == 0, "ordinary visual backlog does not compact gameplay events")
 	visual.debug_flush_animations()
+
+
+func _assert_live_management_metadata_bypasses_visual_backlog(visual: Node) -> void:
+	var before := _snapshot_fixture()
+	visual.debug_apply_snapshot(before)
+	var queued_snapshot := before.duplicate(true)
+	visual.set("_animation_queue", [{"type": "public_prepare", "participantId": "p3", "dishName": "Cheese Frittata", "_snapshotAfter": queued_snapshot}])
+	var managed := before.duplicate(true)
+	managed["version"] = int(before.get("version", 0)) + 1
+	managed["participants"] = before.get("participants", []).duplicate(true)
+	managed["participants"][1] = managed["participants"][1].duplicate(true)
+	managed["participants"][1]["name"] = "Benjamin_b"
+	managed["participants"][1]["kind"] = "bot"
+	managed["participants"][1]["botType"] = "mixed"
+	managed["participants"][1]["connected"] = false
+	managed["participants"].append({"id": "p9", "name": "Ben", "role": "witness", "kind": "human", "connected": true})
+	visual.render(managed)
+
+	var live_snapshot: Dictionary = visual.get("_snapshot")
+	var live_p2 := _participant_from_snapshot(live_snapshot, "p2")
+	_require(str(live_p2.get("name", "")) == "Benjamin_b" and str(live_p2.get("kind", "")) == "bot", "host rename and bot state apply while gameplay animations are queued")
+	_require(not bool(live_p2.get("connected", true)), "managed connection metadata applies while gameplay animations are queued")
+	_require(not _participant_from_snapshot(live_snapshot, "p9").is_empty(), "converted player's witness identity is added immediately")
+	var queue: Array = visual.get("_animation_queue")
+	var queued_after: Dictionary = queue[0].get("_snapshotAfter", {})
+	_require(str(_participant_from_snapshot(queued_after, "p2").get("name", "")) == "Benjamin_b", "queued animation milestones retain the latest managed name")
+
+	var witness_view := managed.duplicate(true)
+	witness_view["version"] = int(managed.get("version", 0)) + 1
+	witness_view["viewerParticipantId"] = "p9"
+	witness_view["connectionParticipantId"] = "p9"
+	witness_view["viewerRole"] = "witness"
+	witness_view["viewerCanUseHostControls"] = false
+	witness_view["controlledParticipantIds"] = []
+	witness_view["ownHand"] = []
+	witness_view["ownRecipe"] = {}
+	visual.render(witness_view)
+	_require(str(visual.get("_snapshot").get("viewerParticipantId", "")) == "p9", "witness reassignment applies immediately instead of waiting for the visual backlog")
+	_require((visual.get("_animation_queue") as Array).is_empty(), "witness reassignment clears obsolete active-seat animation milestones")
+	visual.debug_flush_animations()
+
+
+func _assert_host_animation_off_flushes_nonfinal_backlog(visual: Node) -> void:
+	var before := _snapshot_fixture()
+	visual.debug_apply_snapshot(before)
+	visual.call("set_animation_control_state", false, true)
+	var latest := before.duplicate(true)
+	latest["version"] = int(before.get("version", 0)) + 1
+	latest["turn"] = int(before.get("turn", 0)) + 1
+	latest["currentTurnParticipantId"] = "p2"
+	visual.set("_animation_queue", [{"type": "turn", "participantId": "p2"}])
+	visual.set("_pending_visual_snapshot", latest.duplicate(true))
+	visual.set("_has_pending_visual_snapshot", true)
+	visual.set("_pending_visual_snapshots", [latest.duplicate(true)])
+	visual.call("set_animation_control_state", false, false)
+	_require(not visual.visual_update_waiting(), "host animation Off flushes a non-final visual backlog")
+	_require(str(visual.debug_stats.get("currentTurnParticipantId", "")) == "p2", "host animation Off lands on the latest authoritative turn")
+	visual.call("set_animation_control_state", false, true)
 
 
 func _assert_mobile_stale_turn_tap_queues_and_catches_up(visual: Node) -> void:
@@ -3236,6 +3306,16 @@ func _participant_name_from_snapshot(snapshot: Dictionary, participant_id: Strin
 		if str(participant.get("id", "")) == participant_id:
 			return str(participant.get("name", "Cook"))
 	return "Cook"
+
+
+func _participant_from_snapshot(snapshot: Dictionary, participant_id: String) -> Dictionary:
+	for raw_participant in snapshot.get("participants", []):
+		if not raw_participant is Dictionary:
+			continue
+		var participant: Dictionary = raw_participant
+		if str(participant.get("id", "")) == participant_id:
+			return participant
+	return {}
 
 
 func _public_final_eating_before() -> Dictionary:
